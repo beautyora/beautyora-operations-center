@@ -659,7 +659,8 @@ function buildNotionCreatePayload_(cfg, h, row, brandId) {
 
   const payload = {
     parent: { type: 'data_source_id', data_source_id: cfg.NOTION_DATA_SOURCE_ID },
-    properties: props
+    properties: filterNotionProperties_(cfg.NOTION_DATA_SOURCE_ID, props)
+    
   };
   if (cfg.NOTION_TEMPLATE_PAGE_ID) {
     payload.template = { type: 'template_id', template_id: cfg.NOTION_TEMPLATE_PAGE_ID };
@@ -987,3 +988,42 @@ function parseDate_(value) {
 function toast_(message) {
   try { SpreadsheetApp.getActiveSpreadsheet().toast(message, '뷰티오라 자동화', 5); } catch (e) {}
 }
+
+
+function filterNotionProperties_(dataSourceId, properties) {
+  const propertyNames = getNotionDataSourcePropertyNames_(dataSourceId);
+  const allowed = {};
+  propertyNames.forEach(function (name) { allowed[name] = true; });
+
+  const filtered = {};
+  const skipped = [];
+  Object.keys(properties || {}).forEach(function (name) {
+    if (allowed[name]) filtered[name] = properties[name];
+    else skipped.push(name);
+  });
+
+  if (skipped.length) {
+    Logger.log('Notion 스키마에 없어 제외한 속성: ' + skipped.join(', '));
+  }
+  return filtered;
+}
+
+function getNotionDataSourcePropertyNames_(dataSourceId) {
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'notion_schema_' + dataSourceId;
+  const cached = cache.get(cacheKey);
+  if (cached) return JSON.parse(cached);
+
+  const dataSource = notionRequest_(
+    'get',
+    '/data_sources/' + encodeURIComponent(dataSourceId)
+  );
+  const names = Object.keys((dataSource && dataSource.properties) || {});
+  if (!names.length) {
+    throw new Error('Notion 데이터소스 속성 정보를 불러오지 못했습니다.');
+  }
+  cache.put(cacheKey, JSON.stringify(names), 600);
+  return names;
+}
+
+    
