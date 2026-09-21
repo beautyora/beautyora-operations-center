@@ -178,9 +178,16 @@ function fileBase64(file){return new Promise((resolve,reject)=>{const r=new File
 
 function renderIntake(rows){
  State.intakeRows=rows||[];
+ const isDoneStatus=r=>/등록 완료|기존 등록|승인 완료|처리 완료/.test(r.status||'');
+ const intakeKey=r=>{
+  const brand=String(r.brandName||'').toLowerCase().replace(/[\s._\-·()\[\]{}]/g,'');
+  const businessNo=String(r.businessNo||'').replace(/\D/g,'');
+  return brand&&businessNo?brand+'|'+businessNo:'';
+ };
+ const completedKeys=new Set(State.intakeRows.filter(isDoneStatus).map(intakeKey).filter(Boolean));
  const classify=r=>{
   const signal=[r.status,r.duplicateCheck,r.duplicateCandidate].join(' ');
-  if(/등록 완료|기존 등록|승인 완료|처리 완료/.test(r.status||''))return 'done';
+  if(isDoneStatus(r)||completedKeys.has(intakeKey(r)))return 'done';
   if(r.duplicateCandidate||/중복|기존|일치 후보/.test(signal))return 'duplicate';
   return 'new';
  };
