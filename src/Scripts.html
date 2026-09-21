@@ -2,7 +2,37 @@
 const State={view:document.body.dataset.initialView||'admin',token:document.body.dataset.token||'',route:'dashboard',bootstrap:null,sectionCache:{},cacheTtl:180000};
 const $=s=>document.querySelector(s);const $$=s=>Array.from(document.querySelectorAll(s));
 const esc=v=>String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
-const server=(name,...args)=>new Promise((resolve,reject)=>google.script.run.withSuccessHandler(resolve).withFailureHandler(e=>reject(new Error(e.message||e)))[name](...args));
+const Busy={
+ count:0,timer:null,startedAt:0,
+ label(name,args){
+  const action=name==='saveAdminAction'&&args&&args.length?args[0]:name;
+  const labels={getAppBootstrap:'운영센터를 준비하는 중',getAdminSection:'데이터를 불러오는 중',reviewBrandIntake:'브랜드 승인 및 Notion 등록 중',syncBrandIntake:'신규 신청을 가져오는 중',reviewSubmission:'상품 검수 결과를 저장하는 중',updateProduct:'상품 정보를 저장하는 중',issuePartnerLink:'상품등록 링크를 발급하는 중',disablePartnerLink:'상품등록 링크를 중지하는 중',runHealthCheck:'시스템 연결을 점검하는 중',resolveAlert:'알림을 처리하는 중',saveFields:'상품 항목 설정을 저장하는 중',saveAdminEmails:'관리자 설정을 저장하는 중',uploadPartnerFile:'파일을 업로드하는 중',submitPartnerProduct:'상품 정보를 제출하는 중'};
+  return labels[action]||'요청을 처리하는 중';
+ },
+ ensure(){
+  if($('#boBusyOverlay'))return;
+  const style=document.createElement('style');
+  style.id='boBusyStyle';
+  style.textContent='#boBusyOverlay{position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;background:rgba(250,250,249,.82);backdrop-filter:blur(7px);transition:opacity .18s ease}#boBusyOverlay.hidden{display:none}#boBusyOverlay .bo-busy-card{width:min(420px,calc(100vw - 40px));padding:28px;border:1px solid #dededb;border-radius:20px;background:#fff;box-shadow:0 24px 70px rgba(0,0,0,.14);text-align:left}#boBusyOverlay strong{display:block;font-size:17px;color:#1d1d1f;margin-bottom:8px}#boBusyOverlay p{margin:0;color:#6b6b70;font-size:13px}#boBusyOverlay .bo-progress{height:8px;margin:20px 0 12px;border-radius:999px;background:#ececea;overflow:hidden}#boBusyOverlay .bo-progress span{display:block;height:100%;width:38%;border-radius:999px;background:linear-gradient(90deg,#242424,#8c8c88,#242424);animation:boProgress 1.25s ease-in-out infinite}#boBusyOverlay .bo-busy-meta{display:flex;justify-content:space-between;gap:12px;color:#7b7b80;font-size:12px}@keyframes boProgress{0%{transform:translateX(-110%)}100%{transform:translateX(290%)}}body.bo-busy{overflow:hidden}body.bo-busy button,body.bo-busy input,body.bo-busy select,body.bo-busy textarea{pointer-events:none}';
+  document.head.appendChild(style);
+  document.body.insertAdjacentHTML('beforeend','<div id="boBusyOverlay" class="hidden" role="status" aria-live="polite" aria-busy="true"><div class="bo-busy-card"><strong id="boBusyLabel">요청을 처리하는 중</strong><p>창을 닫거나 같은 버튼을 반복해서 누르지 마세요.</p><div class="bo-progress"><span></span></div><div class="bo-busy-meta"><span id="boBusyStep">서버 응답을 기다리고 있습니다.</span><span id="boBusyElapsed">0초</span></div></div></div>');
+ },
+ start(label){
+  this.ensure();this.count++;
+  const overlay=$('#boBusyOverlay');$('#boBusyLabel').textContent=label||'요청을 처리하는 중';
+  if(this.count===1){this.startedAt=Date.now();overlay.classList.remove('hidden');document.body.classList.add('bo-busy');this.tick();this.timer=setInterval(()=>this.tick(),1000)}
+ },
+ tick(){
+  const seconds=Math.max(0,Math.floor((Date.now()-this.startedAt)/1000));
+  const step=seconds<3?'요청을 안전하게 준비하고 있습니다.':seconds<12?'데이터를 확인하고 있습니다.':seconds<35?'외부 서비스와 동기화하고 있습니다.':'처리가 계속 진행 중입니다. 조금만 더 기다려 주세요.';
+  const elapsed=$('#boBusyElapsed'),stepEl=$('#boBusyStep');if(elapsed)elapsed.textContent=seconds+'초';if(stepEl)stepEl.textContent=step;
+ },
+ finish(){
+  this.count=Math.max(0,this.count-1);if(this.count)return;
+  clearInterval(this.timer);this.timer=null;const overlay=$('#boBusyOverlay');if(overlay)overlay.classList.add('hidden');document.body.classList.remove('bo-busy');
+ }
+};
+const server=(name,...args)=>{Busy.start(Busy.label(name,args));return new Promise((resolve,reject)=>google.script.run.withSuccessHandler(resolve).withFailureHandler(e=>reject(new Error((e&&e.message)||e||'처리 중 오류가 발생했습니다.')))[name](...args)).finally(()=>Busy.finish())};
 const fmt=v=>v||'—';
 const UI={
  toast(message,error=false){const el=$('#toast');el.textContent=message;el.className='toast'+(error?' error':'');setTimeout(()=>el.classList.add('hidden'),3200)},
@@ -212,7 +242,7 @@ function openBrandIntake(intakeId){const r=(State.intakeRows||[]).find(x=>x.inta
 
 async function syncBrandIntake(){try{const out=await server('saveAdminAction','syncBrandIntake',{});State.intakeRows=out.rows||[];UI.toast(`신규 응답 ${out.imported||0}건을 가져왔습니다.`);renderIntake(State.intakeRows)}catch(e){UI.toast(e.message,true)}}
 
-async function reviewBrandIntake(intakeId,action){if(action==='approve'&&!confirm('이 브랜드를 승인하고 Notion 브랜드 DB에 등록할까요?'))return;try{await server('saveAdminAction','reviewBrandIntake',{intakeId,action});UI.closeModal();UI.toast(action==='approve'?'브랜드 승인과 Notion 등록을 처리했습니다.':'보류로 변경했습니다.');go('intake',true)}catch(e){UI.toast(e.message,true)}}
+async function reviewBrandIntake(intakeId,action){if(action==='approve'&&!confirm('이 브랜드를 승인하고 Notion 브랜드 DB에 등록할까요?'))return;try{const result=await server('saveAdminAction','reviewBrandIntake',{intakeId,action});UI.closeModal();UI.toast(result&&result.alreadyProcessed?'이미 처리된 브랜드입니다. 최신 상태를 불러왔습니다.':action==='approve'?'브랜드 승인과 Notion 등록을 처리했습니다.':'보류로 변경했습니다.');delete State.sectionCache.intake;await go('intake',true)}catch(e){UI.toast(e.message,true);await go('intake',true)}}
 </script>
 
 <script id="beautyora-brand-assets-v31">
