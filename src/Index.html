@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <base target="_top">
+  <title>뷰티오라 운영센터</title>
+  <?!= include('Styles'); ?>
+</head>
+<body data-initial-view="<?= initialView ?>" data-token="<?= token ?>">
+  <div id="loading" class="loading-screen"><div class="spinner"></div><p>운영센터를 불러오고 있습니다.</p></div>
+  <div id="app" class="app-shell hidden">
+    <aside id="sidebar" class="sidebar">
+      <div class="brand-lockup"><span class="brand-mark">B</span><div><strong>BEAUTYORA</strong><small>운영센터</small></div></div>
+      <nav id="adminNav" class="nav-list">
+        <button data-route="dashboard" class="nav-item active">홈</button>
+        <button data-route="intake" class="nav-item">입점 신청</button>
+        <button data-route="brands" class="nav-item">브랜드</button>
+        <button data-route="products" class="nav-item">상품</button>
+        <button data-route="files" class="nav-item">파일</button>
+        <button data-route="alerts" class="nav-item">알림 <span id="alertBadge" class="badge hidden">0</span></button>
+        <button data-route="settings" class="nav-item">설정</button>
+      </nav>
+      <div class="sidebar-footer"><span class="status-dot"></span> 시스템 연결 상태</div>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <button id="menuToggle" class="icon-button mobile-only" aria-label="메뉴 열기">☰</button>
+        <div><h1 id="pageTitle">홈</h1><p id="pageSubtitle">오늘 처리할 업무를 확인하세요.</p></div>
+        <div class="top-actions"><button id="refreshBtn" class="quiet-button">새로고침</button><div id="userChip" class="user-chip">관리자</div></div>
+      </header>
+      <section id="content" class="content"></section>
+    </main>
+  </div>
+  <div id="toast" class="toast hidden" role="status"></div>
+  <div id="modal" class="modal-backdrop hidden" role="dialog" aria-modal="true"><div class="modal-card"><button class="modal-close" onclick="UI.closeModal()">×</button><div id="modalBody"></div></div></div>
+  <?!= include('Scripts'); ?>
+  <? if (initialView === 'admin') { ?><?!= include('BrandWorkspace'); ?><? } ?>
+  <? if (initialView === 'partner') { ?><?!= include('PartnerExperience'); ?><? } ?>
+</body>
+</html>

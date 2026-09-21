@@ -1,0 +1,2 @@
+function find_(sh,co,ids){if(sh.getLastRow()<2)return null;var rg=sh.getRange(2,1,sh.getLastRow()-1,14),a=rg.getValues(),fm=rg.getFormulas(),z=ids.map(norm_);for(var i=a.length-1;i>=0;i--){var r=a[i],e=String(r[12]).split(',').map(norm_);if(String(r[10])!='등록 완료'&&(norm_(r[1])==norm_(co)||z.some(function(x){return e.indexOf(x)>=0})))return[link_(fm[i][4]||r[4]),link_(fm[i][5]||r[5])]}return null}
+function link_(v){var m=String(v||'').match(/https:\/\/[^"]+/);return m?m[0]:String(v||'')}
