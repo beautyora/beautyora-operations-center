@@ -217,7 +217,7 @@ function renderIntake(rows){
  const completedKeys=new Set(State.intakeRows.filter(isDoneStatus).map(intakeKey).filter(Boolean));
  const classify=r=>{
   const signal=[r.status,r.duplicateCheck,r.duplicateCandidate].join(' ');
-  if(isDoneStatus(r)||completedKeys.has(intakeKey(r)))return 'done';
+  if(isDoneStatus(r))return 'done';
   if(r.duplicateCandidate||/중복|기존|일치 후보/.test(signal))return 'duplicate';
   return 'new';
  };
