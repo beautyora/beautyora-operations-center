@@ -355,31 +355,138 @@ function syncBrandIntake_() {
 }
 
 function reviewBrandIntake_(payload) {
+  payload = payload || {};
+  const intakeId = String(payload.intakeId || '').trim();
+  const action = String(payload.action || '').trim();
+  if (!intakeId) throw new Error('접수 ID가 없습니다.');
+  if (action !== 'approve' && action !== 'hold') throw new Error('지원하지 않는 처리 방식입니다.');
+
+  const cfg = getConfig_();
+  const book = SpreadsheetApp.openById(cfg.TARGET_SPREADSHEET_ID);
+  const sheet = book.getSheetByName(cfg.INTAKE_SHEET_NAME);
+  if (!sheet) throw new Error('신규 브랜드 접수·검토 시트를 찾을 수 없습니다.');
+
   const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
+  if (!lock.tryLock(5000)) {
+    throw new Error('다른 입점 처리가 진행 중입니다. 잠시 후 다시 시도해 주세요.');
+  }
+
+  let context;
+  const processingKey = 'brand_intake_processing_' + Utilities.base64EncodeWebSafe(intakeId).slice(0, 80);
   try {
-    const cfg = getConfig_();
-    const book = SpreadsheetApp.openById(cfg.TARGET_SPREADSHEET_ID);
-    const sheet = book.getSheetByName(cfg.INTAKE_SHEET_NAME);
-    if (!sheet) throw new Error('신규 브랜드 접수·검토 시트를 찾을 수 없습니다.');
-    const values = sheet.getDataRange().getDisplayValues();
+    const values = sheet.getDataRange().getValues();
     if (values.length < 2) throw new Error('검토할 신청이 없습니다.');
     const headers = values[0];
-    const idCol = headers.indexOf('접수 ID');
-    const statusCol = headers.indexOf('등록 상태');
-    if (idCol < 0 || statusCol < 0) throw new Error('접수 ID 또는 등록 상태 열이 없습니다.');
-    const rowIndex = values.findIndex(function(row, index) { return index > 0 && row[idCol] === payload.intakeId; });
+    const h = headerMap_(headers);
+    ['접수 ID', '등록 상태', '브랜드 ID', 'Notion 페이지 ID'].forEach(function(name) {
+      if (h[name] == null) throw new Error('접수 시트 열 누락: ' + name);
+    });
+    const rowIndex = values.findIndex(function(row, index) {
+      return index > 0 && clean_(row[h['접수 ID']]) === intakeId;
+    });
     if (rowIndex < 1) throw new Error('입점 신청을 찾을 수 없습니다.');
-    const nextStatus = payload.action === 'approve' ? BO.STATUS.APPROVED : BO.STATUS.HOLD;
-    sheet.getRange(rowIndex + 1, statusCol + 1).setValue(nextStatus);
-    SpreadsheetApp.flush();
-    if (payload.action === 'approve') {
-      createApprovedBrands_(false);
-      refreshNotionMirror_(false);
+
+    const row = values[rowIndex];
+    const rowNumber = rowIndex + 1;
+    const notionPageId = clean_(row[h['Notion 페이지 ID']]);
+    if (notionPageId) {
+      return { ok: true, alreadyProcessed: true, row: listBrandIntake_({}).find(function(item) { return item.intakeId === intakeId; }) || null };
     }
-    logAction_('브랜드 ' + nextStatus, '입점 신청', payload.intakeId, payload.note || '');
-    const rows = listBrandIntake_({});
-    return { ok: true, row: rows.find(function(item) { return item.intakeId === payload.intakeId; }) || null };
+
+    if (action === 'hold') {
+      sheet.getRange(rowNumber, h['등록 상태'] + 1).setValue(BO.STATUS.HOLD);
+      SpreadsheetApp.flush();
+      logAction_('브랜드 ' + BO.STATUS.HOLD, '입점 신청', intakeId, payload.note || '');
+      return { ok: true, row: listBrandIntake_({}).find(function(item) { return item.intakeId === intakeId; }) || null };
+    }
+
+    const scriptProperties = PropertiesService.getScriptProperties();
+    const startedAt = Number(scriptProperties.getProperty(processingKey) || 0);
+    const processingStatus = clean_(row[h['등록 상태']]) === '처리 중';
+    if (processingStatus && startedAt && Date.now() - startedAt < 7 * 60 * 1000) {
+      throw new Error('이 브랜드는 이미 처리 중입니다. 완료될 때까지 잠시 기다려 주세요.');
+    }
+
+    const brandId = clean_(row[h['브랜드 ID']]) || ('BO-' + String(findMaxBrandNumber_(book, sheet, cfg.MIRROR_SHEET_NAME) + 1).padStart(4, '0'));
+    sheet.getRange(rowNumber, h['브랜드 ID'] + 1).setValue(brandId);
+    sheet.getRange(rowNumber, h['등록 상태'] + 1).setValue('처리 중');
+    if (h['오류 메시지'] != null) sheet.getRange(rowNumber, h['오류 메시지'] + 1).clearContent();
+    scriptProperties.setProperty(processingKey, String(Date.now()));
+    SpreadsheetApp.flush();
+    context = { headers: headers, row: row, rowNumber: rowNumber, brandId: brandId };
+  } finally {
+    lock.releaseLock();
+  }
+
+  try {
+    const result = createSingleApprovedBrand_(cfg, book, sheet, context);
+    PropertiesService.getScriptProperties().deleteProperty(processingKey);
+    logAction_('브랜드 ' + result.status, '입점 신청', intakeId, payload.note || '');
+    return { ok: true, status: result.status, row: listBrandIntake_({}).find(function(item) { return item.intakeId === intakeId; }) || null };
+  } catch (error) {
+    PropertiesService.getScriptProperties().deleteProperty(processingKey);
+    markBrandIntakeFailure_(sheet, context, error);
+    throw error;
+  }
+}
+
+function createSingleApprovedBrand_(cfg, book, sheet, context) {
+  const h = headerMap_(context.headers);
+  const row = context.row.slice();
+  const rowNumber = context.rowNumber;
+  row[h['브랜드 ID']] = context.brandId;
+
+  const brand = clean_(row[h['브랜드명']]);
+  if (!brand) throw new Error('브랜드명이 비어 있습니다.');
+  const bizNo = normalizeBizNo_(row[h['사업자번호']]);
+
+  if (h['사업자번호'] != null) {
+    const formattedBizNo = formatBizNo_(row[h['사업자번호']]);
+    row[h['사업자번호']] = formattedBizNo;
+    sheet.getRange(rowNumber, h['사업자번호'] + 1).setValue(formattedBizNo);
+  }
+  if (h['연락처'] != null) {
+    const formattedPhone = formatPhone_(row[h['연락처']]);
+    row[h['연락처']] = formattedPhone;
+    sheet.getRange(rowNumber, h['연락처'] + 1).setValue(formattedPhone);
+  }
+
+  const duplicate = queryNotionDuplicate_(cfg.NOTION_DATA_SOURCE_ID, brand, bizNo);
+  if (duplicate) {
+    updateIntakeResultSafely_(sheet, h, rowNumber, BO.STATUS.EXISTING, duplicate, 'Notion 기존 항목 확인');
+    writeLog_('CREATE', 'SKIP_EXISTING', 1, brand + ' / ' + duplicate.id);
+    return { status: BO.STATUS.EXISTING, pageId: duplicate.id };
+  }
+
+  const createPayload = buildNotionCreatePayload_(cfg, h, row, context.brandId);
+  const page = notionRequest_('post', '/pages', createPayload);
+  updateIntakeResultSafely_(sheet, h, rowNumber, BO.STATUS.DONE, {
+    id: page.id,
+    url: page.url,
+    brandId: context.brandId
+  }, '');
+  writeLog_('CREATE', 'SUCCESS', 1, brand + ' / ' + context.brandId);
+  return { status: BO.STATUS.DONE, pageId: page.id };
+}
+
+function updateIntakeResultSafely_(sheet, h, rowNumber, status, result, message) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) throw new Error('처리 결과 저장이 지연되고 있습니다. 잠시 후 다시 확인해 주세요.');
+  try {
+    updateIntakeResult_(sheet, h, rowNumber, status, result, message);
+    SpreadsheetApp.flush();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function markBrandIntakeFailure_(sheet, context, error) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return;
+  try {
+    const h = headerMap_(context.headers);
+    updateIntakeError_(sheet, h, context.rowNumber, error);
+    SpreadsheetApp.flush();
   } finally {
     lock.releaseLock();
   }
