@@ -44,10 +44,10 @@ function crmWorkspaceRead_(){
     s.purchase+=Number(r['매입재고'])||0;s.consignment+=Number(r['위탁재고'])||0;s.unknown+=Number(r['미분류재고'])||0;s.sample+=Number(r['샘플DP'])||0;
     if(r['최종수정']&&String(r['최종수정'])>inventoryUpdated)inventoryUpdated=String(r['최종수정']);
   });
-  const staffFiles=crmRows_(BOPS.SHEETS.FILES);opsJournal_().forEach(r=>{const code=r['브랜드코드'],s=stockByBrand[code]||(stockByBrand[code]={purchase:0,consignment:0,unknown:0,sample:0});const k={'매입':'purchase','위탁':'consignment','미분류':'unknown'}[r['거래방식']]||'unknown';s[k]+=(r['구분']==='입고'?1:-1)*Number(r['수량']);});
+  const staffFileCountByBrand={};crmRows_(BOPS.SHEETS.FILES).forEach(f=>{const code=String(f['브랜드코드']||'');if(code)staffFileCountByBrand[code]=(staffFileCountByBrand[code]||0)+1;});opsJournal_().forEach(r=>{const code=r['브랜드코드'],s=stockByBrand[code]||(stockByBrand[code]={purchase:0,consignment:0,unknown:0,sample:0});const k={'매입':'purchase','위탁':'consignment','미분류':'unknown'}[r['거래방식']]||'unknown';s[k]+=(r['구분']==='입고'?1:-1)*Number(r['수량']);});
   const rows=brands.map(r=>{
     const b=crmBrand_(r),code=b.brandCode,pp=productByBrand[code]||[],aa=crmActivity_(code,archiveByBrand[code]||[],notesByBrand[code]||[]),ss=subByBrand[code]||[];
-    b.fileCount=staffFiles.filter(f=>f['브랜드코드']===code).length;b.barcodeMissing=pp.filter(p=>!p.barcode).length;b.productCount=pp.length;b.reviewCount=ss.filter(s=>/신규|검수|제출/.test(s['상태'])).length;b.revisionCount=ss.filter(s=>/보완/.test(s['상태'])).length;b.activityCount=aa.length;
+    b.fileCount=staffFileCountByBrand[code]||0;b.barcodeMissing=pp.filter(p=>!p.barcode).length;b.productCount=pp.length;b.reviewCount=ss.filter(s=>/신규|검수|제출/.test(s['상태'])).length;b.revisionCount=ss.filter(s=>/보완/.test(s['상태'])).length;b.activityCount=aa.length;
     b.pendingTasks=aa.filter(a=>a.source==='운영센터'&&a.nextAction&&!a.complete).map(a=>({task:a.nextAction,date:a.due}));
     b.archived=(archiveByBrand[code]||[]).some(a=>a['구분']==='브랜드 본문');
     const recent=aa.find(a=>a.source==='운영센터'&&a.nextAction&&!a.complete);if(recent){b.nextAction=recent.nextAction;b.nextDate=recent.due;}
