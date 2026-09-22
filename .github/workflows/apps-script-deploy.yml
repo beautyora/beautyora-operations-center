@@ -1,0 +1,97 @@
+name: Apps Script 배포
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "배포 대상"
+        required: true
+        type: choice
+        options:
+          - test
+          - production
+      description:
+        description: "배포 설명"
+        required: true
+        default: "UI/기능 업데이트"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apps-script-${{ inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: apps-script-${{ inputs.target }}
+
+    steps:
+      - name: 운영 배포 보호
+        if: inputs.target == 'production' && github.ref_name != 'main'
+        run: |
+          echo "운영 배포는 main 브랜치에서만 가능합니다."
+          exit 1
+
+      - name: 저장소 받기
+        uses: actions/checkout@v4
+
+      - name: Node.js 준비
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 배포 대상 설정
+        shell: bash
+        env:
+          TARGET: ${{ inputs.target }}
+          TEST_SCRIPT_ID: ${{ secrets.TEST_SCRIPT_ID }}
+          TEST_DEPLOYMENT_ID: ${{ secrets.TEST_DEPLOYMENT_ID }}
+          PROD_SCRIPT_ID: ${{ secrets.PROD_SCRIPT_ID }}
+          PROD_DEPLOYMENT_ID: ${{ secrets.PROD_DEPLOYMENT_ID }}
+        run: |
+          if [ "$TARGET" = "production" ]; then
+            SCRIPT_ID="$PROD_SCRIPT_ID"
+            DEPLOYMENT_ID="$PROD_DEPLOYMENT_ID"
+          else
+            SCRIPT_ID="$TEST_SCRIPT_ID"
+            DEPLOYMENT_ID="$TEST_DEPLOYMENT_ID"
+          fi
+
+          if [ -z "$SCRIPT_ID" ] || [ -z "$DEPLOYMENT_ID" ]; then
+            echo "대상 환경의 SCRIPT_ID 또는 DEPLOYMENT_ID Secret이 없습니다."
+            exit 1
+          fi
+
+          printf '{"scriptId":"%s","rootDir":"src"}\n' "$SCRIPT_ID" > .clasp.json
+          echo "DEPLOYMENT_ID=$DEPLOYMENT_ID" >> "$GITHUB_ENV"
+
+      - name: Google 인증 준비
+        shell: bash
+        env:
+          CLASPRC_JSON_BASE64: ${{ secrets.CLASPRC_JSON_BASE64 }}
+        run: |
+          if [ -z "$CLASPRC_JSON_BASE64" ]; then
+            echo "CLASPRC_JSON_BASE64 Secret이 없습니다."
+            exit 1
+          fi
+          echo "$CLASPRC_JSON_BASE64" | base64 --decode > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+
+      - name: Apps Script 코드 반영
+        run: npx --yes @google/clasp@3 push --force
+
+      - name: 기존 웹앱을 새 버전으로 갱신
+        env:
+          DEPLOY_DESCRIPTION: ${{ inputs.description }}
+        run: |
+          npx --yes @google/clasp@3 create-deployment \
+            --deploymentId "$DEPLOYMENT_ID" \
+            --description "$DEPLOY_DESCRIPTION"
+
+      - name: 결과
+        run: |
+          echo "배포 대상: ${{ inputs.target }}"
+          echo "브랜치: ${{ github.ref_name }}"
+          echo "커밋: ${{ github.sha }}"
