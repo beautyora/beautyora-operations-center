@@ -44,3 +44,8 @@ function getAdminAssetFolder(request) {
   });
   return {ok:true,url:folder.getUrl(),moved:moved,failed:failed};
 }
+
+function getProductAssetCategoryFolder_(brand,productId,category) {
+  if(['대표 이미지','추가 이미지','상세페이지','기타'].indexOf(category)<0)throw Error('파일 분류를 확인해 주세요.');
+  return assetChildFolder_(getProductAssetFolder_(brand,productId),category);
+}

@@ -692,7 +692,7 @@ function queryAllDataSourcePages_(dataSourceId, filter) {
   return pages;
 }
 
-function notionRequest_(method, path, body) {
+function notionRequest_(method, path, body, version) {
   const token = PropertiesService.getScriptProperties().getProperty('NOTION_TOKEN');
   if (!token) throw new Error('스크립트 속성 NOTION_TOKEN이 없습니다.');
   const options = {
@@ -700,7 +700,7 @@ function notionRequest_(method, path, body) {
     muteHttpExceptions: true,
     headers: {
       Authorization: 'Bearer ' + token,
-      'Notion-Version': BO.NOTION_VERSION,
+      'Notion-Version': version || BO.NOTION_VERSION,
       'Content-Type': 'application/json'
     }
   };

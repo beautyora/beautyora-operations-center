@@ -8,6 +8,7 @@ let passed = 0;
 function check(name, fn) { fn(); passed++; console.log('PASS', name); }
 function load(files, globals = {}) {
   const context = vm.createContext({console, ...globals});
+  vm.runInContext(source('BO_NotionFields.gs'), context);
   files.forEach(file => vm.runInContext(source(file), context, {filename:file}));
   return context;
 }

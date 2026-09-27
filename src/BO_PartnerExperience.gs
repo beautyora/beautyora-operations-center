@@ -40,7 +40,7 @@ function uploadPartnerFileV2_(request, document) {
   if (!bytes.length || bytes.length > BOPS.MAX_UPLOAD_BYTES) throw new Error('빈 파일이거나 8MB를 초과했습니다.');
 
   // Drive 전송은 잠금 밖에서 처리해 서로 다른 파일을 동시에 저장할 수 있게 한다.
-  const folder = withLock_(function () { return document ? getBrandDocumentFolder_(context.brand) : getProductAssetFolder_(context.brand, productId); });
+  const folder = withLock_(function () { return document ? getBrandDocumentFolder_(context.brand) : getProductAssetCategoryFolder_(context.brand, productId, category); });
   const fileName = sanitizeFileName_((productId || brandCode) + '_' + category + '_' + request.uploadId + '_' + request.fileName);
   const matches = folder.getFilesByName(fileName);
   const file = matches.hasNext() ? matches.next() : folder.createFile(Utilities.newBlob(bytes, request.mimeType, fileName));
@@ -79,6 +79,7 @@ function submitPartnerDraft(request) {
     const used = {};
     const products = request.products.map(p => {
       const data = Object.assign({}, p.data || {});
+      delete data._change_request;delete data._source_submission_id;
       if (!/^[a-zA-Z0-9-]{8,80}$/.test(p.id || '') || used[p.id]) throw new Error('중복되거나 잘못된 상품 식별자입니다.');
       used[p.id] = true;
       const history = submissionsByProduct.get(p.id) || [];
@@ -95,6 +96,7 @@ function submitPartnerDraft(request) {
         }
         if (!source || ![BOPS.STATUS.REVISION, BOPS.STATUS.APPROVED].includes(source['상태'])) throw new Error('승인 완료 또는 보완 요청된 상품만 수정할 수 있습니다.');
       } else {
+        if(masterById.has(p.id))throw Error('기존 상품은 수정 요청으로 제출해 주세요.');
         const conflict = history.find(s => s['브랜드코드'] === brandCode && s['제출ID'] !== 'UX-' + request.requestId + '-' + p.id);
         if (conflict) throw new Error('이미 제출한 상품입니다. 제출 현황을 확인해 주세요.');
       }
@@ -110,15 +112,19 @@ function submitPartnerDraft(request) {
       const detailUrl = String(p.detailUrl || '').trim();
       if (detailUrl && !/^https?:\/\/[^\s]+$/i.test(detailUrl)) throw new Error('상세페이지 주소는 https:// 또는 http://로 시작해야 합니다.');
       if (data.attachments.filter(a => a.category === '대표 이미지').length > 1) throw new Error('대표 이미지는 한 장만 선택해 주세요.');
-      if (typeof notionReviewEnabled_ === 'function' && notionReviewEnabled_() && !p.sourceSubmissionId && (!main || !details.length)) throw new Error((data.product_name || '상품') + ': 대표 이미지와 상세페이지 파일을 Google Drive에 올려주세요.');
-      data.main_image_url = main ? main.url : (p.sourceSubmissionId ? data.main_image_url || '' : '');
-      data.detail_page_url = details[0] ? details[0].url : (typeof notionReviewEnabled_ === 'function' && notionReviewEnabled_() ? (p.sourceSubmissionId ? data.detail_page_url || '' : '') : detailUrl);
-      if (detailUrl) data.reference_url = detailUrl;
+      const usesNotion=typeof notionReviewEnabled_==='function'&&notionReviewEnabled_();
+      const requires=function(id){return fields.some(function(f){return f.id===id&&f.required;});};
+      if(usesNotion&&!p.sourceSubmissionId&&((requires('main_image_url')&&!main)||(requires('detail_page_url')&&!details.length)))throw Error((data.product_name||'상품')+': 필수 이미지·상세페이지 파일을 업로드해 주세요.');
+      data.main_image_preview_url=main?main.url:(data.main_image_preview_url||'');
+      data.main_image_url = main ? (usesNotion?notionAssetFolderUrl_(main.url):main.url) : (p.sourceSubmissionId ? data.main_image_url || '' : '');
+      data.detail_page_url = details[0] ? (usesNotion?notionAssetFolderUrl_(details[0].url):details[0].url) : (typeof notionReviewEnabled_ === 'function' && notionReviewEnabled_() ? (p.sourceSubmissionId ? data.detail_page_url || '' : '') : detailUrl);
+      data.reference_url = String(Object.prototype.hasOwnProperty.call(data,'reference_url') ? data.reference_url : detailUrl).trim();
       data.detail_page_urls = details.map(a => a.url);
       data.additional_image_urls = data.attachments.filter(a => a.category === '추가 이미지').map(a => a.url);
       data._partner_request_id = request.requestId;
       if (source) {
-        data._change_request = data._change_request === true || source['상태'] === BOPS.STATUS.APPROVED;
+        let sourceData={};try{sourceData=JSON.parse(source['상품데이터JSON']||'{}')}catch(ignored){}
+        data._change_request = sourceData._change_request === true || source['상태'] === BOPS.STATUS.APPROVED;
         data._source_submission_id = data._source_submission_id || p.sourceSubmissionId;
       }
       return {id:p.id,sourceSubmissionId:p.sourceSubmissionId || '',data:data};
@@ -146,7 +152,7 @@ function submitPartnerDraft(request) {
 
 function runBeautyoraPartnerUXChecks(){
  assertAdmin_();
- const originals={withLock_,validatePartnerToken_,sheetObjects_,safeObjects_,findOne_,appendObject_,appendObjects_,logAction_,getSettings_,getBrandFolder_,getProductAssetFolder_};
+ const originals={withLock_,validatePartnerToken_,sheetObjects_,safeObjects_,findOne_,appendObject_,appendObjects_,logAction_,getSettings_,getBrandFolder_,getProductAssetFolder_,getProductAssetCategoryFolder_};
  const db={},checks=[];let created=0;
  const ensure=n=>db[n]||(db[n]=[]);
  const assert=(v,m)=>{if(!v)throw new Error('FAIL: '+m);checks.push(m);};
@@ -162,6 +168,7 @@ function runBeautyoraPartnerUXChecks(){
  getSettings_=()=>({fields:[{id:'product_name',label:'상품명',required:true,type:'text',active:true},{id:'retail_price',label:'소비자가',required:true,type:'number',active:true}]});
  getBrandFolder_=()=>({getFilesByName:()=>({hasNext:()=>false}),createFile:blob=>{created++;return {getName:()=>blob.getName(),getId:()=> 'test-drive-'+created,getUrl:()=> 'https://drive.google.com/file/d/test-'+created+'/view'};}});
  getProductAssetFolder_=brand=>getBrandFolder_(brand);
+ getProductAssetCategoryFolder_=brand=>getBrandFolder_(brand);
  const a={token:'test-token',uploadId:'upload-12345678',productId:'PRD-12345678',category:'대표 이미지',fileName:'test.png',mimeType:'image/png',base64:'iVBORw0KGgo='};
  const asset=uploadPartnerAsset(a);
  assert(asset.ok&&created===1,'파일 등록 성공');uploadPartnerAsset(a);assert(created===1&&ensure(BOPS.SHEETS.FILES).length===1,'동일 파일 재시도 중복 방지');
@@ -181,6 +188,5 @@ function runBeautyoraPartnerUXChecks(){
  const partial={token:'test-token',requestId:'request-partial0',products:['PRD-PARTIAL1','PRD-PARTIAL2'].map(id=>({id,data:{product_name:id,retail_price:1},assets:[]}))};
  fail(()=>submitPartnerDraft(partial),'부분 실패 시뮬레이션');submitPartnerDraft(partial);assert(ensure(BOPS.SHEETS.SUBMISSIONS).filter(r=>r['상품ID'].startsWith('PRD-PARTIAL')).length===2,'부분 실패 재시도 누락·중복 없음');
  console.log(JSON.stringify({ok:true,passed:checks.length,checks:checks,productionWrites:0}));return {ok:true,passed:checks.length};
- }finally{withLock_=originals.withLock_;validatePartnerToken_=originals.validatePartnerToken_;sheetObjects_=originals.sheetObjects_;safeObjects_=originals.safeObjects_;findOne_=originals.findOne_;appendObject_=originals.appendObject_;appendObjects_=originals.appendObjects_;logAction_=originals.logAction_;getSettings_=originals.getSettings_;getBrandFolder_=originals.getBrandFolder_;getProductAssetFolder_=originals.getProductAssetFolder_;}
+ }finally{withLock_=originals.withLock_;validatePartnerToken_=originals.validatePartnerToken_;sheetObjects_=originals.sheetObjects_;safeObjects_=originals.safeObjects_;findOne_=originals.findOne_;appendObject_=originals.appendObject_;appendObjects_=originals.appendObjects_;logAction_=originals.logAction_;getSettings_=originals.getSettings_;getBrandFolder_=originals.getBrandFolder_;getProductAssetFolder_=originals.getProductAssetFolder_;getProductAssetCategoryFolder_=originals.getProductAssetCategoryFolder_;}
 }
-

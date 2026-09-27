@@ -16,6 +16,8 @@ const fileRows = [];
 let brandPageId = 'brand-page';
 const ctx = vm.createContext({
   console,
+  Utilities:{base64EncodeWebSafe:s=>Buffer.from(s).toString('base64url'),newBlob:s=>({getBytes:()=>Buffer.from(s)})},
+  DriveApp:{getFileById:id=>({getParents:()=>({hasNext:()=>true,next:()=>({getUrl:()=> 'https://drive.google.com/drive/folders/'+id+'-folder'})})})},
   PropertiesService: {getScriptProperties: () => ({getProperty:key=>props[key]||'',setProperty:(key,value)=>{props[key]=value}})},
   BOPS: {SHEETS:{FILES:'files'},STATUS:{REVISION:'보완 필요'}},
   withLock_: fn=>fn(),
@@ -25,6 +27,7 @@ const ctx = vm.createContext({
   crmAllBrands_: ()=>[{'브랜드ID':'BRAND-1','브랜드명':'시트의 오래된 이름','원본URL':''}],
   queryAllDataSourcePages_: ()=>Object.values(pages).filter(page=>page.parent?.data_source_id==='brand-source'),
   listProducts_: ()=>[],
+  listLegacyProducts_: ()=>[],
   getSheet_: ()=>({getLastColumn:()=>11,getRange:()=>({getDisplayValues:()=>[['파일ID','브랜드코드','상품ID','분류','파일명','Drive파일ID','DriveURL','업로드일','상태','검수메모','검수일']]})}),
   updateObjectRow_: (name,index,patch)=>Object.assign(fileRows[index-2],patch),
   now_: ()=>'today',
@@ -35,7 +38,7 @@ const ctx = vm.createContext({
     calls.push({method,endpoint,body});
     if(method==='get'&&endpoint.startsWith('/data_sources/'))return {properties:schemas[endpoint.split('/').pop()]};
     if(method==='post'&&endpoint.includes('/query'))return {results:Object.values(pages).filter(p=>{
-      const first=p.properties.pid?.rich_text?.[0];
+      const first=p.properties[body.filter.property]?.rich_text?.[0];
       return (first?.plain_text||first?.text?.content)===body.filter.rich_text.equals;
     })};
     if(method==='post'&&endpoint==='/pages'){
@@ -55,6 +58,7 @@ const ctx = vm.createContext({
     throw Error(method+' '+endpoint);
   }
 });
+for(const name of ['BO_NotionFields.gs','BO_NotionCatalog.gs'])vm.runInContext(fs.readFileSync(path.join(__dirname,'..','src',name),'utf8'),ctx);
 vm.runInContext(source, ctx);
 for(const kind of ['product','brand']){
   const spec=vm.runInContext(`BO_REVIEW_SCHEMA.${kind}`,ctx);
@@ -76,7 +80,7 @@ assert.equal(pages['product-page'].properties.thumbnail,undefined);
 ctx.approveProductInNotion_(row);
 assert.equal(pages['product-page'].properties.review.select.name,'승인 완료');
 assert.equal(pages['product-page'].properties.barcode.rich_text[0].text.content,'001234');
-assert.equal(pages['product-page'].properties.thumbnail.url,'https://drive.google.com/file/d/thumb/view');
+assert.equal(pages['product-page'].properties.thumbnail.url,'https://drive.google.com/drive/folders/thumb-folder');
 console.log('PASS new product stages before approval and Drive links publish after approval');
 
 pages['brand-page']={id:'brand-page',properties:{}};
@@ -99,11 +103,11 @@ assert.equal(detail.properties.find(p=>p.id==='name').editable,true);
 assert.equal(detail.properties.find(p=>p.id==='productId').editable,false);
 ctx.updateNotionProduct_({pageId:liveId,lastEditedAt:'rev-1',changes:[
   {id:'name',value:'수정된 상품'}, {id:'barcode',value:'001234'},
-  {id:'thumbnail',value:'https://drive.google.com/file/d/image/view'}
+  {id:'thumbnail',value:'https://drive.google.com/drive/folders/image'}
 ]});
 assert.equal(pages[liveId].properties.name.title[0].text.content,'수정된 상품');
 assert.equal(pages[liveId].properties.barcode.rich_text[0].text.content,'001234');
-assert.equal(pages[liveId].properties.thumbnail.url,'https://drive.google.com/file/d/image/view');
+assert.equal(pages[liveId].properties.thumbnail.url,'https://drive.google.com/drive/folders/image');
 assert.throws(()=>ctx.updateNotionProduct_({pageId:liveId,lastEditedAt:'rev-1',changes:[{id:'name',value:'덮어쓰기'}]}),/수정되었습니다/);
 assert.throws(()=>ctx.updateNotionProduct_({pageId:liveId,lastEditedAt:'rev-2',changes:[{id:'productId',value:'PRD-HIJACK'}]}),/수정할 수 없는/);
 assert.throws(()=>ctx.updateNotionProduct_({pageId:liveId,lastEditedAt:'rev-2',changes:[{id:'thumbnail',value:'https://example.com/image.jpg'}]}),/Google Drive/);
@@ -150,3 +154,63 @@ assert.equal(listed[0]._notionSource,'notion');
 assert.equal(ctx.crmLiveBrand_('BRAND-1')['브랜드명'],'수정된 브랜드');
 assert.equal(sheetBrand['브랜드명'],'시트의 오래된 이름');
 console.log('PASS brand list and detail read Notion while internal workflow fields stay in Sheets');
+
+// Live schema, ordering, folder and body regression coverage.
+const baselineRequest=ctx.notionRequest_;
+let viewOrder=['name','barcode','thumbnail'],bodyText='원래 본문',blockWrites=0;
+ctx.notionRequest_=(method,endpoint,body)=>{
+  if(method==='get'&&endpoint.startsWith('/views?'))return {results:[{id:'selected-view'}]};
+  if(method==='get'&&endpoint==='/views/selected-view')return {data_source_id:'product-source',name:'상품 보기',configuration:{properties:viewOrder.map(property_id=>({property_id,visible:true}))}};
+  if(method==='patch'&&endpoint==='/data_sources/product-source'){
+    for(const [id,patch]of Object.entries(body.properties)){const d=Object.values(schemas['product-source']).find(d=>d.id===id);Object.assign(d,patch);}return {};
+  }
+  if(method==='get'&&endpoint.startsWith('/blocks/'+liveId+'/children'))return {results:[{id:'paragraph-1',type:'paragraph',paragraph:{rich_text:[{plain_text:bodyText}]}}],has_more:false};
+  if(method==='patch'&&endpoint==='/blocks/paragraph-1'){blockWrites++;bodyText=body.paragraph.rich_text.map(t=>t.text.content).join('');return {paragraph:body.paragraph};}
+  if(method==='patch'&&endpoint==='/blocks/'+liveId+'/children'){blockWrites++;return {results:body.children};}
+  return baselineRequest(method,endpoint,body);
+};
+function clearForm(){vm.runInContext('delete BO_NOTION_FORM_CACHE["product-source"];delete BO_NOTION_ORDER_CACHE["product-source"];delete BO_NOTION_SOURCE_CACHE["product-source"]',ctx);}
+schemas['product-source']['카테고리']={id:'category',type:'multi_select',multi_select:{options:[{id:'skin',name:'스킨케어',color:'green'}]}};
+clearForm();
+let form=ctx.notionProductFieldConfig_();
+assert.deepEqual(Array.from(form.fields.slice(0,3),f=>f.propertyId),viewOrder);
+const request={version:form.version,fields:form.fields.map(f=>({...f,required:f.id==='barcode'?false:f.required,options:f.id==='category'?'스킨케어|헤어':f.options,examples:f.id==='barcode'?'8801234567890':f.examples}))};
+ctx.saveNotionFieldSettings_(request);
+form=ctx.notionProductFieldConfig_();
+assert.equal(form.fields.find(f=>f.id==='barcode').required,false);
+assert.equal(form.fields.find(f=>f.id==='barcode').examples,'8801234567890');
+assert.equal(form.fields.find(f=>f.id==='category').options,'스킨케어|헤어');
+assert.throws(()=>ctx.saveNotionFieldSettings_(request),/변경되었습니다/);
+assert.throws(()=>ctx.saveNotionFieldSettings_({version:form.version,fields:form.fields.map(f=>({...f,options:f.id==='category'?'헤어':f.options}))}),/삭제/);
+viewOrder=['thumbnail','name','barcode'];clearForm();
+assert.deepEqual(Array.from(ctx.getNotionProductDetail({pageId:liveId}).properties.slice(0,3),f=>f.id),viewOrder);
+console.log('PASS live Notion order and choices, required rules, examples and stale settings guard');
+assert.equal(ctx.notionAssetFolderUrl_('https://drive.google.com/drive/folders/existing'),'https://drive.google.com/drive/folders/existing');
+assert.equal(ctx.notionAssetFolderUrl_('https://drive.google.com/file/d/thumb/view'),'https://drive.google.com/drive/folders/thumb-folder');
+assert.equal(ctx.notionAssetFolderUrl_('https://example.com/file/d/thumb/view'),'');
+assert.throws(()=>ctx.updateNotionProduct_({pageId:liveId,lastEditedAt:'rev-2',changes:[{id:'thumbnail',value:'https://drive.google.com/file/d/image/view'}]}),/폴더/);
+ctx.updateNotionProduct_({pageId:liveId,lastEditedAt:'rev-2',changes:[],blockChanges:[{id:'paragraph-1',original:'원래 본문',text:'변경된 본문'}],appendText:'새 문단'});
+assert.equal(bodyText,'변경된 본문');assert.equal(blockWrites,2);
+assert.throws(()=>ctx.updateNotionProduct_({pageId:liveId,lastEditedAt:'rev-2',changes:[{id:'name',value:'변경되면 안 됨'}],blockChanges:[{id:'paragraph-1',original:'원래 본문',text:'충돌'}]}),/본문이 수정/);
+assert.equal(pages[liveId].properties.name.title[0].text.content,'수정된 상품');
+assert.throws(()=>ctx.notionBodyPlan_(liveId,[{id:'other-page-block',original:'',text:'범위 초과'}]),/이 상품/);
+console.log('PASS folder-only asset URLs, body editing and conflict/scope protection');
+const latest=ctx.latestSubmissionRows_([
+  {'브랜드코드':'B1','상품ID':'P1','제출ID':'v2','제출버전':2,'상태':'신규 제출'},
+  {'브랜드코드':'B1','상품ID':'P1','제출ID':'v1','제출버전':1,'상태':'보완 필요'},
+  {'브랜드코드':'B2','상품ID':'P1','제출ID':'other','제출버전':1,'상태':'보완 필요'}
+]);
+assert.equal(latest.length,2);assert.equal(latest.find(r=>r['브랜드코드']==='B1')['제출ID'],'v2');
+console.log('PASS resubmissions replace stale revision counts and brands remain isolated');
+
+pages[liveId].properties.thumbnail.url='https://drive.google.com/file/d/thumb/view';
+let migration=ctx.normalizeNotionAssetFolders_({items:[{pageId:liveId,changes:[{id:'thumbnail',original:'https://drive.google.com/file/d/thumb/view',value:'https://drive.google.com/drive/folders/thumb-folder'}]}]});
+assert.equal(migration.results[0].ok,true);assert.equal(pages[liveId].properties.thumbnail.url,'https://drive.google.com/drive/folders/thumb-folder');
+migration=ctx.normalizeNotionAssetFolders_({items:[{pageId:liveId,changes:[{id:'thumbnail',original:'stale',value:'https://drive.google.com/drive/folders/other'}]}]});assert.equal(migration.results[0].ok,false);
+assert.equal(pages[liveId].properties.thumbnail.url,'https://drive.google.com/drive/folders/thumb-folder');
+assert.equal(ctx.notionProductPatchValue_({type:'number',name:'가격'},'19,000',[]).number,19000);
+console.log('PASS folder migration checks original values and comma prices retain numeric meaning');
+const beforeForeign=calls.filter(c=>c.method==='patch'&&c.endpoint==='/pages/'+liveId).length;
+assert.throws(()=>ctx.stageNewProductInNotion_({'상품ID':liveId,'브랜드코드':'BRAND-1','상품데이터JSON':'{}'}),/브랜드가/);
+assert.equal(calls.filter(c=>c.method==='patch'&&c.endpoint==='/pages/'+liveId).length,beforeForeign);
+console.log('PASS product page-ID fallback cannot stage a different brand product');

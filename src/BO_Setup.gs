@@ -53,14 +53,15 @@ function configureSystem(settings) {
 
 function getSettings_() {
   const props = PropertiesService.getScriptProperties();
-  const fields = sheetObjects_(BOPS.SHEETS.FIELDS).map(row => ({
+  const notionConfig = notionReviewEnabled_() ? notionProductFieldConfig_() : null;
+  const fields = notionConfig ? notionConfig.fields : sheetObjects_(BOPS.SHEETS.FIELDS).map(row => ({
     id: row['내부ID'], label: row['표시이름'], type: row['입력형식'], required: isTrue_(row['필수']),
     active: isTrue_(row['사용']), order: Number(row['순서']) || 999, options: row['선택지'], help: row['도움말'], excel: isTrue_(row['엑셀포함'])
   })).sort((a,b) => a.order - b.order);
   const hasGoogleFormPipeline = !!getDb_().getSheetByName(BOPS.SHEETS.INTAKE);
   const hasNotionPipeline = !!getDb_().getSheetByName(BOPS.SHEETS.BRANDS);
   return {
-    fields: fields,
+    fields: fields, notionEnabled:!!notionConfig, fieldVersion:notionConfig&&notionConfig.version||'', orderWarning:notionConfig&&notionConfig.orderWarning||'',
     adminEmails: (props.getProperty(BOPS.PROPS.ADMIN_EMAILS) || '').split(',').map(v => v.trim()).filter(Boolean),
     connections: {
       rootFolderConfigured: !!props.getProperty(BOPS.PROPS.ROOT_FOLDER_ID),
@@ -89,6 +90,7 @@ function saveAdminEmails_(emails) {
 }
 
 function saveFieldSettings_(fields) {
+  if (notionReviewEnabled_()) throw Error('상품 탭의 Notion 속성 설정을 이용해 주세요.');
   if (!Array.isArray(fields) || !fields.length) throw new Error('상품 항목이 비어 있습니다.');
   const ids = {};
   fields.forEach(field => {

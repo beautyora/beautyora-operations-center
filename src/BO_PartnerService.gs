@@ -21,7 +21,8 @@ function getPartnerBootstrap_(token) {
       online_lowest_price: item.onlineLowestPrice || '',
       trade_type: item.tradeType || '',
       product_url: item.productUrl || '',
-      main_image_url: item.mainImageUrl || '',
+      main_image_url: item.data&&item.data.main_image_url || item.mainImageUrl || '',
+      main_image_preview_url:item.mainImageUrl || '',
       detail_page_url: item.detailPageUrl || ''
     });
      return { submissionId: 'MASTER-' + item.productId, productId: item.productId, status: BOPS.STATUS.APPROVED, updatedAt: item.approvedAt || '', reviewNote: '', data: data };
@@ -34,7 +35,7 @@ function getPartnerBootstrap_(token) {
   });
   Object.keys(latestByProduct).forEach(id => { if (!masterIds[id]) products.push(latestByProduct[id]); });
   return { ok: true, view: 'partner', notionReviewEnabled: typeof notionReviewEnabled_ === 'function' && notionReviewEnabled_(), brand: { brandCode: brandCode, brandName: brandValue_(context.brand, '브랜드명'), companyName: brandValue_(context.brand, '회사명') },
-    fields: fields, products: products, submissions: submissions, counts: countStatuses_(submissions) };
+    fields: fields, products: products, submissions: submissions, counts: countStatuses_(Object.keys(latestByProduct).map(function(id){return latestByProduct[id];})), fieldVersion: typeof notionReviewEnabled_==='function'&&notionReviewEnabled_()?notionProductFieldConfig_().version:'legacy' };
 }
 
 function validatePartnerToken_(token) {
@@ -68,7 +69,7 @@ function submitProducts(request) {
     if (errors.length) return { ok: false, validationErrors: errors };
     const batchId = uuid_('SUB-');
     const rows = request.products.map((product, index) => {
-      const productId = sanitize_(product.product_id) || uuid_('PRD-');
+      const productId = sanitize_(product.product_id) || Utilities.getUuid();
       return {
         '제출ID': batchId + '-' + String(index + 1).padStart(3, '0'), '브랜드코드': brandCode,
         '상품ID': productId, '제출버전': 1, '상태': BOPS.STATUS.SUBMITTED, '제출일': now_(), '수정일': now_(),
@@ -83,12 +84,14 @@ function submitProducts(request) {
 
 function validateProducts_(products, fields, brandCode) {
   const errors = [];
-  const masterBarcodes = new Set(safeObjects_(BOPS.SHEETS.PRODUCTS).filter(row => row['브랜드코드'] !== brandCode).map(row => row['바코드']).filter(Boolean));
+  const usesNotion=typeof notionReviewEnabled_==='function'&&notionReviewEnabled_();
+  const masterBarcodes = new Set(usesNotion?listProducts_({}).filter(function(p){return p.brandCode!==brandCode;}).map(function(p){return p.barcode;}).filter(Boolean):safeObjects_(BOPS.SHEETS.PRODUCTS).filter(row => row['브랜드코드'] !== brandCode).map(row => row['바코드']).filter(Boolean));
   const seen = {};
   products.forEach((product, index) => {
     fields.forEach(field => {
       const value = product[field.id];
-      if (field.required && (value === undefined || value === null || String(value).trim() === '')) errors.push({ row: index + 1, field: field.id, message: field.label + '을(를) 입력해 주세요.' });
+      if (field.required && (value === undefined || value === null || value === false || String(value).trim() === '')) errors.push({ row: index + 1, field: field.id, message: field.label + '을(를) 입력해 주세요.' });
+      if(value&&['select','multi_select'].indexOf(field.type)>=0){const choices=String(field.options||'').split('|'),values=field.type==='multi_select'?(Array.isArray(value)?value:String(value).split(',').map(function(v){return v.trim();})): [String(value)];if(values.some(function(v){return choices.indexOf(v)<0;}))errors.push({row:index+1,field:field.id,message:field.label+'의 최신 선택지에서 골라 주세요.'});}
       if (value && field.type === 'number' && isNaN(Number(String(value).replace(/,/g,'')))) errors.push({ row: index + 1, field: field.id, message: field.label + '은(는) 숫자로 입력해 주세요.' });
       if (value && field.type === 'url' && !/^https?:\/\//i.test(String(value))) errors.push({ row: index + 1, field: field.id, message: field.label + ' 주소를 확인해 주세요.' });
     });
