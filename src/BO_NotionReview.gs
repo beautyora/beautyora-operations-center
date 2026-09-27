@@ -282,6 +282,75 @@ function getNotionProductDetail(request) {
   return {ok:true,pageId:page.id,url:page.url,lastEditedAt:page.last_edited_time || '',properties:properties,blocks:blocks};
 }
 
+function notionBrandPage_(brandCode) {
+  const brand = findBrandByCode_(String(brandCode || ''));
+  const pageId = String(brandValue_(brand, '노션페이지ID') || '');
+  if (!/^[0-9a-f-]{32,36}$/i.test(pageId)) throw new Error('브랜드의 Notion 원본 페이지 연결을 확인해 주세요.');
+  const page = notionRequest_('get', '/pages/' + pageId);
+  if ((page.parent && (page.parent.data_source_id || page.parent.database_id)) !== notionReviewConfig_().brand)
+    throw new Error('연결된 브랜드 데이터베이스의 페이지가 아닙니다.');
+  return page;
+}
+
+function getNotionBrandDetail(request) {
+  assertAdmin_();
+  const page = notionBrandPage_(request && request.brandCode);
+  const config = notionReviewConfig_();
+  const source = notionRequest_('get', '/data_sources/' + encodeURIComponent(config.brand));
+  const reviewSchema = notionReviewSchema_(config.brand, 'brand');
+  const protectedIds = Object.keys(reviewSchema).map(function(key) { return reviewSchema[key]; });
+  const definitions = Object.keys(source.properties || {}).map(function(name) { return source.properties[name]; });
+  const properties = Object.keys(page.properties || {}).map(function(name) {
+    const item = page.properties[name];
+    const definition = definitions.find(function(property) { return property.id === item.id; });
+    return {id:item.id,name:name,type:item.type,value:notionReviewText_(item),
+      editable:!!(definition && notionProductEditableTypes_()[item.type] && protectedIds.indexOf(item.id) < 0),
+      options:definition && definition[item.type] && definition[item.type].options ?
+        definition[item.type].options.map(function(option) { return option.name; }) : []};
+  });
+  return {ok:true,pageId:page.id,url:page.url,lastEditedAt:page.last_edited_time || '',properties:properties,
+    blocks:notionReviewBlocks_(page.id, 0)};
+}
+
+function updateNotionBrand_(request) {
+  assertAdmin_();
+  request = request || {};
+  const page = notionBrandPage_(request.brandCode);
+  if (page.id !== request.pageId) throw new Error('브랜드 원본 페이지가 바뀌었습니다. 다시 열어 확인해 주세요.');
+  if (!request.lastEditedAt || page.last_edited_time !== request.lastEditedAt)
+    throw new Error('Notion 원본이 수정되었습니다. 화면을 다시 열고 변경 내용을 확인해 주세요.');
+  const changes = request.changes || [];
+  if (!Array.isArray(changes) || changes.length > 40) throw new Error('수정할 속성 목록을 확인해 주세요.');
+  if (!changes.length) return {ok:true,changed:false};
+  const config = notionReviewConfig_();
+  const source = notionRequest_('get', '/data_sources/' + encodeURIComponent(config.brand));
+  const reviewSchema = notionReviewSchema_(config.brand, 'brand');
+  const protectedIds = Object.keys(reviewSchema).map(function(key) { return reviewSchema[key]; });
+  const definitions = Object.keys(source.properties || {}).map(function(name) { return source.properties[name]; });
+  const patch = {}, expected = {}, seen = {};
+  changes.forEach(function(change) {
+    const id = String(change && change.id || '');
+    const definition = definitions.find(function(item) { return item.id === id; });
+    if (!definition || seen[id] || protectedIds.indexOf(id) >= 0 || !notionProductEditableTypes_()[definition.type])
+      throw new Error('수정할 수 없는 Notion 브랜드 속성이 포함되어 있습니다.');
+    seen[id] = true;
+    patch[id] = notionProductPatchValue_(definition, change.value, []);
+    expected[id] = change.value;
+  });
+  notionRequest_('patch', '/pages/' + page.id, {properties:patch});
+  const verified = notionRequest_('get', '/pages/' + page.id);
+  Object.keys(expected).forEach(function(id) {
+    const value = expected[id];
+    const normalized = Array.isArray(value) ? value.map(function(item) { return String(item).trim(); })
+      .filter(Boolean).filter(function(item,index,array) { return array.indexOf(item) === index; }).join(', ') :
+      typeof value === 'boolean' ? (value ? '예' : '아니오') : String(value == null ? '' : value).trim();
+    if (notionReviewText_(notionPageProperty_(verified, id)) !== normalized)
+      throw new Error('Notion 브랜드 속성 반영을 확인하지 못했습니다. 화면을 다시 열어 확인해 주세요.');
+  });
+  logAction_('Notion 브랜드 정보 수정', '브랜드', request.brandCode, Object.keys(expected).join(', '));
+  return {ok:true,changed:true,lastEditedAt:verified.last_edited_time || ''};
+}
+
 function notionProductEditableTypes_() {
   return {title:true,rich_text:true,number:true,url:true,select:true,multi_select:true,
     checkbox:true,date:true,email:true,phone_number:true};
@@ -291,7 +360,7 @@ function notionProductPatchValue_(definition, value, protectedDriveIds) {
   const type = definition.type;
   const text = String(value == null ? '' : value).trim();
   if (type === 'title') {
-    if (!text || text.length > 2000) throw new Error('상품명은 1~2000자로 입력해 주세요.');
+    if (!text || text.length > 2000) throw new Error(definition.name + ': 제목은 1~2000자로 입력해 주세요.');
     return {title:[{type:'text',text:{content:text}}]};
   }
   if (type === 'rich_text') {
@@ -397,4 +466,3 @@ function notionReviewBlocks_(parentId, depth) {
   } while (cursor && out.length < 500);
   return out;
 }
-

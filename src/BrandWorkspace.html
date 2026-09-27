@@ -112,3 +112,52 @@ crmArchive=function(){const b=CRM.detail.brand;$('#crmBody').innerHTML='<section
 document.addEventListener('click',function(e){const goEl=e.target.closest('[data-crm-go]');if(goEl&&document.getElementById('crmDrawer')){e.preventDefault();crmTab(goEl.dataset.crmGo);return}const closeEl=e.target.closest('[data-crm-close]');if(closeEl){e.preventDefault();crmClose();return}const adminEl=e.target.closest('[data-crm-products-admin]');if(adminEl){e.preventDefault();crmClose(true);go('products',true)}});
 </script>
 
+<script>
+const crmSheetProfileView_=crmProfileView;
+crmProfileView=function(){
+  crmSheetProfileView_();
+  if(!CRM.detail?.notionEnabled)return;
+  const form=document.getElementById('crmProfile');
+  if(form){
+    const section=document.createElement('section');
+    section.className='crm-section';
+    section.innerHTML='<h3>Notion 브랜드 원본</h3><p class="crm-muted">브랜드 속성은 Notion에 직접 저장합니다. 아래 운영 업무와 상담 기록은 운영센터 기록으로 관리됩니다.</p><button type="button" class="crm-btn primary" id="crmEditNotionBrand">Notion 브랜드 정보 수정</button>';
+    form.replaceWith(section);
+    section.querySelector('button').onclick=crmOpenNotionBrand_;
+  }
+  const status=document.getElementById('crmDirty');
+  if(status)status.innerHTML='<span class="crm-muted">브랜드 원본: Notion</span><span class="crm-muted">운영 업무: 뷰티오라DB</span>';
+};
+async function crmOpenNotionBrand_(){
+  const brandCode=CRM.detail?.brand.brandCode;
+  if(!brandCode)return;
+  UI.modal('<h2>Notion 브랜드 정보</h2><p>원본 속성을 불러오는 중입니다.</p>');
+  document.getElementById('modal').style.zIndex='210';
+  try{
+    const detail=await server('getNotionBrandDetail',{brandCode});
+    State.notionBrandDetail=detail;
+    const properties=(detail.properties||[]).filter(p=>p.editable||p.value).map(p=>`<div class="field-group ${p.type==='rich_text'?'full':''}"><label>${esc(p.name)}</label>${notionProductInput_(p)}</div>`).join('');
+    document.getElementById('modalBody').innerHTML=`<div class="review-modal-head"><div><span class="review-kicker">NOTION SOURCE</span><h2>브랜드 원본 조회·수정</h2></div><a class="small-button" href="${esc(detail.url)}" target="_blank" rel="noopener noreferrer">Notion에서 열기</a></div><p class="subtle">서류 링크는 자료 검수 승인 후 반영됩니다. 관계·계산 속성과 본문은 Notion에서 관리합니다.</p><div class="form-grid">${properties}</div><div class="modal-actions"><button class="secondary-button" onclick="UI.closeModal()">닫기</button><button class="primary-button" id="crmSaveNotionBrand">Notion에 변경 저장</button></div><section class="review-info-section"><h3>브랜드 본문</h3><div>${(detail.blocks||[]).map(notionBlockHtml_).join('')||'<p class="subtle">본문이 없습니다.</p>'}</div></section>`;
+    document.getElementById('crmSaveNotionBrand').onclick=()=>crmSaveNotionBrand_(brandCode);
+  }catch(e){document.getElementById('modalBody').innerHTML='<h2>조회 실패</h2><p>'+esc(e.message)+'</p>'}
+}
+async function crmSaveNotionBrand_(brandCode){
+  const detail=State.notionBrandDetail;
+  if(!detail){UI.toast('브랜드 정보를 다시 열어 주세요.',true);return}
+  const changes=(detail.properties||[]).filter(p=>p.editable).map(p=>{
+    const input=[...document.querySelectorAll('[data-notion-property]')].find(el=>el.dataset.notionProperty===p.id);
+    if(!input)return null;
+    const value=p.type==='checkbox'?input.checked:p.type==='multi_select'?input.value.split(',').map(x=>x.trim()).filter(Boolean):input.value.trim();
+    const original=p.type==='checkbox'?p.value==='예':p.type==='multi_select'?p.value.split(',').map(x=>x.trim()).filter(Boolean):p.value;
+    return JSON.stringify(value)===JSON.stringify(original)?null:{id:p.id,value};
+  }).filter(Boolean);
+  if(!changes.length){UI.toast('변경된 내용이 없습니다.');return}
+  const button=document.getElementById('crmSaveNotionBrand');button.disabled=true;
+  try{
+    await server('saveAdminAction','updateNotionBrand',{brandCode,pageId:detail.pageId,lastEditedAt:detail.lastEditedAt,changes});
+    UI.closeModal();UI.toast('Notion 브랜드 정보를 수정했습니다.');
+  }catch(e){UI.toast(e.message,true)}finally{if(button.isConnected)button.disabled=false}
+}
+</script>
+
+

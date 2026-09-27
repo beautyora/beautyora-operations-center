@@ -13,13 +13,14 @@ const schemas = {};
 const pages = {};
 const calls = [];
 const fileRows = [];
+let brandPageId = 'brand-page';
 const ctx = vm.createContext({
   console,
   PropertiesService: {getScriptProperties: () => ({getProperty:key=>props[key]||'',setProperty:(key,value)=>{props[key]=value}})},
   BOPS: {SHEETS:{FILES:'files'},STATUS:{REVISION:'보완 필요'}},
   withLock_: fn=>fn(),
   findOne_: (name,key,value)=>fileRows.find(row=>row[key]===value),
-  findBrandByCode_: ()=>({'노션페이지ID':'brand-page'}),
+  findBrandByCode_: ()=>({'노션페이지ID':brandPageId}),
   brandValue_: (row,key)=>key==='노션페이지ID'?row['노션페이지ID']:'',
   listProducts_: ()=>[],
   getSheet_: ()=>({getLastColumn:()=>11,getRange:()=>({getDisplayValues:()=>[['파일ID','브랜드코드','상품ID','분류','파일명','Drive파일ID','DriveURL','업로드일','상태','검수메모','검수일']]})}),
@@ -40,7 +41,10 @@ const ctx = vm.createContext({
     }
     if(method==='patch'&&endpoint.startsWith('/pages/')){
       const id=endpoint.split('/').pop();pages[id] ||= {id,properties:{}};
-      Object.entries(body.properties).forEach(([key,value])=>{pages[id].properties[key]={id:key,type:Object.keys(value)[0],...value}});
+      Object.entries(body.properties).forEach(([key,value])=>{
+        Object.keys(pages[id].properties).forEach(name=>{if(pages[id].properties[name].id===key)delete pages[id].properties[name]});
+        pages[id].properties[key]={id:key,type:Object.keys(value)[0],...value};
+      });
       pages[id].last_edited_time='rev-2';
       return pages[id];
     }
@@ -103,3 +107,21 @@ assert.throws(()=>ctx.updateNotionProduct_({pageId:liveId,lastEditedAt:'rev-2',c
 assert.throws(()=>ctx.updateNotionProduct_({pageId:liveId,lastEditedAt:'rev-2',changes:[{id:'thumbnail',value:'https://example.com/image.jpg'}]}),/Google Drive/);
 console.log('PASS internal product edits write Notion, verify results, and reject stale or protected changes');
 
+brandPageId='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+schemas['brand-source']['브랜드명']={id:'brandName',name:'브랜드명',type:'title'};
+pages[brandPageId]={id:brandPageId,url:'https://notion.so/'+brandPageId,
+  parent:{data_source_id:'brand-source'},last_edited_time:'rev-1',properties:{
+    '브랜드명':{id:'brandName',type:'title',title:[{plain_text:'기존 브랜드'}]},
+    '사업자등록증 Drive URL':{id:'business',type:'url',url:null}
+  }};
+const brandDetail=ctx.getNotionBrandDetail({brandCode:'BRAND-1'});
+assert.equal(brandDetail.properties.find(p=>p.id==='brandName').editable,true);
+assert.equal(brandDetail.properties.find(p=>p.id==='business').editable,false);
+ctx.updateNotionBrand_({brandCode:'BRAND-1',pageId:brandPageId,lastEditedAt:'rev-1',changes:[
+  {id:'brandName',value:'수정된 브랜드'}
+]});
+assert.equal(pages[brandPageId].properties.brandName.title[0].text.content,'수정된 브랜드');
+assert.throws(()=>ctx.updateNotionBrand_({brandCode:'BRAND-1',pageId:brandPageId,lastEditedAt:'rev-2',changes:[
+  {id:'business',value:'https://drive.google.com/file/d/cert/view'}
+]}),/수정할 수 없는/);
+console.log('PASS internal brand edits write Notion and protected document links stay review-only');
