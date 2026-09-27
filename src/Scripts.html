@@ -75,11 +75,12 @@ function setHeader(route){const map={dashboard:['홈','오늘 처리할 업무�
 function renderDashboard(data){
  setHeader('dashboard');const c=data.counts||{};const todoTotal=(c.newBrands||0)+(c.submissions||0)+(c.revisions||0)+(c.missingFiles||0)+(c.errors||0);$('#pageTitle').textContent=todoTotal?'오늘 확인할 업무,\n'+todoTotal+'건입니다.':'오늘 확인할 업무가\n없습니다.';$('#pageSubtitle').textContent='카드를 누르면 해당 업무로 바로 이동합니다.';$('#alertBadge').textContent=c.errors||0;$('#alertBadge').classList.toggle('hidden',!c.errors);
  $('#content').innerHTML=`<div class="hero-panel"><h2>오늘 확인할 업무가 ${(c.newBrands||0)+(c.submissions||0)+(c.revisions||0)+(c.missingFiles||0)+(c.errors||0)}건 있습니다.</h2><p>카드를 누르면 해당 업무로 바로 이동합니다.</p></div>
- <div class="metric-grid">${metric('신규 브랜드',c.newBrands,'brands')}${metric('상품 검수',c.submissions,'products')}${metric('보완 재제출',c.revisions,'products')}${metric('파일 누락',c.missingFiles,'files')}${metric('시스템 오류',c.errors,'alerts',true)}</div>
+ <div class="metric-grid">${metric('신규 브랜드',c.newBrands,'intake')}${metric('상품 검수',c.submissions,'products')}${metric('보완 재제출',c.revisions,'products',false,'review')}${metric('파일 누락',c.missingFiles,'files')}${metric('시스템 오류',c.errors,'alerts',true)}</div>
  <div class="two-column"><section class="panel"><div class="panel-head"><h2>최근 활동</h2></div><div class="activity-list">${(data.recentActivity||[]).length?(data.recentActivity||[]).map(a=>`<div class="activity-item"><strong>${esc(a.title)}</strong><span>${esc(a.detail)}</span><time>${esc(a.time)}</time></div>`).join(''):UI.empty('최근 활동이 없습니다.','업무가 처리되면 여기에 표시됩니다.')}</div></section>
  <section class="panel"><div class="panel-head"><h2>확인할 알림</h2><button class="small-button" onclick="go('alerts')">전체 보기</button></div><div class="alert-list">${(data.alerts||[]).length?(data.alerts||[]).map(a=>`<div class="alert-item">${UI.status(a.level)}<strong style="display:block;margin:8px 0 3px">${esc(a.title)}</strong><span class="subtle">${esc(a.detail)}</span></div>`).join(''):UI.empty('모두 정상입니다.','현재 확인할 문제가 없습니다.')}</div></section></div>`;
 }
-function metric(label,value,route,error=false){return `<button class="metric-card ${error?'error':''}" onclick="go('${route}')"><small>${esc(label)}</small><strong>${Number(value)||0}</strong></button>`}
+function metric(label,value,route,error=false,productView=''){return `<button class="metric-card ${error?'error':''}" onclick="${productView?`openProductView('${productView}')`:`go('${route}')`}"><small>${esc(label)}</small><strong>${Number(value)||0}</strong></button>`}
+function openProductView(view){State.productInitialView=view;go('products')}
 
 function renderBrands(rows){
  $('#content').innerHTML=`<section class="panel"><div class="panel-head"><h2>브랜드 목록</h2><span class="subtle">${rows.length}개 브랜드</span></div><div class="toolbar"><input id="brandSearch" class="search-input" placeholder="브랜드명, 회사명, 담당자 검색"></div><div id="brandTable"></div></section>`;
@@ -105,7 +106,7 @@ function renderProducts(data){
   }
   renderSubmissionList(submissions);
  };
- $$('[data-product-view]').forEach(btn=>btn.addEventListener('click',()=>show(btn.dataset.productView)));show('master');
+ $('[data-product-view]').forEach(btn=>btn.addEventListener('click',()=>show(btn.dataset.productView)));const initial=State.productInitialView==='review'?'review':'master';State.productInitialView='';show(initial);
 }
 function productThumbUrl_(url,size){var text=String(url||'');if(!text)return '';var id=reviewDriveId_(text);return id?'https:'+'/'+'/'+'drive.google.com/thumbnail?id='+encodeURIComponent(id)+'&sz=w'+(size||160):text;}
 function productPrefs_(){var base={mode:'table',cols:['brand','trade','retail','purchase','consignment','status']};try{var saved=JSON.parse(localStorage.getItem('boProductPrefs')||'{}');Object.keys(saved).forEach(function(k){base[k]=saved[k]})}catch(e){}return base;}
