@@ -157,7 +157,7 @@ function reviewMedia_(data){
  const add=(url,label,kind,name)=>{url=String(url||'');if(!reviewHttp_(url)||seen.has(url))return;seen.add(url);items.push({url,label,kind,name:name||label});};
  add(data.main_image_url,'대표 이미지','image');
  (Array.isArray(data.additional_image_urls)?data.additional_image_urls:[data.additional_image_urls]).filter(Boolean).forEach((url,i)=>add(url,'추가 이미지 '+(i+1),'image'));
- (Array.isArray(data.detail_page_urls)?data.detail_page_urls:[data.detail_page_url]).filter(Boolean).forEach((url,i)=>add(url,'상세페이지 '+(i+1),'detail'));
+ [data.detail_page_url,...(Array.isArray(data.detail_page_urls)?data.detail_page_urls:[])].filter(Boolean).forEach((url,i)=>add(url,'상세페이지 '+(i+1),'detail'));
  (Array.isArray(data.attachments)?data.attachments:[]).forEach((file,i)=>{const url=typeof file==='string'?file:(file.url||file.driveUrl||file.href||'');const name=typeof file==='string'?'첨부 파일':(file.name||file.fileName||'첨부 파일');const category=typeof file==='object'?(file.category||file.type||''):'';const detail=String(category+' '+name).includes('상세페이지');const image=detail||String(category+' '+name).includes('이미지')||/\.(jpg|jpeg|png|webp|gif)$/i.test(name);add(url,detail?'상세페이지 '+(items.filter(x=>x.kind==='detail').length+1):image?'추가 이미지 '+(items.filter(x=>x.kind==='image').length):'첨부 파일 '+(i+1),detail?'detail':image?'image':'file',name);});
  return items;
 }

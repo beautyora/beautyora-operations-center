@@ -20,7 +20,7 @@ function uploadPartnerAsset(request) {
   if (!bytes.length || bytes.length > BOPS.MAX_UPLOAD_BYTES) throw new Error('빈 파일이거나 8MB를 초과했습니다.');
 
   // Drive 전송은 잠금 밖에서 처리해 서로 다른 파일을 동시에 저장할 수 있게 한다.
-  const folder = getBrandFolder_(context.brand);
+  const folder = withLock_(function () { return getProductAssetFolder_(context.brand, request.productId); });
   const fileName = sanitizeFileName_(request.productId + '_' + category + '_' + request.uploadId + '_' + request.fileName);
   const matches = folder.getFilesByName(fileName);
   const file = matches.hasNext() ? matches.next() : folder.createFile(Utilities.newBlob(bytes, request.mimeType, fileName));
@@ -120,7 +120,7 @@ function submitPartnerDraft(request) {
 
 function runBeautyoraPartnerUXChecks(){
  assertAdmin_();
- const originals={withLock_,validatePartnerToken_,sheetObjects_,safeObjects_,findOne_,appendObject_,appendObjects_,logAction_,getSettings_,getBrandFolder_};
+ const originals={withLock_,validatePartnerToken_,sheetObjects_,safeObjects_,findOne_,appendObject_,appendObjects_,logAction_,getSettings_,getBrandFolder_,getProductAssetFolder_};
  const db={},checks=[];let created=0;
  const ensure=n=>db[n]||(db[n]=[]);
  const assert=(v,m)=>{if(!v)throw new Error('FAIL: '+m);checks.push(m);};
@@ -135,6 +135,7 @@ function runBeautyoraPartnerUXChecks(){
  logAction_=()=>{};
  getSettings_=()=>({fields:[{id:'product_name',label:'상품명',required:true,type:'text',active:true},{id:'retail_price',label:'소비자가',required:true,type:'number',active:true}]});
  getBrandFolder_=()=>({getFilesByName:()=>({hasNext:()=>false}),createFile:blob=>{created++;return {getName:()=>blob.getName(),getId:()=> 'test-drive-'+created,getUrl:()=> 'https://drive.google.com/file/d/test-'+created+'/view'};}});
+ getProductAssetFolder_=brand=>getBrandFolder_(brand);
  const a={token:'test-token',uploadId:'upload-12345678',productId:'PRD-12345678',category:'대표 이미지',fileName:'test.png',mimeType:'image/png',base64:'iVBORw0KGgo='};
  const asset=uploadPartnerAsset(a);
  assert(asset.ok&&created===1,'파일 등록 성공');uploadPartnerAsset(a);assert(created===1&&ensure(BOPS.SHEETS.FILES).length===1,'동일 파일 재시도 중복 방지');
@@ -154,5 +155,5 @@ function runBeautyoraPartnerUXChecks(){
  const partial={token:'test-token',requestId:'request-partial0',products:['PRD-PARTIAL1','PRD-PARTIAL2'].map(id=>({id,data:{product_name:id,retail_price:1},assets:[]}))};
  fail(()=>submitPartnerDraft(partial),'부분 실패 시뮬레이션');submitPartnerDraft(partial);assert(ensure(BOPS.SHEETS.SUBMISSIONS).filter(r=>r['상품ID'].startsWith('PRD-PARTIAL')).length===2,'부분 실패 재시도 누락·중복 없음');
  console.log(JSON.stringify({ok:true,passed:checks.length,checks:checks,productionWrites:0}));return {ok:true,passed:checks.length};
- }finally{withLock_=originals.withLock_;validatePartnerToken_=originals.validatePartnerToken_;sheetObjects_=originals.sheetObjects_;safeObjects_=originals.safeObjects_;findOne_=originals.findOne_;appendObject_=originals.appendObject_;appendObjects_=originals.appendObjects_;logAction_=originals.logAction_;getSettings_=originals.getSettings_;getBrandFolder_=originals.getBrandFolder_;}
+ }finally{withLock_=originals.withLock_;validatePartnerToken_=originals.validatePartnerToken_;sheetObjects_=originals.sheetObjects_;safeObjects_=originals.safeObjects_;findOne_=originals.findOne_;appendObject_=originals.appendObject_;appendObjects_=originals.appendObjects_;logAction_=originals.logAction_;getSettings_=originals.getSettings_;getBrandFolder_=originals.getBrandFolder_;getProductAssetFolder_=originals.getProductAssetFolder_;}
 }

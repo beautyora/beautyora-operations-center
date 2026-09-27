@@ -103,7 +103,9 @@ function uploadPartnerFile(request) {
   if (bytes.length > BOPS.MAX_UPLOAD_BYTES) throw new Error('파일은 8MB 이하만 업로드할 수 있습니다.');
   const allowed = ['image/jpeg','image/png','image/webp','application/pdf','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
   if (!allowed.includes(request.mimeType)) throw new Error('지원하지 않는 파일 형식입니다.');
-  const folder = getBrandFolder_(context.brand);
+  const folder = withLock_(function () {
+    return request.productId ? getProductAssetFolder_(context.brand, sanitize_(request.productId)) : getBrandDocumentFolder_(context.brand);
+  });
   const brandCode = brandValue_(context.brand, '브랜드코드');
   const blob = Utilities.newBlob(bytes, request.mimeType, sanitizeFileName_(request.fileName));
   const file = folder.createFile(blob);

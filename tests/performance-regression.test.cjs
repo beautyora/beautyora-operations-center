@@ -89,7 +89,7 @@ check('movement reads the catalog once and rejects insufficient stock and duplic
 });
 
 check('partner workflow preserves validation and retries after partial failure', () => {
-  const c=load(['BO_Config.gs','BO_Main.gs','BO_DataStore.gs','BO_AdminService.gs','BO_Setup.gs','BO_PartnerService.gs','BO_PartnerExperience.gs'], {
+  const c=load(['BO_Config.gs','BO_Main.gs','BO_DataStore.gs','BO_AdminService.gs','BO_Setup.gs','BO_PartnerService.gs','BO_PartnerExperience.gs','BO_AssetFolders.gs'], {
     Utilities:{base64Decode:s=>Array.from(Buffer.from(s,'base64')),newBlob:(bytes,type,name)=>({getName:()=>name})}
   });
   c.assertAdmin_=()=>{};c.now_=()=> '2026-09-27';
@@ -97,7 +97,7 @@ check('partner workflow preserves validation and retries after partial failure',
 });
 
 check('300 partner products batch once; retry writes zero rows; conflicts write nothing', () => {
-  const c=load(['BO_Config.gs','BO_Main.gs','BO_PartnerExperience.gs']);
+  const c=load(['BO_Config.gs','BO_Main.gs','BO_PartnerExperience.gs','BO_AssetFolders.gs']);
   const rows=[],calls=[];
   Object.assign(c,{withLock_:fn=>fn(),validatePartnerToken_:()=>({brand:{}}),brandValue_:()=> 'B1',getSettings_:()=>({fields:[]}),
     sheetObjects_:n=>n===vm.runInContext('BOPS.SHEETS.SUBMISSIONS',c)?rows:[],listProducts_:()=>[],validateProducts_:()=>[],now_:()=>'',logAction_:()=>{},
@@ -156,6 +156,30 @@ check('import retry recovers rows committed before completion-log failure', () =
   assert.throws(()=>c.opsImportNext(),/log failure/);
   assert.equal(sheets.get('제출 상품자료').rows.length,3);
   assert.equal(c.opsImportNext().done,true);assert.equal(sheets.get('제출 상품자료').rows.length,3);
+});
+
+check('asset folders isolate brands and products, retry safely and preserve failed files', () => {
+  const iterator = values => {let i=0;return {hasNext:()=>i<values.length,next:()=>values[i++]};};
+  let created=0,moved=0;
+  function folder(id){const children=new Map();return {getId:()=>id,getUrl:()=>`https://drive.google.com/drive/folders/${id}`,getFoldersByName:name=>iterator(children.has(name)?[children.get(name)]:[]),createFolder:name=>{created++;const child=folder(id+'-'+name);children.set(name,child);return child;}};}
+  const roots={A:folder('A'),B:folder('B')},parents={f1:roots.A,f2:roots.B};
+  const records=[{'브랜드코드':'A','상품ID':'PRD-ONE','Drive파일ID':'f1'},{'브랜드코드':'B','상품ID':'PRD-ONE','Drive파일ID':'f2'},{'브랜드코드':'A','상품ID':'PRD-ONE','Drive파일ID':'missing','파일명':'missing.jpg'}];
+  const c=load(['BO_AssetFolders.gs'],{assertAdmin_:()=>{},findBrandByCode_:code=>roots[code]?{code}:null,brandValue_:b=>b.code,getBrandFolder_:b=>roots[b.code],withLock_:fn=>fn(),listProducts_:()=>[{productId:'PRD-ONE'}],safeObjects_:()=>records,BOPS:{SHEETS:{FILES:'files'}},DriveApp:{getFileById:id=>{if(!parents[id])throw Error('no access');return {getParents:()=>iterator([parents[id]]),moveTo:to=>{moved++;parents[id]=to;}}}}});
+  const one=c.getAdminAssetFolder({brandCode:'A',kind:'product',productId:'PRD-ONE'});
+  assert.equal(one.moved,1);assert.equal(one.failed.length,1);assert.equal(parents.f2,roots.B);
+  const again=c.getAdminAssetFolder({brandCode:'A',kind:'product',productId:'PRD-ONE'});
+  assert.equal(again.url,one.url);assert.equal(moved,1);assert.equal(created,2);
+  assert.notEqual(c.getAdminAssetFolder({brandCode:'A',kind:'documents'}).url,one.url);
+  assert.throws(()=>c.getAdminAssetFolder({brandCode:'A',kind:'product',productId:'OTHER'}));
+  assert.throws(()=>c.getAdminAssetFolder({brandCode:'missing',kind:'documents'}));
+});
+
+check('review includes a standalone detail link alongside uploaded pages', () => {
+  const script=source('Scripts.html');
+  const fn=script.slice(script.indexOf('function reviewMedia_(data)'),script.indexOf('function reviewMediaCard_'));
+  const c=vm.createContext({reviewHttp_:v=>/^https?:\/\//.test(v)});vm.runInContext(fn,c);
+  assert.equal(c.reviewMedia_({detail_page_url:'https://example.com/detail',detail_page_urls:[]}).length,1);
+  assert.equal(c.reviewMedia_({detail_page_url:'https://example.com/detail',detail_page_urls:['https://example.com/detail','https://example.com/page']}).length,2);
 });
 
 async function browserChecks() {

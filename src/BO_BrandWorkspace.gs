@@ -82,7 +82,7 @@ function saveSimpleMovement(p){assertAdmin_();return withLock_(function(){if(!/^
 function getBrandOverview(code){return crmReadScope_(function(){
  code=String(code||'');const row=crmAllBrands_().find(r=>r['브랜드ID']===code);if(!row)throw Error('브랜드를 찾을 수 없습니다.');
  const archive=crmRows_(BCRM.archive).filter(r=>r['브랜드ID']===code);
- return {brand:crmEnhance_(crmBrand_(row),row),activities:crmActivity_(code,archive,crmRows_(BCRM.notes)),issues:crmRows_('자료 확인사항').filter(r=>r['브랜드코드']===code&&r['상태']!=='완료'),products:[],files:[],archive:[],conditions:[],stock:[],movements:[],terms:[],submitted:[],link:null,stages:CRM_STAGES,samples:CRM_SAMPLES};
+ return {brand:crmEnhance_(crmBrand_(row),row),activities:crmActivity_(code,archive,crmRows_(BCRM.notes)),issues:crmRows_('자료 확인사항').filter(r=>r['브랜드코드']===code&&r['상태']!=='완료'),products:[],files:[],archive:[],conditions:[],stock:[],movements:[],terms:[],submitted:[],link:listBrands_({query:code}).find(x=>x.brandCode===code)?.link||null,stages:CRM_STAGES,samples:CRM_SAMPLES};
 });}
 function crmProductCards_(products){return products.map(p=>({id:p.productId,name:crmText_(p.productName),option:p.optionName,barcode:p.barcode,price:p.retailPrice,status:p.reviewStatus||p.status||'자료 수집',category:p.category,trade:p.tradeType,image:p.mainImageUrl||'',url:p.productUrl||p.detailPageUrl||'',purchase:p.purchasePrice||''}));}
 function getBrandTab(code,tab){return crmReadScope_(function(){
@@ -95,7 +95,7 @@ function getBrandTab(code,tab){return crmReadScope_(function(){
  }
  if(tab==='terms'){const p=listProducts_({brandCode:code}).filter(p=>p.status!=='중지'),names={};p.forEach(x=>names[x.productId]=x.productName);return {products:crmProductCards_(p),terms:crmRows_('거래조건 관리').filter(r=>r['브랜드ID']===code).reverse(),conditions:crmRows_('가격·공급조건').filter(r=>Object.prototype.hasOwnProperty.call(names,r['상품ID'])).map(r=>Object.assign({},r,{'상품명':names[r['상품ID']]}))};}
  if(tab==='stock'||tab==='campaign'){const ids={};crmAllProducts_().filter(p=>p.brandCode===code).forEach(p=>ids[p.productId]=true);const d={stock:opsStock_(code),movements:crmRows_('재고거래').filter(r=>ids[r['상품ID']])};if(tab==='campaign'){d.products=crmProductCards_(crmProducts_().filter(p=>p.brandCode===code));d.link=listBrands_({query:code}).find(x=>x.brandCode===code)?.link||null;}return d;}
- if(tab==='archive')return {files:crmRows_(BCRM.attachments).filter(r=>r['브랜드ID']===code).concat(opsFiles_(code)),archive:crmRows_(BCRM.archive).filter(r=>r['브랜드ID']===code).map(r=>({id:r['자료ID'],type:r['구분'],title:r['제목'],url:r['원본URL'],body:r['본문'],properties:crmJson_(r['속성JSON']),importedAt:r['이관일']}))};
+ if(tab==='archive')return {files:[],archive:[]};
  if(tab==='profile')return {link:listBrands_({query:code}).find(x=>x.brandCode===code)?.link||null};
  throw Error('지원하지 않는 상세 탭입니다.');
 });}
