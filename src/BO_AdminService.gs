@@ -514,5 +514,3 @@ function testProductUpdateNoChange() {
   console.log('상품 수정 무변경 점검: ' + JSON.stringify({ok: result.ok, changed: result.changed}));
   return result;
 }
-
-
