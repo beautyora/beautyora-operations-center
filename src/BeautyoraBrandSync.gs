@@ -9,7 +9,6 @@
  */
 
 const BO = Object.freeze({
-  TARGET_SPREADSHEET_ID: '1bC_HNAQcroDgveEsISik7hui9RvUTgQb6bMrTUiILjY',
   CONFIG_SHEET: '_SYNC_CONFIG',
   LOG_SHEET: '_SYNC_LOG',
   ERROR_SHEET: '_SYNC_ERRORS',
@@ -864,7 +863,8 @@ function splitOptions_(value) {
 }
 
 function getConfig_() {
-  const sheet = SpreadsheetApp.openById(BO.TARGET_SPREADSHEET_ID).getSheetByName(BO.CONFIG_SHEET);
+  const db = getDb_();
+  const sheet = db.getSheetByName(BO.CONFIG_SHEET);
   if (!sheet) throw new Error(BO.CONFIG_SHEET + ' 시트를 찾지 못했습니다.');
   const rows = sheet.getDataRange().getDisplayValues();
   const cfg = {};
@@ -872,11 +872,17 @@ function getConfig_() {
     const key = clean_(r[0]);
     if (key) cfg[key] = clean_(r[1]);
   });
+  if (!cfg.TARGET_SPREADSHEET_ID) {
+    throw new Error('_SYNC_CONFIG의 TARGET_SPREADSHEET_ID가 설정되지 않았습니다.');
+  }
+  if (cfg.TARGET_SPREADSHEET_ID !== db.getId()) {
+    throw new Error('_SYNC_CONFIG의 TARGET_SPREADSHEET_ID가 BO_SPREADSHEET_ID와 다릅니다. 환경 설정을 확인해 주세요.');
+  }
   return cfg;
 }
 
 function setConfigValue_(key, value) {
-  const sheet = SpreadsheetApp.openById(BO.TARGET_SPREADSHEET_ID).getSheetByName(BO.CONFIG_SHEET);
+  const sheet = getDb_().getSheetByName(BO.CONFIG_SHEET);
   const rows = sheet.getRange(1, 1, Math.max(sheet.getLastRow(), 1), 2).getDisplayValues();
   for (let i = 1; i < rows.length; i++) {
     if (clean_(rows[i][0]) === key) {
@@ -897,7 +903,7 @@ function writeError_(action, rowNumber, brand, err) {
 
 function appendSystemRow_(sheetName, values) {
   try {
-    const sheet = SpreadsheetApp.openById(BO.TARGET_SPREADSHEET_ID).getSheetByName(sheetName);
+    const sheet = getDb_().getSheetByName(sheetName);
     if (!sheet) return;
     // 로그 시트의 템플릿/검증 구조가 잘못되어 있어도 핵심 동기화는 중단하지 않는다.
     const row = Math.max(2, sheet.getLastRow() + 1);
@@ -1027,3 +1033,5 @@ function getNotionDataSourcePropertyNames_(dataSourceId) {
 }
 
     
+
+
