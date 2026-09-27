@@ -14,6 +14,8 @@ function ui(server, storage={setItem(){},getItem:()=>null}) {
 }
 const plain = x => JSON.parse(JSON.stringify(x));
 async function main(){
+  // HtmlService의 script 삽입 과정은 템플릿 문자열 안의 원시 URL을 잘라낼 수 있다.
+  assert.doesNotMatch(source('PartnerExperience.html'),/https:\/\//);
   let sent;
   const c=ui(async(name,r)=>{if(name==='submitPartnerDraft'){sent=plain(r);return {ok:true,count:r.products.length};}return {ok:true,...c.State.bootstrap};});
   const {P,makeProduct,productIssues}=c.test;

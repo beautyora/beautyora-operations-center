@@ -6,7 +6,7 @@ const P={draft:null,step:0,active:0,busy:false,files:new Map(),previews:new Map(
 try{P.layout=localStorage.getItem('beautyora-catalog-layout')==='list'?'list':'cards';}catch(e){P.storage=false;}
 const uid=()=>crypto.randomUUID();
 const safeUrl=v=>/^https?:\/\/[^\s]+$/i.test(String(v||''))?String(v):'';
-const imageUrl=v=>{const url=String(v||'').startsWith('blob:')?String(v):safeUrl(v);if(!url)return '';let id='';try{const u=new URL(url);if(/(^|\.)drive\.google\.com$/.test(u.hostname)){id=u.searchParams.get('id')||u.pathname.match(/\/d\/([^/]+)/)?.[1]||'';}}catch(e){}return id?`https://drive.google.com/thumbnail?id=${encodeURIComponent(id)}&sz=w320`:url;};
+const imageUrl=v=>{const url=String(v||'').startsWith('blob:')?String(v):safeUrl(v);if(!url)return '';let id='';try{const u=new URL(url);if(/(^|\.)drive\.google\.com$/.test(u.hostname)){id=u.searchParams.get('id')||u.pathname.match(/\/d\/([^/]+)/)?.[1]||'';}}catch(e){}return id?'https:'+'/'+'/'+'drive.google.com/thumbnail?id='+encodeURIComponent(id)+'&sz=w320':url;};
 const imageHtml=(url,alt='')=>url?`<img src="${esc(url)}" alt="${esc(alt)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.hidden=true;this.parentElement.classList.add('ux-image-unavailable')">`:'이미지';
 const key=()=> 'beautyora-draft-v2:'+State.token;
 const fresh=()=>({version:2,requestId:uid(),products:[],contactName:'',contactPhone:''});
