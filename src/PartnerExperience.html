@@ -2,7 +2,8 @@
 <script>(function partnerExperience(){
 'use strict';
 const MAX=8*1024*1024, CATEGORIES=['대표 이미지','추가 이미지','상세페이지','기타'];
-const P={draft:null,step:0,active:0,busy:false,files:new Map(),previews:new Map(),errors:[],saved:'',notice:'',storage:true,importing:false,filter:'all',query:'',productQuery:'',productStatus:'all',screen:'catalog',editorFrom:'catalog',selected:new Set(),validate:false,documents:null,documentNotice:'',documentPending:null,layout:localStorage.getItem('beautyora-catalog-layout')==='list'?'list':'cards'};
+const P={draft:null,step:0,active:0,busy:false,files:new Map(),previews:new Map(),errors:[],saved:'',notice:'',storage:true,importing:false,filter:'all',query:'',productQuery:'',productStatus:'all',screen:'catalog',editorFrom:'catalog',selected:new Set(),validate:false,documents:null,documentNotice:'',documentPending:null,layout:'cards'};
+try{P.layout=localStorage.getItem('beautyora-catalog-layout')==='list'?'list':'cards';}catch(e){P.storage=false;}
 const uid=()=>crypto.randomUUID();
 const safeUrl=v=>/^https?:\/\/[^\s]+$/i.test(String(v||''))?String(v):'';
 const imageUrl=v=>{const url=String(v||'').startsWith('blob:')?String(v):safeUrl(v);if(!url)return '';let id='';try{const u=new URL(url);if(/(^|\.)drive\.google\.com$/.test(u.hostname)){id=u.searchParams.get('id')||u.pathname.match(/\/d\/([^/]+)/)?.[1]||'';}}catch(e){}return id?`https://drive.google.com/thumbnail?id=${encodeURIComponent(id)}&sz=w320`:url;};
@@ -108,7 +109,7 @@ case 'documents':P.screen='documents';paint();await loadDocuments();return;
  case 'submissions':P.screen='submissions';P.importing=false;paint();return;
  case 'manageProduct':{const product=(State.bootstrap.products||[]).find(p=>p.productId===b.dataset.productId);if(!product)return;const draft=P.draft.products.findIndex(p=>p.id===product.productId);if(draft>=0){P.editorFrom='catalog';P.active=draft;P.step=0;P.screen='editor';paint();return;}const submitted=latest().find(s=>s.productId===product.productId);if(['보완 필요','승인 완료'].includes(product.status)){startRevision(submitted||product);paint();return;}viewSubmission(submitted||product);return;}
 case 'filter':P.filter=b.dataset.filter;paint();return;
- case 'layout':P.layout=b.dataset.layout==='list'?'list':'cards';localStorage.setItem('beautyora-catalog-layout',P.layout);paint();return;
+ case 'layout':P.layout=b.dataset.layout==='list'?'list':'cards';try{localStorage.setItem('beautyora-catalog-layout',P.layout);}catch(e){P.storage=false;}paint();return;
 case 'selectReady':P.selected=new Set(P.draft.products.filter(p=>!productIssues(p).length&&p.assets.every(a=>a.status==='done')).map(p=>p.id));paint();return;
 case 'reviewSelected':if(!selectedProducts().length)return;P.editorFrom=P.screen==='submissions'?'submissions':'catalog';P.screen='editor';P.active=P.draft.products.indexOf(selectedProducts()[0]);P.step=2;paint();window.scrollTo(0,0);return;
 case 'add':if(P.draft.products.length>=300)return UI.toast('한 번에 300개까지 등록할 수 있습니다.',true);if(P.screen!=='editor')P.editorFrom=P.screen==='submissions'?'submissions':'catalog';P.draft.products.push(makeProduct());P.active=P.draft.products.length-1;P.step=0;P.screen='editor';P.validate=false;P.importing=false;break;

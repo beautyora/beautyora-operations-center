@@ -3,10 +3,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const source = name => fs.readFileSync(path.join(__dirname, '..', 'src', name), 'utf8');
-function ui(server) {
+function ui(server, storage={setItem(){},getItem:()=>null}) {
   const elements = new Map();
   const element = id => { if (!elements.has(id)) elements.set(id, {innerHTML:'',textContent:'',querySelectorAll:()=>[],classList:{toggle(){}},setAttribute(){},remove(){}}); return elements.get(id); };
-  const context = vm.createContext({console,crypto:{randomUUID:require('node:crypto').randomUUID},Map,Set,URL:{revokeObjectURL(){},createObjectURL:()=> 'blob:test'},window:{addEventListener(){},scrollTo(){}},document:{getElementById:element},localStorage:{setItem(){},getItem:()=>null},State:{token:'test-token',bootstrap:{brand:{brandName:'Test'},fields:[{id:'product_name',label:'상품명',required:true,type:'text',active:true},{id:'retail_price',label:'소비자가',required:true,type:'number',active:true}],submissions:[]}},$:element,$$:()=>[],esc:v=>String(v??''),UI:{toast(){},status:s=>s},renderPartner:()=>{},server,fileBase64:async()=> 'aGVsbG8='});
+  const context = vm.createContext({console,crypto:{randomUUID:require('node:crypto').randomUUID},Map,Set,URL:{revokeObjectURL(){},createObjectURL:()=> 'blob:test'},window:{addEventListener(){},scrollTo(){}},document:{getElementById:element},localStorage:storage,State:{token:'test-token',bootstrap:{brand:{brandName:'Test'},fields:[{id:'product_name',label:'상품명',required:true,type:'text',active:true},{id:'retail_price',label:'소비자가',required:true,type:'number',active:true}],submissions:[]}},$:element,$$:()=>[],esc:v=>String(v??''),UI:{toast(){},status:s=>s},renderPartner:()=>{},server,fileBase64:async()=> 'aGVsbG8='});
   const script = source('PartnerExperience.html').match(/<script>([\s\S]*?)<\/script>/)[1];
   vm.runInContext(script.replace('})();','globalThis.test={P,makeProduct,productIssues,submit,onAction,addFiles,uploadAll,catalogCards,catalogPanel,submissionsPanel,productList,editorShell};})();'),context);
   context.test.P.draft={requestId:'request-original',products:[]};
@@ -37,6 +37,11 @@ async function main(){
   P.editorFrom='submissions';assert.match(c.test.editorShell(),/← 제출 현황/);
   P.editorFrom='catalog';assert.match(c.test.editorShell(),/← 상품 목록/);
   console.log('PASS product search and submission status are separate');
+  const blocked=ui(async()=>({ok:true}),{getItem(){throw Error('Storage denied');},setItem(){throw Error('Storage denied');}});
+  assert.equal(blocked.test.P.layout,'cards');
+  await blocked.test.onAction({target:{closest:()=>({dataset:{action:'layout',layout:'list'}})}});
+  assert.equal(blocked.test.P.layout,'list');
+  console.log('PASS partner screen loads when iframe storage is blocked');
   const status={SUBMITTED:'신규 제출',REVIEWING:'검수 중',REVISION:'보완 필요',APPROVED:'승인 완료'};
   const submissionRows=[
     {'브랜드코드':'BRAND-A','제출ID':'SUB-A','상품ID':'PRD-A','상태':'승인 완료','상품데이터JSON':'{"product_name":"제출 상품"}'},
