@@ -105,5 +105,3 @@ function resolveAlert_(alertId) {
   updateObjectRow_(BOPS.SHEETS.ALERTS, row._row, { '상태': '해결', '해결일': now_() });
   return { ok: true };
 }
-
-
