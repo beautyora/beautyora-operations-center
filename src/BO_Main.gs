@@ -43,7 +43,12 @@ function getAdminSection(section, params) {
     case 'dashboard': return getAdminDashboard_();
     case 'intake': return listBrandIntake_(params || {});
     case 'brands': return listBrands_(params || {});
-    case 'products': return { products: listProducts_(params || {}) };
+    case 'products': {
+      const notionEnabled = notionReviewEnabled_();
+      return { products: notionEnabled ? [] : listProducts_(params || {}), notionEnabled: notionEnabled };
+    }
+    case 'legacyProducts': return { products: listProducts_(params || {}) };
+    case 'notionProducts': return { products: listNotionProducts_() };
     case 'productSubmissions': return { submissions: listSubmissions_(params || {}), fields: (getSettings_().fields || []) };
     case 'files': return listFiles_(params || {});
     case 'alerts': return listAlerts_(params || {});
@@ -60,7 +65,10 @@ function saveAdminAction(action, payload) {
     case 'issuePartnerLink': return issuePartnerLink_(payload.brandCode, payload.expiryDate);
     case 'disablePartnerLink': return setPartnerLinkStatus_(payload.token, '중지');
     case 'reviewSubmission': return reviewSubmission_(payload);
-    case 'updateProduct': return updateProduct_(payload);
+    case 'reviewBrandDocument': return reviewBrandDocument_(payload);
+    case 'updateProduct':
+      if (PropertiesService.getScriptProperties().getProperty('BO_NOTION_PRODUCT_DATA_SOURCE_ID')) throw new Error('Notion 상품이 원본입니다. 상품 정보를 Notion에서 수정하거나 브랜드 변경 요청을 검수해 주세요.');
+      return updateProduct_(payload);
     case 'saveFields': return saveFieldSettings_(payload.fields || []);
     case 'saveAdminEmails': return saveAdminEmails_(payload.emails || []);
     case 'runHealthCheck': return runHealthCheck();
@@ -95,3 +103,4 @@ function friendlyError_(error) {
   const message = error && error.message ? error.message : String(error || '알 수 없는 오류');
   return message.replace(/^Exception:\s*/, '');
 }
+

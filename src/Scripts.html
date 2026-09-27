@@ -71,11 +71,11 @@ async function go(route,force=false){
  $('#content').innerHTML='<div class="loading-screen"><div class="spinner"></div><p class="subtle" style="margin-top:12px">데이터를 불러오는 중입니다.</p></div>';
  try{const data=await server('getAdminSection',route,{});State.sectionCache[route]={data,at:Date.now()};renderAdminSection_(route,data)}catch(e){$('#content').innerHTML=UI.empty('불러오지 못했습니다.',e.message)}
 }
-function setHeader(route){const map={dashboard:['홈','오늘 처리할 업무를 확인하세요.'],intake:['입점 신청','Google Form 신청을 검토하고 승인합니다.'],brands:['브랜드','승인된 브랜드와 상품등록 링크를 관리합니다.'],products:['상품','전체 상품을 검색하고 신규 제출 상품을 검수합니다.'],files:['파일','이미지와 상세페이지 수령 상태를 확인합니다.'],alerts:['알림','업무 누락과 연결 문제를 확인합니다.'],settings:['설정','상품 항목과 시스템 연결을 관리합니다.']};$('#pageTitle').textContent=map[route][0];$('#pageSubtitle').textContent=map[route][1]}
+function setHeader(route){const map={dashboard:['홈','오늘 처리할 업무를 확인하세요.'],intake:['입점 신청','Google Form 신청을 검토하고 승인합니다.'],brands:['브랜드','승인된 브랜드와 상품등록 링크를 관리합니다.'],products:['상품','전체 상품을 검색하고 신규 제출 상품을 검수합니다.'],files:['자료 검수','브랜드 자료를 승인한 뒤 Notion에 반영합니다.'],alerts:['알림','업무 누락과 연결 문제를 확인합니다.'],settings:['설정','상품 항목과 시스템 연결을 관리합니다.']};$('#pageTitle').textContent=map[route][0];$('#pageSubtitle').textContent=map[route][1]}
 function renderDashboard(data){
  setHeader('dashboard');const c=data.counts||{};const todoTotal=(c.newBrands||0)+(c.submissions||0)+(c.revisions||0)+(c.missingFiles||0)+(c.errors||0);$('#pageTitle').textContent=todoTotal?'오늘 확인할 업무,\n'+todoTotal+'건입니다.':'오늘 확인할 업무가\n없습니다.';$('#pageSubtitle').textContent='카드를 누르면 해당 업무로 바로 이동합니다.';$('#alertBadge').textContent=c.errors||0;$('#alertBadge').classList.toggle('hidden',!c.errors);
  $('#content').innerHTML=`<div class="hero-panel"><h2>오늘 확인할 업무가 ${(c.newBrands||0)+(c.submissions||0)+(c.revisions||0)+(c.missingFiles||0)+(c.errors||0)}건 있습니다.</h2><p>카드를 누르면 해당 업무로 바로 이동합니다.</p></div>
- <div class="metric-grid">${metric('신규 브랜드',c.newBrands,'intake')}${metric('상품 검수',c.submissions,'products')}${metric('보완 재제출',c.revisions,'products',false,'review')}${metric('파일 누락',c.missingFiles,'files')}${metric('시스템 오류',c.errors,'alerts',true)}</div>
+ <div class="metric-grid">${metric('신규 브랜드',c.newBrands,'intake')}${metric('상품 검수',c.submissions,'products')}${metric('보완 재제출',c.revisions,'products',false,'review')}${metric('자료 검수',c.missingFiles,'files')}${metric('시스템 오류',c.errors,'alerts',true)}</div>
  <div class="two-column"><section class="panel"><div class="panel-head"><h2>최근 활동</h2></div><div class="activity-list">${(data.recentActivity||[]).length?(data.recentActivity||[]).map(a=>`<div class="activity-item"><strong>${esc(a.title)}</strong><span>${esc(a.detail)}</span><time>${esc(a.time)}</time></div>`).join(''):UI.empty('최근 활동이 없습니다.','업무가 처리되면 여기에 표시됩니다.')}</div></section>
  <section class="panel"><div class="panel-head"><h2>확인할 알림</h2><button class="small-button" onclick="go('alerts')">전체 보기</button></div><div class="alert-list">${(data.alerts||[]).length?(data.alerts||[]).map(a=>`<div class="alert-item">${UI.status(a.level)}<strong style="display:block;margin:8px 0 3px">${esc(a.title)}</strong><span class="subtle">${esc(a.detail)}</span></div>`).join(''):UI.empty('모두 정상입니다.','현재 확인할 문제가 없습니다.')}</div></section></div>`;
 }
@@ -93,20 +93,57 @@ async function disableLink(token){try{await server('saveAdminAction','disablePar
 function copyText(text){navigator.clipboard.writeText(text).then(()=>UI.toast('링크를 복사했습니다.'))}
 
 function renderProducts(data){
- const products=(data&&data.products)||[];
+ let products=(data&&data.products)||[];
+ State.notionEnabled=!!(data&&data.notionEnabled);
  const cachedReview=State.sectionCache.productSubmissions;
  let submissions=cachedReview&&Date.now()-cachedReview.at<State.cacheTtl?cachedReview.data:null;
- $('#content').innerHTML=`<section class="panel"><div class="section-tabs"><button class="active" data-product-view="master">상품 마스터</button><button data-product-view="review">검수 대기 <span id="reviewCount" class="subtle">${submissions?submissions.filter(s=>s.status!=='승인 완료').length:'·'}</span></button></div><div id="productWorkspace"></div></section>`;
+ $('#content').innerHTML=`<section class="panel"><div class="section-tabs">${State.notionEnabled?'<button data-product-view="notion">Notion 상품 조회</button>':''}<button data-product-view="master">기존 시트 목록</button><button data-product-view="review">검수 대기 <span id="reviewCount" class="subtle">${submissions?submissions.filter(s=>s.status!=='승인 완료').length:'·'}</span></button></div><div id="productWorkspace"></div></section>`;
  const show=async view=>{
   $$('.section-tabs button').forEach(b=>b.classList.toggle('active',b.dataset.productView===view));
-  if(view==='master'){renderProductMaster(products);return;}
+  if(view==='notion'){await renderNotionProductList_();return;}
+  if(view==='master'){
+   if(State.notionEnabled&&!products.length){
+    $('#productWorkspace').innerHTML='<div class="loading-screen"><div class="spinner"></div><p>기존 시트 목록을 불러오는 중입니다.</p></div>';
+    try{products=(await server('getAdminSection','legacyProducts',{})).products||[]}catch(e){$('#productWorkspace').innerHTML=UI.empty('기존 목록을 불러오지 못했습니다.',e.message);return;}
+   }
+   renderProductMaster(products);return;
+  }
   if(!submissions){
    $('#productWorkspace').innerHTML='<div class="loading-screen"><div class="spinner"></div><p class="subtle" style="margin-top:12px">검수 목록을 불러오는 중입니다.</p></div>';
    try{const result=await server('getAdminSection','productSubmissions',{});submissions=(result&&result.submissions)||[];State.reviewFields=(result&&result.fields)||[];State.sectionCache.productSubmissions={data:submissions,at:Date.now()};$('#reviewCount').textContent=submissions.filter(s=>s.status!=='승인 완료').length;}catch(e){$('#productWorkspace').innerHTML=UI.empty('검수 목록을 불러오지 못했습니다.',e.message);return;}
   }
   renderSubmissionList(submissions);
  };
- $('[data-product-view]').forEach(btn=>btn.addEventListener('click',()=>show(btn.dataset.productView)));const initial=State.productInitialView==='review'?'review':'master';State.productInitialView='';show(initial);
+ $('[data-product-view]').forEach(btn=>btn.addEventListener('click',()=>show(btn.dataset.productView)));const initial=State.productInitialView==='review'?'review':State.notionEnabled?'notion':'master';State.productInitialView='';show(initial);
+}
+async function renderNotionProductList_(){
+ const workspace=$('#productWorkspace');
+ workspace.innerHTML='<div class="loading-screen"><div class="spinner"></div><p>Notion 상품을 불러오는 중입니다.</p></div>';
+ try{
+  const data=await server('getAdminSection','notionProducts',{});
+  const cached={data,at:Date.now()};State.sectionCache.notionProducts=cached;
+  const rows=cached.data.products||[];
+  workspace.innerHTML=`<div class="panel-head"><div><h2>Notion 상품 DB</h2><p class="subtle">승인된 정보와 노션의 최신 속성을 조회합니다. 속성 이름이 바뀌면 상세 화면에 반영됩니다.</p></div><strong>${rows.length}개 상품</strong></div><div class="toolbar"><input id="notionProductSearch" class="search-input" placeholder="상품명, 바코드, 운영센터 ID 검색"></div><div id="notionProductTable"></div>`;
+  const paint=()=>{const q=$('#notionProductSearch').value.trim().toLowerCase();const matches=rows.filter(p=>!q||[p.name,p.productId,p.barcode,p.reviewStatus].join(' ').toLowerCase().includes(q));$('#notionProductTable').innerHTML=matches.length?`<div class="data-table-wrap"><table class="data-table"><thead><tr><th>상품</th><th>운영센터 ID</th><th>바코드</th><th>등록 검수</th><th></th></tr></thead><tbody>${matches.slice(0,100).map(p=>`<tr><td><strong>${esc(p.name||'상품명 없음')}</strong></td><td>${esc(p.productId)}</td><td>${esc(p.barcode||'—')}</td><td>${UI.status(p.reviewStatus||'기존 상품')}</td><td><button class="small-button primary" data-notion-page="${esc(p.pageId)}">상세</button></td></tr>`).join('')}</tbody></table></div>${matches.length>100?`<p class="subtle">처음 100개를 표시합니다. 검색어로 범위를 좁혀 주세요.</p>`:''}`:UI.empty('검색 결과가 없습니다.','다른 검색어를 입력해 주세요.');$$('[data-notion-page]').forEach(button=>button.addEventListener('click',()=>openNotionProduct_(button.dataset.notionPage)))};
+  $('#notionProductSearch').addEventListener('input',paint);paint();
+ }catch(e){workspace.innerHTML=UI.empty('Notion 상품을 불러오지 못했습니다.',e.message)}
+}
+function notionBlockHtml_(block){
+ const text=esc(block.text||'');let own='';
+ if(/^heading_[123]$/.test(block.type))own='<h3>'+text+'</h3>';
+ else if(block.type==='bulleted_list_item'||block.type==='numbered_list_item')own='<p>• '+text+'</p>';
+ else if(block.type==='image'&&reviewHttp_(block.url))own='<p><a href="'+esc(block.url)+'" target="_blank" rel="noopener noreferrer">이미지 열기</a></p>';
+ else if(block.type==='file'&&reviewHttp_(block.url))own='<p><a href="'+esc(block.url)+'" target="_blank" rel="noopener noreferrer">첨부 파일 열기</a></p>';
+ else if(text)own='<p>'+text+'</p>';
+ return own+(block.children||[]).map(notionBlockHtml_).join('');
+}
+async function openNotionProduct_(pageId){
+ UI.modal('<h2>Notion 상품 정보</h2><p>속성과 본문을 불러오는 중입니다.</p>');
+ try{
+  const detail=await server('getNotionProductDetail',{pageId});
+  const properties=(detail.properties||[]).filter(p=>p.value).map(p=>`<div class="field-group"><label>${esc(p.name)}</label><div class="review-value">${reviewFieldValue_(p.value)}</div></div>`).join('');
+  $('#modalBody').innerHTML=`<div class="review-modal-head"><div><span class="review-kicker">NOTION SOURCE</span><h2>상품 원본 조회</h2></div><a class="small-button" href="${esc(detail.url)}" target="_blank" rel="noopener noreferrer">Notion에서 열기</a></div><div class="form-grid">${properties}</div><section class="review-info-section"><h3>상품 본문</h3><div>${(detail.blocks||[]).map(notionBlockHtml_).join('')||'<p class="subtle">본문이 없습니다.</p>'}</div></section>`;
+ }catch(e){$('#modalBody').innerHTML='<h2>조회 실패</h2><p>'+esc(e.message)+'</p>'}
 }
 function productThumbUrl_(url,size){var text=String(url||'');if(!text)return '';var id=reviewDriveId_(text);return id?'https:'+'/'+'/'+'drive.google.com/thumbnail?id='+encodeURIComponent(id)+'&sz=w'+(size||160):text;}
 function productPrefs_(){var base={mode:'table',cols:['brand','trade','retail','purchase','consignment','status']};try{var saved=JSON.parse(localStorage.getItem('boProductPrefs')||'{}');Object.keys(saved).forEach(function(k){base[k]=saved[k]})}catch(e){}return base;}
@@ -133,6 +170,12 @@ function renderSubmissionList(rows){
 }
 
 function openProduct(p){
+ if(State.notionEnabled){
+  const cached=State.sectionCache.notionProducts;
+  const page=cached&&cached.data&&cached.data.products.find(item=>item.productId===p.productId);
+  if(page)openNotionProduct_(page.pageId);else UI.modal('<h2>Notion 원본 조회</h2><p>Notion 상품 조회 탭에서 이 상품을 검색해 주세요. 기존 시트 값은 수정할 수 없습니다.</p>');
+  return;
+ }
  const option=(value,current)=>`<option value="${esc(value)}" ${String(value)===String(current)?'selected':''}>${esc(value||'선택 안 함')}</option>`;
  UI.modal(`<div class="modal-heading"><div>${productImageHtml_(p,false)}</div><div><h2>상품 정보 수정</h2><p>${esc(p.brandName||p.brandCode||'브랜드 미지정')} · ${esc(p.productId)}</p></div></div><div class="form-grid product-edit-grid"><div class="field-group full"><label>상품명 *</label><input id="editProductName" class="field-input" value="${esc(p.productName||'')}"></div><div class="field-group"><label>옵션</label><input id="editOption" class="field-input" value="${esc(p.optionName||'')}"></div><div class="field-group"><label>바코드</label><input id="editBarcode" class="field-input" value="${esc(p.barcode||'')}"></div><div class="field-group"><label>카테고리</label><input id="editCategory" class="field-input" value="${esc(p.category||'')}"></div><div class="field-group"><label>거래방식</label><select id="editTrade" class="field-select">${['','매입','위탁'].map(v=>option(v,p.tradeType)).join('')}</select></div><div class="field-group"><label>소비자가</label><input id="editRetail" type="number" min="0" class="field-input" value="${esc(p.retailPrice||'')}"></div><div class="field-group"><label>매입가</label><input id="editPurchase" type="number" min="0" class="field-input" value="${esc(p.purchasePrice||'')}"></div><div class="field-group"><label>위탁 공급가</label><input id="editConsignment" type="number" min="0" class="field-input" value="${esc(p.consignmentPrice||'')}"></div><div class="field-group"><label>오프라인 위탁 소비자가</label><input id="editOfflineConsignment" type="number" min="0" class="field-input" value="${esc(p.offlineConsignmentPrice||'')}"></div><div class="field-group"><label>온라인 최저가</label><input id="editLowest" type="number" min="0" class="field-input" value="${esc(p.onlineLowestPrice||'')}"></div><div class="field-group"><label>MOQ</label><input id="editMoq" type="number" min="0" class="field-input" value="${esc(p.moq||'')}"></div><div class="field-group"><label>벤더 소속</label><input id="editVendor" class="field-input" value="${esc(p.vendorAffiliation||'')}"></div><div class="field-group"><label>검토 상태</label><select id="editReview" class="field-select">${['','자료 수집','검토 중','검토 완료','보완 필요'].map(v=>option(v,p.reviewStatus)).join('')}</select></div><div class="field-group"><label>사용 여부</label><label class="checkbox-line"><input id="editActive" type="checkbox" ${p.status==='중지'?'':'checked'}> 사용</label></div><div class="field-group full"><label>상품 링크</label><input id="editProductUrl" type="url" class="field-input" value="${esc(p.productUrl||'')}"></div><div class="field-group full"><label>대표 이미지 URL</label><input id="editMainImage" type="url" class="field-input" value="${esc(p.mainImageUrl||'')}"><span class="field-help">Drive 공유 링크 또는 공개 이미지 주소를 입력할 수 있습니다.</span></div><div class="field-group full"><label>회사 / 브랜드</label><div>${esc(fmt(p.companyName))} / ${esc(fmt(p.brandName||p.brandCode))}</div><span class="field-help">업체·브랜드 연결은 관계 데이터이므로 상품 화면에서는 변경하지 않습니다.</span></div></div><div class="modal-actions"><button class="secondary-button" onclick="UI.closeModal()">취소</button><button class="primary-button" onclick="saveProduct('${esc(p.productId)}')">변경 저장</button></div>`);
 }
@@ -183,9 +226,22 @@ function openSubmission(s){
 async function review(id,action){try{await server('saveAdminAction','reviewSubmission',{submissionId:id,action,note:$('#reviewNote').value});UI.closeModal();UI.toast('처리했습니다.');delete State.sectionCache.productSubmissions;go('products',true)}catch(e){UI.toast(e.message,true)}}
 
 function renderFiles(rows){
- const cleanName=name=>{const text=String(name||'').replace(/^PRD-[^_]+_/i,'').replace(/[0-9a-f]{8}-[0-9a-f-]{27,36}_?/ig,'').replace(/_+/g,' ').replace(/\.[^.]+$/,'').trim();return text||'제출 자료'};
- const ext=name=>{const match=String(name||'').match(/\.([^.]+)$/);return match?match[1].toUpperCase():'FILE'};
- $('#content').innerHTML=`<section class="panel"><div class="panel-head"><div><h2>제출 파일</h2><p class="subtle">긴 저장 파일명 대신 자료 종류와 상품 기준으로 정리했습니다.</p></div></div>${rows.length?`<div class="data-table-wrap"><table class="data-table files-table"><thead><tr><th>자료</th><th>브랜드</th><th>상품</th><th>업로드일</th><th>상태</th><th></th></tr></thead><tbody>${rows.map(f=>`<tr><td><div class="file-title"><span class="file-type">${esc(ext(f.fileName))}</span><div><strong>${esc(f.category||'제출 자료')}</strong><div class="subtle file-friendly-name">${esc(cleanName(f.fileName))}</div></div></div></td><td>${esc(f.brandCode||'—')}</td><td>${esc(f.productId||'공통 자료')}</td><td>${esc(f.uploadedAt||'—')}</td><td>${UI.status(f.status)}</td><td><a class="small-button" href="${esc(f.driveUrl)}" target="_blank">열기</a></td></tr>`).join('')}</tbody></table></div>`:UI.empty('제출 파일이 없습니다.','브랜드가 파일을 제출하면 여기에 표시됩니다.')}</section>`
+ const legacyDocuments=rows.filter(f=>!f.productId&&f.status==='수령 완료');
+ const documents=rows.filter(f=>!f.productId&&f.status!=='수령 완료'), attachments=rows.filter(f=>f.productId);
+ const pending=documents.filter(f=>['검수 대기','보완 필요'].includes(f.status));
+ const table=(items,review)=>items.length?`<div class="data-table-wrap"><table class="data-table files-table"><thead><tr><th>자료</th><th>브랜드</th><th>업로드일</th><th>상태</th><th></th></tr></thead><tbody>${items.map(f=>`<tr><td><strong>${esc(f.category||'제출 자료')}</strong><div class="subtle">${esc(f.fileName||'')}</div>${f.reviewNote?`<small>${esc(f.reviewNote)}</small>`:''}</td><td>${esc(f.brandCode||'—')}</td><td>${esc(f.uploadedAt||'—')}</td><td>${UI.status(f.status)}</td><td><div class="inline-actions"><a class="small-button" href="${esc(f.driveUrl)}" target="_blank" rel="noopener noreferrer">열기</a>${review?`<button class="small-button primary" onclick="openDocumentReview('${esc(f.fileId)}')">검수</button>`:''}</div></td></tr>`).join('')}</tbody></table></div>`:UI.empty('제출된 자료가 없습니다.','브랜드가 자료를 올리면 여기에 표시됩니다.');
+ $('#content').innerHTML=`<section class="panel"><div class="panel-head"><div><h2>브랜드 자료 검수</h2><p class="subtle">승인 후에만 Google Drive 링크가 Notion 브랜드 속성에 반영됩니다. 기존 수령 자료 ${legacyDocuments.length}건은 새 검수 대기에서 제외했습니다.</p></div><span class="status-pill info">검수 ${pending.length}건</span></div>${table(documents,true)}</section><section class="panel"><div class="panel-head"><div><h2>상품 첨부 파일</h2><p class="subtle">상품 검수 화면에서 이미지와 상세페이지를 함께 확인합니다.</p></div></div>${table(attachments,false)}</section>`;
+}
+
+function openDocumentReview(id){
+ const rows=(State.sectionCache.files&&State.sectionCache.files.data)||[];
+ const f=rows.find(item=>item.fileId===id);
+ if(!f)return UI.toast('자료를 다시 불러와 주세요.',true);
+ UI.modal(`<h2>${esc(f.category)} 검수</h2><p>${esc(f.brandCode)} · ${esc(f.fileName)}</p><p>${UI.status(f.status)}</p><p><a class="small-button" href="${esc(f.driveUrl)}" target="_blank" rel="noopener noreferrer">Google Drive 자료 확인</a></p><div class="field-group full"><label>보완·반려 사유</label><textarea id="documentReviewNote" class="field-textarea" rows="4">${esc(f.reviewNote||'')}</textarea></div><div class="modal-actions"><button class="danger-button" onclick="reviewDocument('${esc(id)}','reject')">반려</button><button class="secondary-button" onclick="reviewDocument('${esc(id)}','revision')">보완 요청</button><button class="primary-button" onclick="reviewDocument('${esc(id)}','approve')">승인 후 Notion 반영</button></div>`);
+}
+
+async function reviewDocument(id,action){
+ try{await server('saveAdminAction','reviewBrandDocument',{fileId:id,action,note:$('#documentReviewNote').value});UI.closeModal();UI.toast('자료 검수를 처리했습니다.');go('files',true)}catch(e){UI.toast(e.message,true)}
 }
 
 function renderAlerts(rows){$('#content').innerHTML=`<section class="panel"><div class="panel-head"><h2>알림과 오류</h2><button class="secondary-button" onclick="runCheck()">연결 상태 점검</button></div>${rows.length?`<div class="data-table-wrap"><table class="data-table"><thead><tr><th>등급</th><th>내용</th><th>구분</th><th>발생일</th><th>상태</th><th></th></tr></thead><tbody>${rows.map(a=>`<tr><td>${UI.status(a.level)}</td><td><strong>${esc(a.title)}</strong><div class="subtle">${esc(a.detail)}</div></td><td>${esc(a.category)}</td><td>${esc(a.createdAt)}</td><td>${UI.status(a.status)}</td><td>${a.status==='해결'?'':`<button class="small-button" onclick="resolveAlert('${esc(a.alertId)}')">해결 처리</button>`}</td></tr>`).join('')}</tbody></table></div>`:UI.empty('모두 정상입니다.','현재 확인할 알림이 없습니다.')}</section>`}
@@ -266,6 +322,7 @@ function applyBeautyoraIdentity(){
 }
 var boIdentityObserver=new MutationObserver(function(){requestAnimationFrame(applyBeautyoraIdentity)});boIdentityObserver.observe(document.documentElement,{childList:true,subtree:true});if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',applyBeautyoraIdentity)}else{applyBeautyoraIdentity()}
 </script>
+
 
 
 

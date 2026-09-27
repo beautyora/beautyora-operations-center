@@ -8,7 +8,7 @@ function getAdminDashboard_() {
     newBrands: intake.filter(row => /검토 대기|중복 의심|신규|미검토|접수/.test(row['등록 상태'] || row['상태'] || row['검토상태'] || '')).length,
     submissions: submissions.filter(row => row['상태'] === BOPS.STATUS.SUBMITTED).length,
     revisions: submissions.filter(row => row['상태'] === BOPS.STATUS.REVISION).length,
-    missingFiles: files.filter(row => row['상태'] === '누락').length,
+    missingFiles: files.filter(row => row['상태'] === '누락' || (!row['상품ID'] && row['상태'] === '검수 대기')).length,
     errors: alerts.filter(row => /오류|긴급/.test(row['등급'])).length
   };
   return {
@@ -254,7 +254,7 @@ function listSubmissions_(params) {
 function listFiles_(params) {
   return safeObjects_(BOPS.SHEETS.FILES).filter(row => !params.brandCode || row['브랜드코드'] === params.brandCode).map(row => ({
     fileId: row['파일ID'], brandCode: row['브랜드코드'], productId: row['상품ID'], category: row['분류'],
-    fileName: row['파일명'], driveUrl: row['DriveURL'], uploadedAt: row['업로드일'], status: row['상태']
+    fileName: row['파일명'], driveUrl: row['DriveURL'], uploadedAt: row['업로드일'], status: row['상태'], reviewNote: row['검수메모'] || ''
   })).reverse();
 }
 
@@ -299,10 +299,19 @@ function reviewSubmission_(payload) {
     const submission = findOne_(BOPS.SHEETS.SUBMISSIONS, '제출ID', payload.submissionId);
     if (!submission) throw new Error('제출 건을 찾을 수 없습니다.');
     const action = payload.action;
+    if (!['approve','revision','reject'].includes(action)) throw new Error('검수 작업을 확인해 주세요.');
+    if (submission['상태'] === BOPS.STATUS.APPROVED && action === 'approve') return {ok:true,status:BOPS.STATUS.APPROVED};
     const nextStatus = action === 'approve' ? BOPS.STATUS.APPROVED : action === 'revision' ? BOPS.STATUS.REVISION : BOPS.STATUS.REJECTED;
     const reviewNote = action === 'approve' ? '' : (payload.note || '');
+    if (action !== 'approve' && !String(reviewNote).trim()) throw new Error('보완·반려 사유를 입력해 주세요.');
+    if (action === 'approve') {
+      if (typeof notionReviewEnabled_ === 'function' && notionReviewEnabled_()) approveProductInNotion_(submission);
+      // The sheet is a compatibility projection for existing partner pages.
+      upsertMasterProduct_(submission);
+    } else {
+      if (typeof notionReviewEnabled_ === 'function' && notionReviewEnabled_()) markNewProductReviewInNotion_(submission, nextStatus);
+    }
     updateObjectRow_(BOPS.SHEETS.SUBMISSIONS, submission._row, { '상태': nextStatus, '검수메모': reviewNote, '수정일': now_() });
-    if (action === 'approve') upsertMasterProduct_(submission);
     logAction_('상품 ' + nextStatus, '상품 접수', payload.submissionId, reviewNote);
     return { ok: true, status: nextStatus };
   });
@@ -525,3 +534,4 @@ function testProductUpdateNoChange() {
   console.log('상품 수정 무변경 점검: ' + JSON.stringify({ok: result.ok, changed: result.changed}));
   return result;
 }
+

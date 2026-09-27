@@ -11,7 +11,8 @@ function getPartnerDocuments(request) {
   const context = validatePartnerToken_(request.token);
   const code = brandValue_(context.brand, '브랜드코드');
   const files = safeObjects_(BOPS.SHEETS.FILES).filter(f => f['브랜드코드'] === code && !f['상품ID']).map(f => ({
-    name:f['파일명'], category:f['분류'], url:f['DriveURL'], createdAt:String(f['업로드일'] || '')
+    name:f['파일명'], category:f['분류'], url:f['DriveURL'], createdAt:String(f['업로드일'] || ''),
+    status:f['상태'] || '검수 대기', reviewNote:f['검수메모'] || ''
   })).reverse();
   return {ok:true, files:files};
 }
@@ -51,7 +52,7 @@ function uploadPartnerFileV2_(request, document) {
       if (current['브랜드코드'] !== brandCode || current['상품ID'] !== productId || current['분류'] !== category) throw new Error('파일 연결 정보를 확인해 주세요.');
       return {ok:true,id:id,url:current['DriveURL'],name:current['파일명'],category:category};
     }
-    appendObject_(BOPS.SHEETS.FILES, {'파일ID':id,'브랜드코드':brandCode,'상품ID':productId,'분류':category,'파일명':file.getName(),'Drive파일ID':file.getId(),'DriveURL':file.getUrl(),'업로드일':now_(),'상태':'수령 완료'});
+    appendObject_(BOPS.SHEETS.FILES, {'파일ID':id,'브랜드코드':brandCode,'상품ID':productId,'분류':category,'파일명':file.getName(),'Drive파일ID':file.getId(),'DriveURL':file.getUrl(),'업로드일':now_(),'상태':document?'검수 대기':'수령 완료'});
     logAction_(document ? '브랜드 자료 업로드' : '상품 첨부 업로드','브랜드',brandCode,file.getName());
     return {ok:true,id:id,url:file.getUrl(),name:file.getName(),category:category};
   });
@@ -109,8 +110,10 @@ function submitPartnerDraft(request) {
       const detailUrl = String(p.detailUrl || '').trim();
       if (detailUrl && !/^https?:\/\/[^\s]+$/i.test(detailUrl)) throw new Error('상세페이지 주소는 https:// 또는 http://로 시작해야 합니다.');
       if (data.attachments.filter(a => a.category === '대표 이미지').length > 1) throw new Error('대표 이미지는 한 장만 선택해 주세요.');
+      if (typeof notionReviewEnabled_ === 'function' && notionReviewEnabled_() && !p.sourceSubmissionId && (!main || !details.length)) throw new Error((data.product_name || '상품') + ': 대표 이미지와 상세페이지 파일을 Google Drive에 올려주세요.');
       data.main_image_url = main ? main.url : (p.sourceSubmissionId ? data.main_image_url || '' : '');
-      data.detail_page_url = detailUrl || (details[0] ? details[0].url : '');
+      data.detail_page_url = details[0] ? details[0].url : (typeof notionReviewEnabled_ === 'function' && notionReviewEnabled_() ? (p.sourceSubmissionId ? data.detail_page_url || '' : '') : detailUrl);
+      if (detailUrl) data.reference_url = detailUrl;
       data.detail_page_urls = details.map(a => a.url);
       data.additional_image_urls = data.attachments.filter(a => a.category === '추가 이미지').map(a => a.url);
       data._partner_request_id = request.requestId;
@@ -130,6 +133,10 @@ function submitPartnerDraft(request) {
       const version = (submissionsByProduct.get(p.id) || []).reduce((max, s) => s['브랜드코드'] === brandCode ? Math.max(max, Number(s['제출버전']) || 1) : max, 0) + 1;
       pending.push({'제출ID':id,'브랜드코드':brandCode,'상품ID':p.id,'제출버전':version,'상태':BOPS.STATUS.SUBMITTED,'제출일':now_(),'수정일':now_(),'상품데이터JSON':JSON.stringify(p.data),'검수메모':'','제출자명':sanitize_(request.contactName),'제출자연락처':sanitize_(request.contactPhone)});
       result.push({id:p.id,submissionId:id});
+    });
+    if (typeof notionReviewEnabled_ === 'function' && notionReviewEnabled_()) pending.forEach(function(row) {
+      const data = JSON.parse(row['상품데이터JSON'] || '{}');
+      if (!data._change_request) stageNewProductInNotion_(row);
     });
     appendObjects_(BOPS.SHEETS.SUBMISSIONS, pending);
     logAction_('상품 통합 제출','브랜드',brandCode,result.length + '개 상품');
@@ -176,3 +183,4 @@ function runBeautyoraPartnerUXChecks(){
  console.log(JSON.stringify({ok:true,passed:checks.length,checks:checks,productionWrites:0}));return {ok:true,passed:checks.length};
  }finally{withLock_=originals.withLock_;validatePartnerToken_=originals.validatePartnerToken_;sheetObjects_=originals.sheetObjects_;safeObjects_=originals.safeObjects_;findOne_=originals.findOne_;appendObject_=originals.appendObject_;appendObjects_=originals.appendObjects_;logAction_=originals.logAction_;getSettings_=originals.getSettings_;getBrandFolder_=originals.getBrandFolder_;getProductAssetFolder_=originals.getProductAssetFolder_;}
 }
+

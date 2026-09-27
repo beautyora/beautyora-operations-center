@@ -14,6 +14,14 @@ on:
         description: "배포 설명"
         required: true
         default: "UI/기능 업데이트"
+      mode:
+        description: "기존 주소 갱신 또는 새 웹앱 주소 생성"
+        required: true
+        type: choice
+        options:
+          - existing
+          - new
+        default: existing
 
 permissions:
   contents: read
@@ -48,6 +56,7 @@ jobs:
           node tests/optimization.test.cjs
           node tests/performance-regression.test.cjs
           node tests/partner-center.test.cjs
+          node tests/notion-review.test.cjs
 
       - name: 배포 환경 선택
         shell: bash
@@ -66,8 +75,8 @@ jobs:
             DEPLOYMENT_ID="$TEST_DEPLOYMENT_ID"
           fi
 
-          if [ -z "$SCRIPT_ID" ] || [ -z "$DEPLOYMENT_ID" ]; then
-            echo "대상 환경의 SCRIPT_ID 또는 DEPLOYMENT_ID Secret이 없습니다."
+          if [ -z "$SCRIPT_ID" ] || { [ "${{ inputs.mode }}" = "existing" ] && [ -z "$DEPLOYMENT_ID" ]; }; then
+            echo "대상 환경의 SCRIPT_ID 또는 기존 배포용 DEPLOYMENT_ID Secret이 없습니다."
             exit 1
           fi
 
@@ -90,6 +99,7 @@ jobs:
         run: npx --yes @google/clasp@3 push --force
 
       - name: 기존 웹앱을 새 버전으로 갱신
+        if: inputs.mode == 'existing'
         env:
           DEPLOY_DESCRIPTION: ${{ inputs.description }}
         run: |
@@ -98,7 +108,7 @@ jobs:
             --description "$DEPLOY_DESCRIPTION"
 
       - name: 브랜드용 상품등록센터도 갱신
-        if: inputs.target == 'production'
+        if: inputs.target == 'production' && inputs.mode == 'existing'
         env:
           DEPLOY_DESCRIPTION: ${{ inputs.description }}
           # Public deployment identifier, not a credential. This existing endpoint
@@ -109,8 +119,36 @@ jobs:
             --deploymentId "$PARTNER_DEPLOYMENT_ID" \
             --description "$DEPLOY_DESCRIPTION - 상품등록센터"
 
+      - name: 새 웹앱 배포 생성
+        if: inputs.mode == 'new'
+        shell: bash
+        env:
+          DEPLOY_DESCRIPTION: ${{ inputs.description }}
+        run: |
+          npx --yes @google/clasp@3 create-deployment \
+            --description "$DEPLOY_DESCRIPTION" --json > deployment.json
+          DEPLOYMENT_ID=$(jq -r '.deploymentId // empty' deployment.json)
+          VERSION=$(jq -r '.versionNumber // empty' deployment.json)
+          if [ -z "$DEPLOYMENT_ID" ]; then
+            echo "새 배포 ID를 확인하지 못했습니다."
+            exit 1
+          fi
+          WEBAPP_URL="https://script.google.com/macros/s/$DEPLOYMENT_ID/exec"
+          echo "새 웹앱 배포 ID: $DEPLOYMENT_ID"
+          echo "새 웹앱 URL: $WEBAPP_URL"
+          {
+            echo "### 새 Apps Script 웹앱 배포"
+            echo "- 대상: ${{ inputs.target }}"
+            echo "- 버전: $VERSION"
+            echo "- 배포 ID: \`$DEPLOYMENT_ID\`"
+            echo "- 웹앱 URL: $WEBAPP_URL"
+            echo "- 커밋: ${{ github.sha }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: 결과
         run: |
           echo "배포 대상: ${{ inputs.target }}"
+          echo "배포 방식: ${{ inputs.mode }}"
           echo "브랜치: ${{ github.ref_name }}"
           echo "커밋: ${{ github.sha }}"
+
