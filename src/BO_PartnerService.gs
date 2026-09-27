@@ -7,9 +7,9 @@ function getPartnerBootstrap_(token) {
     let data = {}; try { data = JSON.parse(row['상품데이터JSON'] || '{}'); } catch (ignored) {}
     return { submissionId: row['제출ID'], productId: row['상품ID'], status: row['상태'], updatedAt: row['수정일'], reviewNote: row['검수메모'], data: data };
   }).reverse();
-  const submittedProductIds = {};
-  submissions.forEach(item => { if (item.productId) submittedProductIds[item.productId] = true; });
-  const masterProducts = listProducts_({brandCode: brandCode}).filter(item => !submittedProductIds[item.productId]).map(item => {
+  const latestByProduct = {};
+  submissions.forEach(item => { if (item.productId && !latestByProduct[item.productId]) latestByProduct[item.productId] = item; });
+  const masterProducts = listProducts_({brandCode: brandCode}).map(item => {
     const data = Object.assign({}, item.data || {}, {
       product_id: item.productId,
       product_name: item.productName || '',
@@ -24,11 +24,17 @@ function getPartnerBootstrap_(token) {
       main_image_url: item.mainImageUrl || '',
       detail_page_url: item.detailPageUrl || ''
     });
-    return { submissionId: 'MASTER-' + item.productId, productId: item.productId, status: BOPS.STATUS.APPROVED, updatedAt: item.approvedAt || '', reviewNote: '', data: data };
+     return { submissionId: 'MASTER-' + item.productId, productId: item.productId, status: BOPS.STATUS.APPROVED, updatedAt: item.approvedAt || '', reviewNote: '', data: data };
   });
-  const products = submissions.concat(masterProducts);
+  const masterIds = {};
+  masterProducts.forEach(item => { masterIds[item.productId] = true; });
+  const products = masterProducts.map(item => {
+    const latest = latestByProduct[item.productId];
+    return latest ? Object.assign({}, item, { status: latest.status, reviewNote: latest.reviewNote, latestSubmissionId: latest.submissionId }) : item;
+  });
+  Object.keys(latestByProduct).forEach(id => { if (!masterIds[id]) products.push(latestByProduct[id]); });
   return { ok: true, view: 'partner', brand: { brandCode: brandCode, brandName: brandValue_(context.brand, '브랜드명'), companyName: brandValue_(context.brand, '회사명') },
-    fields: fields, submissions: products, counts: countStatuses_(products) };
+    fields: fields, products: products, submissions: submissions, counts: countStatuses_(submissions) };
 }
 
 function validatePartnerToken_(token) {
@@ -134,3 +140,4 @@ function getBrandFolder_(brand) {
 function sanitizeFileName_(name) {
   return String(name || 'file').replace(/[\\/:*?"<>|]/g, '_').slice(0, 180);
 }
+
