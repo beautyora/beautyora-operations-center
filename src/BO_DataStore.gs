@@ -60,6 +60,40 @@ function appendObject_(name, object) {
   return sheet.getLastRow();
 }
 
+// Call under the caller's write lock. Preserve header order and retry IDs.
+function appendObjects_(name, objects) {
+  if (!objects.length) return;
+  const sheet = getSheet_(name);
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+  const start = sheet.getLastRow() + 1;
+  const required = start + objects.length - 1;
+  if (required > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), required - sheet.getMaxRows());
+  sheet.getRange(start, 1, objects.length, headers.length).setValues(
+    objects.map(object => headers.map(header => object[header] === undefined ? '' : object[header]))
+  );
+}
+
+function recentSheetObjects_(name, limit, optional) {
+  let sheet;
+  try { sheet = getSheet_(name); } catch (error) { if (optional) return []; throw error; }
+  const width = sheet.getLastColumn();
+  if (!width || sheet.getLastRow() < 2 || limit < 1) return [];
+  const headers = sheet.getRange(1, 1, 1, width).getDisplayValues()[0], result = [];
+  let end = sheet.getLastRow();
+  while (end >= 2 && result.length < limit) {
+    const start = Math.max(2, end - 99);
+    const values = sheet.getRange(start, 1, end - start + 1, width).getDisplayValues();
+    for (let i = values.length - 1; i >= 0 && result.length < limit; i--) {
+      if (!values[i].some(Boolean)) continue;
+      const row = { _row: start + i };
+      headers.forEach((header, col) => row[header] = normalizeSheetDisplayValue_(header, values[i][col]));
+      result.push(row);
+    }
+    end = start - 1;
+  }
+  return result;
+}
+
 function updateObjectRow_(name, rowNumber, patch) {
   const sheet = getSheet_(name);
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];

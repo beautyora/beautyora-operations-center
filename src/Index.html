@@ -34,7 +34,7 @@
   <div id="toast" class="toast hidden" role="status"></div>
   <div id="modal" class="modal-backdrop hidden" role="dialog" aria-modal="true"><div class="modal-card"><button class="modal-close" onclick="UI.closeModal()">×</button><div id="modalBody"></div></div></div>
   <?!= include('Scripts'); ?>
-  <? if (initialView === 'admin') { ?><?!= include('BrandWorkspace'); ?><? } ?>
+  <? if (initialView === 'admin') { ?><?!= include('BrandWorkspace'); ?><?!= include('BrandAssetsUI'); ?><? } ?>
   <? if (initialView === 'partner') { ?><?!= include('PartnerExperience'); ?><? } ?>
 </body>
 </html>

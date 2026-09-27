@@ -13,7 +13,7 @@ function getAdminDashboard_() {
   };
   return {
     counts: counts,
-    recentActivity: safeObjects_(BOPS.SHEETS.LOGS).slice(-8).reverse().map(row => ({
+    recentActivity: recentSheetObjects_(BOPS.SHEETS.LOGS, 8, true).map(row => ({
       time: row['일시'], title: row['작업'], detail: row['상세'], targetId: row['대상ID']
     })),
     alerts: alerts.slice(-5).reverse().map(normalizeAlert_),
@@ -47,6 +47,7 @@ function listBrands_(params) {
 
 function listProducts_(params) {
   params = params || {};
+  const brandCode = String(params.brandCode || '').trim();
   const query = String(params.query || '').trim().toLowerCase();
   const brands = safeObjects_(BOPS.SHEETS.BRANDS);
   const brandMap = {};
@@ -87,11 +88,20 @@ function listProducts_(params) {
     const consignment = Number(String(sourceValue_(row, source, '위탁공급가')).replace(/[^0-9.-]/g, '')) || 0;
     return purchase && consignment ? '혼합' : consignment ? '위탁' : purchase ? '매입' : '';
   }
-  const byId = {};
-  safeObjects_('상품').forEach(function(row) {
+  const byId = {}, standardRows = safeObjects_('상품'), masterRows = safeObjects_(BOPS.SHEETS.PRODUCTS);
+  const effectiveBrand = new Map();
+  if (brandCode) {
+    standardRows.forEach(row => effectiveBrand.set(String(row['상품ID'] || '').trim(), String(row['브랜드ID'] || row['브랜드코드'] || '').trim()));
+    masterRows.forEach(row => {
+      const id = String(row['상품ID'] || '').trim();
+      effectiveBrand.set(id, String(row['브랜드코드'] || '').trim() || effectiveBrand.get(id) || '');
+    });
+  }
+  standardRows.forEach(function(row) {
     const id = String(row['상품ID'] || '').trim();
     if (!id) return;
     const code = String(row['브랜드ID'] || row['브랜드코드'] || '').trim();
+    if (brandCode && effectiveBrand.get(id) !== brandCode) return;
     const brand = brandMap[code] || {}, source = sourceFor_(row);
     byId[id] = {
       productId: id, brandCode: code, brandName: brandValue_(brand, '브랜드명') || '',
@@ -106,12 +116,13 @@ function listProducts_(params) {
       mainImageUrl: imageFrom_(row['대표이미지URL'] || row['이미지'] || source['이미지']), detailPageUrl: '', approvedAt: ''
     };
   });
-  safeObjects_(BOPS.SHEETS.PRODUCTS).forEach(function(row) {
+  masterRows.forEach(function(row) {
     const id = String(row['상품ID'] || '').trim();
     if (!id) return;
+    const code = String(row['브랜드코드'] || '').trim();
+    if (brandCode && effectiveBrand.get(id) !== brandCode) return;
     let data = {};
     try { data = JSON.parse(row['상품데이터JSON'] || '{}'); } catch (ignored) {}
-    const code = String(row['브랜드코드'] || '').trim();
     const brand = brandMap[code] || {}, current = byId[id] || {};
     byId[id] = Object.assign({}, current, {
       productId: id, brandCode: code || current.brandCode || '', brandName: row['브랜드명'] || brandValue_(brand, '브랜드명') || current.brandName || '',
