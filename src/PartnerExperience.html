@@ -30,6 +30,10 @@ function productIssues(p){
   else if(v&&f.type==='url'&&typeof v==='string'&&!safeUrl(v))add(f.id,`${f.label} 주소를 확인해 주세요.`,step);
  }
  if(p.detailUrl&&!safeUrl(p.detailUrl)&&!out.some(e=>e.field==='detail_page_url'))add('detail_page_url','상세페이지 주소를 확인해 주세요.',1);
+ if(State.bootstrap.notionReviewEnabled&&!p.sourceSubmissionId){
+  if(!p.assets.some(a=>a.category==='대표 이미지'&&a.status==='done'))add('main_image_url','대표 이미지를 업로드해 주세요.',1);
+  if(!p.assets.some(a=>a.category==='상세페이지'&&a.status==='done'))add('detail_page_url','상세페이지 이미지 또는 PDF를 업로드해 주세요.',1);
+ }
  p.assets.filter(a=>a.status==='missing'||a.status==='error').forEach(a=>add('assets',a.name+': '+(a.error||'파일을 다시 선택해 주세요.'),1));
  return out;
 }

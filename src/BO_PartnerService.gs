@@ -33,7 +33,7 @@ function getPartnerBootstrap_(token) {
     return latest ? Object.assign({}, item, { status: latest.status, reviewNote: latest.reviewNote, latestSubmissionId: latest.submissionId }) : item;
   });
   Object.keys(latestByProduct).forEach(id => { if (!masterIds[id]) products.push(latestByProduct[id]); });
-  return { ok: true, view: 'partner', brand: { brandCode: brandCode, brandName: brandValue_(context.brand, '브랜드명'), companyName: brandValue_(context.brand, '회사명') },
+  return { ok: true, view: 'partner', notionReviewEnabled: typeof notionReviewEnabled_ === 'function' && notionReviewEnabled_(), brand: { brandCode: brandCode, brandName: brandValue_(context.brand, '브랜드명'), companyName: brandValue_(context.brand, '회사명') },
     fields: fields, products: products, submissions: submissions, counts: countStatuses_(submissions) };
 }
 
