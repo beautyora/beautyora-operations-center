@@ -27,7 +27,7 @@ function load(files, globals = {}) {
   const sheet = { getDataRange: () => ({ getDisplayValues: () => [
     ['설정', '값'], ['TARGET_SPREADSHEET_ID', 'production-db']
   ] }) };
-  context.SpreadsheetApp.openById = value => ({ getId: () => value, getSheetByName: () => sheet });
+  context.SpreadsheetApp.openById = value => { opened.push(value); return { getId: () => value, getSheetByName: () => sheet }; };
   assert.throws(() => context.getConfig_(), /BO_SPREADSHEET_ID와 다릅니다/);
   sheet.getDataRange = () => ({ getDisplayValues: () => [['설정', '값']] });
   assert.throws(() => context.getConfig_(), /TARGET_SPREADSHEET_ID가 설정되지 않았습니다/);
@@ -35,6 +35,10 @@ function load(files, globals = {}) {
     ['설정', '값'], ['TARGET_SPREADSHEET_ID', 'test-db']
   ] });
   assert.equal(context.getConfig_().TARGET_SPREADSHEET_ID, 'test-db');
+  assert.equal(opened.length, 1, '같은 실행에서 동일 DB를 반복해서 열지 않는다');
+  id = 'another-test-db';
+  context.getDb_();
+  assert.deepEqual(opened, ['test-db', 'another-test-db'], 'DB ID가 바뀌면 새 대상을 연다');
 }
 
 {
@@ -61,3 +65,4 @@ function load(files, globals = {}) {
 }
 
 console.log('환경 격리 및 브랜드 링크 조회 검증 통과');
+
