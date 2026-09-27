@@ -210,3 +210,7 @@ migration=ctx.normalizeNotionAssetFolders_({items:[{pageId:liveId,changes:[{id:'
 assert.equal(pages[liveId].properties.thumbnail.url,'https://drive.google.com/drive/folders/thumb-folder');
 assert.equal(ctx.notionProductPatchValue_({type:'number',name:'가격'},'19,000',[]).number,19000);
 console.log('PASS folder migration checks original values and comma prices retain numeric meaning');
+const beforeForeign=calls.filter(c=>c.method==='patch'&&c.endpoint==='/pages/'+liveId).length;
+assert.throws(()=>ctx.stageNewProductInNotion_({'상품ID':liveId,'브랜드코드':'BRAND-1','상품데이터JSON':'{}'}),/브랜드가/);
+assert.equal(calls.filter(c=>c.method==='patch'&&c.endpoint==='/pages/'+liveId).length,beforeForeign);
+console.log('PASS product page-ID fallback cannot stage a different brand product');

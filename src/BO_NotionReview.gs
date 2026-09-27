@@ -168,15 +168,18 @@ function stageNewProductInNotion_(submission) {
   const schema = notionReviewSchema_(config.product, 'product');
   const productId = String(submission['상품ID']);
   const existing = notionProductById_(config.product, schema, productId);
+  const brand = findBrandByCode_(submission['브랜드코드']);
+  const brandPageId = brandValue_(brand, '노션페이지ID');
+  if (!brandPageId) throw new Error('브랜드의 Notion 페이지 연결이 없어 상품을 접수할 수 없습니다.');
   if (existing) {
+    const relation=notionPageProperty_(existing,schema.brand);
+    if(!(relation&&relation.relation||[]).some(function(r){return notionSameId_(r.id,brandPageId);}))
+      throw Error('Notion 상품의 브랜드가 제출 브랜드와 다릅니다.');
     const properties = {};
     properties[schema.review] = {select:{name:'검수 대기'}};
     notionRequest_('patch', '/pages/' + existing.id, {properties:properties});
     return existing.id;
   }
-  const brand = findBrandByCode_(submission['브랜드코드']);
-  const brandPageId = brandValue_(brand, '노션페이지ID');
-  if (!brandPageId) throw new Error('브랜드의 Notion 페이지 연결이 없어 상품을 접수할 수 없습니다.');
   const data = JSON.parse(submission['상품데이터JSON'] || '{}');
   const created = notionRequest_('post', '/pages', {
     parent:{type:'data_source_id',data_source_id:config.product},
