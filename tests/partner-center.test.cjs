@@ -8,7 +8,7 @@ function ui(server) {
   const element = id => { if (!elements.has(id)) elements.set(id, {innerHTML:'',textContent:'',querySelectorAll:()=>[],classList:{toggle(){}},setAttribute(){},remove(){}}); return elements.get(id); };
   const context = vm.createContext({console,crypto:{randomUUID:require('node:crypto').randomUUID},Map,Set,URL:{revokeObjectURL(){},createObjectURL:()=> 'blob:test'},window:{addEventListener(){},scrollTo(){}},document:{getElementById:element},localStorage:{setItem(){},getItem:()=>null},State:{token:'test-token',bootstrap:{brand:{brandName:'Test'},fields:[{id:'product_name',label:'상품명',required:true,type:'text',active:true},{id:'retail_price',label:'소비자가',required:true,type:'number',active:true}],submissions:[]}},$:element,$$:()=>[],esc:v=>String(v??''),UI:{toast(){},status:s=>s},renderPartner:()=>{},server,fileBase64:async()=> 'aGVsbG8='});
   const script = source('PartnerExperience.html').match(/<script>([\s\S]*?)<\/script>/)[1];
-  vm.runInContext(script.replace('})();','globalThis.test={P,makeProduct,productIssues,submit,onAction,addFiles,uploadAll,catalogCards,catalogPanel,submissionsPanel,productList};})();'),context);
+  vm.runInContext(script.replace('})();','globalThis.test={P,makeProduct,productIssues,submit,onAction,addFiles,uploadAll,catalogCards,catalogPanel,submissionsPanel,productList,editorShell};})();'),context);
   context.test.P.draft={requestId:'request-original',products:[]};
   return context;
 }
@@ -34,6 +34,8 @@ async function main(){
   P.productQuery='ROSE-30';assert.match(c.test.productList(),/로즈 세럼/);assert.doesNotMatch(c.test.productList(),/민트 크림/);
   P.productQuery='';P.productStatus='review';assert.match(c.test.productList(),/민트 크림/);assert.doesNotMatch(c.test.productList(),/로즈 세럼/);
   assert.doesNotMatch(c.test.catalogCards(),/로즈 세럼/);
+  P.editorFrom='submissions';assert.match(c.test.editorShell(),/← 제출 현황/);
+  P.editorFrom='catalog';assert.match(c.test.editorShell(),/← 상품 목록/);
   console.log('PASS product search and submission status are separate');
   const status={SUBMITTED:'신규 제출',REVIEWING:'검수 중',REVISION:'보완 필요',APPROVED:'승인 완료'};
   const submissionRows=[
