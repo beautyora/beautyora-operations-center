@@ -1,12 +1,8 @@
 function setupBeautyoraSystem() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  if (!ss) throw new Error('구글 시트에 연결된 Apps Script에서 실행해 주세요.');
   const props = PropertiesService.getScriptProperties();
-  props.setProperty(BOPS.PROPS.SPREADSHEET_ID, '1bC_HNAQcroDgveEsISik7hui9RvUTgQb6bMrTUiILjY');
-  if (!props.getProperty(BOPS.PROPS.ROOT_FOLDER_ID)) {
-    props.setProperty(BOPS.PROPS.ROOT_FOLDER_ID, '1UFLlB0plUMuphVhgvF6kUMLhCV3nDNVN');
-  }
-  props.setProperty(BOPS.PROPS.PARTNER_WEBAPP_URL, 'https://script.google.com/macros/s/AKfycbwWlj4WX95rewTS0gGKL2ne_qQErbrNB-9tR-pTPoy4oyZEIE4EW3BuZSQa3gMfbNOc/exec');
+  const dbId = props.getProperty(BOPS.PROPS.SPREADSHEET_ID);
+  if (!dbId) throw new Error('BO_SPREADSHEET_ID가 설정되지 않았습니다. 대상 환경의 DB ID를 스크립트 속성에 먼저 설정해 주세요.');
+  const ss = SpreadsheetApp.openById(dbId);
   if (!props.getProperty(BOPS.PROPS.ADMIN_EMAILS)) {
     props.setProperty(BOPS.PROPS.ADMIN_EMAILS, 'beautyora.contact@gmail.com');
   }
@@ -113,3 +109,5 @@ function saveFieldSettings_(fields) {
 function isTrue_(value) {
   return value === true || String(value).toLowerCase() === 'true' || String(value) === '사용' || String(value) === '필수';
 }
+
+
