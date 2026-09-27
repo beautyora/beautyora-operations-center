@@ -22,6 +22,49 @@ const BO_REVIEW_SCHEMA = Object.freeze({
   }
 });
 const BO_REVIEW_SCHEMA_CACHE = {};
+const BO_BRAND_DISPLAY_FIELDS = Object.freeze({
+  '브랜드ID':['브랜드 ID'], '브랜드명':['브랜드명'], '회사명':['협력사/회사명','회사명'],
+  '영업단계':['진행 단계','영업 단계'], '재영업단계':['재영업 단계'], '재영업분류':['재영업 분류'],
+  '우선순위':['우선순위'], '브랜드담당자':['브랜드 담당자'], '연락처':['연락처'],
+  '이메일':['이메일'], '카테고리':['카테고리'], '거래방식':['희망 거래 방식'],
+  '희망채널':['희망 영역','순위 무관 희망 채널'], '핵심메모':['핵심 메모'],
+  '다음행동':['다음 행동'], '참고자료':['참고 링크/자료'], 'Drive주소':['구글 드라이브'],
+  '상품특장점':['상품 특장점'], '대표상품군':['대표 상품군']
+});
+const BO_BRAND_DISPLAY_SCHEMA_CACHE = {};
+
+function notionBrandDisplayIds_() {
+  const sourceId = notionReviewConfig_().brand;
+  if (BO_BRAND_DISPLAY_SCHEMA_CACHE[sourceId]) return BO_BRAND_DISPLAY_SCHEMA_CACHE[sourceId];
+  const source = notionRequest_('get', '/data_sources/' + encodeURIComponent(sourceId));
+  const definitions = Object.keys(source.properties || {}).map(function(name) {
+    return Object.assign({name:name}, source.properties[name]);
+  });
+  const store = PropertiesService.getScriptProperties();
+  let saved = {};
+  try { saved = JSON.parse(store.getProperty('BO_NOTION_BRAND_DISPLAY_PROPERTY_IDS') || '{}'); } catch (ignored) {}
+  const previous = saved[sourceId] || {}, ids = {};
+  Object.keys(BO_BRAND_DISPLAY_FIELDS).forEach(function(key) {
+    const aliases = BO_BRAND_DISPLAY_FIELDS[key];
+    const definition = definitions.find(function(item) { return previous[key] && item.id === previous[key]; }) ||
+      definitions.find(function(item) { return aliases.indexOf(item.name) >= 0; });
+    if (definition) ids[key] = definition.id;
+  });
+  if (!ids['브랜드ID'] || !ids['브랜드명']) throw new Error('Notion 브랜드 ID 또는 브랜드명 속성을 찾지 못했습니다.');
+  if (Object.keys(ids).some(function(key) { return previous[key] !== ids[key]; })) {
+    saved[sourceId] = Object.assign({}, previous, ids);
+    store.setProperty('BO_NOTION_BRAND_DISPLAY_PROPERTY_IDS', JSON.stringify(saved));
+  }
+  BO_BRAND_DISPLAY_SCHEMA_CACHE[sourceId] = ids;
+  return ids;
+}
+
+function notionBrandDisplayRow_(page, ids) {
+  const row = {'원본URL':page.url || '', '노션페이지ID':page.id, '_notionSource':'notion',
+    '수정일':page.last_edited_time || ''};
+  Object.keys(ids).forEach(function(key) { row[key] = notionReviewText_(notionPageProperty_(page, ids[key])); });
+  return row;
+}
 
 function notionReviewEnabled_() {
   if (typeof PropertiesService === 'undefined') return false;
@@ -284,7 +327,8 @@ function getNotionProductDetail(request) {
 
 function notionBrandPage_(brandCode) {
   const brand = findBrandByCode_(String(brandCode || ''));
-  const pageId = String(brandValue_(brand, '노션페이지ID') || '');
+  const legacy = crmAllBrands_().find(function(row) { return row['브랜드ID'] === brandCode; });
+  const pageId = String(brandValue_(brand, '노션페이지ID') || crmId_(legacy && legacy['원본URL']) || '');
   if (!/^[0-9a-f-]{32,36}$/i.test(pageId)) throw new Error('브랜드의 Notion 원본 페이지 연결을 확인해 주세요.');
   const page = notionRequest_('get', '/pages/' + pageId);
   if ((page.parent && (page.parent.data_source_id || page.parent.database_id)) !== notionReviewConfig_().brand)
@@ -299,6 +343,7 @@ function getNotionBrandDetail(request) {
   const source = notionRequest_('get', '/data_sources/' + encodeURIComponent(config.brand));
   const reviewSchema = notionReviewSchema_(config.brand, 'brand');
   const protectedIds = Object.keys(reviewSchema).map(function(key) { return reviewSchema[key]; });
+  protectedIds.push(notionBrandDisplayIds_()['브랜드ID']);
   const definitions = Object.keys(source.properties || {}).map(function(name) { return source.properties[name]; });
   const properties = Object.keys(page.properties || {}).map(function(name) {
     const item = page.properties[name];
@@ -326,6 +371,7 @@ function updateNotionBrand_(request) {
   const source = notionRequest_('get', '/data_sources/' + encodeURIComponent(config.brand));
   const reviewSchema = notionReviewSchema_(config.brand, 'brand');
   const protectedIds = Object.keys(reviewSchema).map(function(key) { return reviewSchema[key]; });
+  protectedIds.push(notionBrandDisplayIds_()['브랜드ID']);
   const definitions = Object.keys(source.properties || {}).map(function(name) { return source.properties[name]; });
   const patch = {}, expected = {}, seen = {};
   changes.forEach(function(change) {

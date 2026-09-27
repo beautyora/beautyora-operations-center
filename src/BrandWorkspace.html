@@ -113,7 +113,22 @@ document.addEventListener('click',function(e){const goEl=e.target.closest('[data
 </script>
 
 <script>
+const crmSheetRender_=crmRender;
+crmRender=function(){
+  crmSheetRender_();
+  const description=document.querySelector('.crm-top p');
+  if(description&&CRM.data?.notionEnabled)description.textContent='브랜드 정보는 Notion 원본에서 확인합니다. 담당자·업무 기록은 운영센터 데이터입니다.';
+};
 const crmSheetProfileView_=crmProfileView;
+const crmSheetDrawerRender_=crmDrawerRender;
+crmDrawerRender=function(){
+  crmSheetDrawerRender_();
+  const status=document.getElementById('crmDirty');
+  if(status&&CRM.detail?.brand.notionSource==='notion')
+    status.innerHTML='<span class="crm-muted">브랜드 정보: Notion 원본</span><span class="crm-muted">운영 업무·상담 기록: 뷰티오라DB</span>';
+  else if(status&&CRM.detail?.brand.notionSource==='unlinked')
+    status.innerHTML='<span class="crm-muted">Notion 원본 미연결 · 시트 정보 표시</span>';
+};
 crmProfileView=function(){
   crmSheetProfileView_();
   if(!CRM.detail?.notionEnabled)return;
@@ -155,7 +170,7 @@ async function crmSaveNotionBrand_(brandCode){
   const button=document.getElementById('crmSaveNotionBrand');button.disabled=true;
   try{
     await server('saveAdminAction','updateNotionBrand',{brandCode,pageId:detail.pageId,lastEditedAt:detail.lastEditedAt,changes});
-    UI.closeModal();UI.toast('Notion 브랜드 정보를 수정했습니다.');
+    UI.closeModal();UI.toast('Notion 브랜드 정보를 수정했습니다.');await crmReloadDetail();
   }catch(e){UI.toast(e.message,true)}finally{if(button.isConnected)button.disabled=false}
 }
 </script>

@@ -11,12 +11,48 @@ function crmId_(url){const m=String(url||'').replace(/-/g,'').match(/[a-f0-9]{32
 function crmSafeCell_(v){const s=String(v==null?'':v);return /^[=+@-]/.test(s)?"'"+s:s;}
 function crmWriteRow_(sheet,row,object){const h=sheet.getRange(1,1,1,sheet.getLastColumn()).getDisplayValues()[0];sheet.getRange(row,1,1,h.length).setValues([h.map(k=>crmSafeCell_(object[k]===undefined?'':object[k]))]);}
 function crmProducts_(){return crmAllProducts_().filter(p=>p.status!=='중지');}
-function crmBrand_(r){return {brandCode:r['브랜드ID'],brandName:r['브랜드명'],companyName:r['회사명'],salesStage:r['영업단계'],reStage:r['재영업단계'],reGroup:r['재영업분류'],priority:r['우선순위'],owner:r['사내담당자'],ownerId:r['담당자ID'],contact:r['브랜드담당자'],phone:r['연락처'],email:r['이메일'],category:crmText_(r['카테고리']),trade:crmText_(r['거래방식']),channels:crmText_(r['희망채널']),memo:r['핵심메모'],nextAction:r['다음행동'],nextDate:crmDate_(r['다음연락일']),lastContact:crmDate_(r['최근연락일']),reference:r['참고자료'],drive:r['Drive주소'],status:r['상태'],version:String(r['버전']||'0'),sourceUrl:r['원본URL'],updatedAt:r['수정일'],features:r['상품특장점'],productGroup:r['대표상품군']};}
+function crmBrand_(r){return {brandCode:r['브랜드ID'],brandName:r['브랜드명'],companyName:r['회사명'],salesStage:r['영업단계'],reStage:r['재영업단계'],reGroup:r['재영업분류'],priority:r['우선순위'],owner:r['사내담당자'],ownerId:r['담당자ID'],contact:r['브랜드담당자'],phone:r['연락처'],email:r['이메일'],category:crmText_(r['카테고리']),trade:crmText_(r['거래방식']),channels:crmText_(r['희망채널']),memo:r['핵심메모'],nextAction:r['다음행동'],nextDate:crmDate_(r['다음연락일']),lastContact:crmDate_(r['최근연락일']),reference:r['참고자료'],drive:r['Drive주소'],status:r['상태'],version:String(r['버전']||'0'),sourceUrl:r['원본URL'],updatedAt:r['수정일'],features:r['상품특장점'],productGroup:r['대표상품군'],notionSource:r._notionSource||'sheet'};}
 function crmAllBrands_(){const rows=crmRows_(BCRM.brands).slice(),ids={};rows.forEach(r=>ids[r['브랜드ID']]=true);crmRows_(BOPS.SHEETS.BRANDS).forEach(r=>{const id=r['브랜드 ID'];if(id&&!ids[id])rows.push({'브랜드ID':id,'브랜드명':r['브랜드명'],'회사명':r['협력사/회사명'],'영업단계':r['진행 단계'],'브랜드담당자':r['브랜드 담당자'],'연락처':r['연락처'],'이메일':r['이메일'],'카테고리':r['카테고리'],'다음행동':r['다음 행동'],'핵심메모':r['핵심 메모'],'참고자료':r['참고 링크/자료'],'원본URL':r['Notion URL'],'상태':'활성','버전':'0'})});return rows.filter(r=>r['브랜드ID']&&r['상태']!=='삭제');}
+function crmLiveBrands_(){
+  const sheetRows=crmAllBrands_();
+  if(!notionReviewEnabled_())return sheetRows;
+  const ids=notionBrandDisplayIds_(),pages=queryAllDataSourcePages_(notionReviewConfig_().brand),used={},seen={},rows=[];
+  pages.forEach(function(page){
+    const source=notionBrandDisplayRow_(page,ids);
+    const pageKey=String(page.id||'').replace(/-/g,'').toLowerCase();
+    const index=sheetRows.findIndex(function(row){return row['브랜드ID']===source['브랜드ID']||crmId_(row['원본URL']).toLowerCase()===pageKey;});
+    if(index>=0)used[index]=true;
+    if(!source['브랜드ID']&&index>=0)source['브랜드ID']=sheetRows[index]['브랜드ID'];
+    if(!source['브랜드ID'])return;
+    if(seen[source['브랜드ID']])throw Error('Notion에 동일한 브랜드 ID가 중복되어 있습니다: '+source['브랜드ID']);
+    seen[source['브랜드ID']]=true;
+    rows.push(Object.assign({},index>=0?sheetRows[index]:{},source));
+  });
+  sheetRows.forEach(function(row,index){if(!used[index])rows.push(Object.assign({},row,{_notionSource:'unlinked'}));});
+  return rows;
+}
+function crmLiveBrand_(code){
+  const sheetRow=crmAllBrands_().find(function(row){return row['브랜드ID']===code;});
+  if(!notionReviewEnabled_())return sheetRow||null;
+  const ids=notionBrandDisplayIds_();
+  const linked=brandValue_(findBrandByCode_(code),'노션페이지ID')||crmId_(sheetRow&&sheetRow['원본URL']);
+  let page=null;
+  if(linked){
+    page=notionRequest_('get','/pages/'+linked);
+    const parent=page.parent&&(page.parent.data_source_id||page.parent.database_id);
+    if(parent!==notionReviewConfig_().brand)throw Error('브랜드의 Notion 원본 연결이 잘못되었습니다.');
+  }else{
+    page=queryAllDataSourcePages_(notionReviewConfig_().brand).find(function(item){
+      return notionReviewText_(notionPageProperty_(item,ids['브랜드ID']))===code;
+    })||null;
+  }
+  return page?Object.assign({},sheetRow||{},notionBrandDisplayRow_(page,ids)):
+    sheetRow?Object.assign({},sheetRow,{_notionSource:'unlinked'}):null;
+}
 function crmActivity_(brandId,archive,notes){const imported=archive.filter(r=>r['브랜드ID']===brandId&&r['구분']==='연락 이력').map(r=>{const p=crmJson_(r['속성JSON']);return {id:r['자료ID'],date:crmDate_(p['date:일자:start']),method:p['연락 방식']||'기록',result:p['결과']||'',owner:crmText_(p['상담 담당자']||''),contact:p['상대방 담당자']||'',content:crmText_(p['통화 내용']||''),nextAction:crmText_(p['다음 행동']||''),due:crmDate_(p['date:후속 확인일:start']),complete:p['후속 완료']==='__YES__',source:'노션 이관',title:r['제목'],body:r['본문'],url:r['원본URL']}});
 const local=notes.filter(r=>r['브랜드ID']===brandId).map(r=>({id:r['기록ID'],date:r['활동일'],method:r['연락방식'],result:r['결과'],owner:r['담당자'],contact:r['상대담당자'],content:r['내용'],nextAction:r['다음행동'],due:r['후속일'],complete:r['완료']==='TRUE',created:r['작성일'],source:'운영센터'}));return local.reverse().concat(imported.sort((a,b)=>String(b.date).localeCompare(String(a.date))));}
 function crmWorkspaceBase_(){assertAdmin_();const products=crmProducts_(),archive=crmRows_(BCRM.archive),notes=crmRows_(BCRM.notes),sub=crmRows_(BOPS.SHEETS.SUBMISSIONS);const rows=crmAllBrands_().map(r=>{const b=crmBrand_(r),pp=products.filter(p=>p.brandCode===b.brandCode),aa=crmActivity_(b.brandCode,archive,notes);b.productCount=pp.length;b.reviewCount=sub.filter(s=>s['브랜드코드']===b.brandCode&&/신규|검수|제출/.test(s['상태'])).length;b.revisionCount=sub.filter(s=>s['브랜드코드']===b.brandCode&&/보완/.test(s['상태'])).length;b.activityCount=aa.length;b.pendingTasks=aa.filter(a=>a.source==='운영센터'&&a.nextAction&&!a.complete).map(a=>({task:a.nextAction,date:a.due}));b.archived=archive.some(a=>a['브랜드ID']===b.brandCode&&a['구분']==='브랜드 본문');const recent=aa.find(a=>a.source==='운영센터'&&a.nextAction&&!a.complete);if(recent){b.nextAction=recent.nextAction;b.nextDate=recent.due}b.recent=aa[0]?{text:aa[0].content||aa[0].title||aa[0].result,date:aa[0].date}:null;const dates=aa.map(a=>a.date).filter(Boolean).sort();if(dates.length)b.lastContact=dates[dates.length-1];return b});return {rows:rows.sort((a,b)=>a.brandCode.localeCompare(b.brandCode)),today:dateOnly_(),user:getCurrentUser_(),archiveCount:archive.length};}
-function crmDetailBase_(code){assertAdmin_();code=String(code||'');const row=crmAllBrands_().find(r=>r['브랜드ID']===code);if(!row)throw Error('브랜드를 찾을 수 없습니다.');const b=crmBrand_(row),archive=crmRows_(BCRM.archive).filter(r=>r['브랜드ID']===code),products=crmProducts_().filter(p=>p.brandCode===code),productIds={};products.forEach(p=>productIds[p.productId]=p.productName);return {brand:b,activities:crmActivity_(code,archive,crmRows_(BCRM.notes)),archive:archive.map(r=>({id:r['자료ID'],type:r['구분'],title:r['제목'],url:r['원본URL'],body:r['본문'],properties:crmJson_(r['속성JSON']),importedAt:r['이관일']})),products:products.map(p=>({id:p.productId,name:crmText_(p.productName),option:p.optionName,barcode:p.barcode,price:p.retailPrice,status:p.reviewStatus||p.status||'자료 수집',category:p.category,trade:p.tradeType})),conditions:crmRows_('가격·공급조건').filter(r=>productIds[r['상품ID']]).map(r=>Object.assign({},r,{'상품명':productIds[r['상품ID']]})),files:crmRows_(BCRM.attachments).filter(r=>r['브랜드ID']===code),link:listBrands_({query:code}).find(x=>x.brandCode===code)?.link||null};}
+function crmDetailBase_(code){assertAdmin_();code=String(code||'');const row=crmLiveBrand_(code);if(!row)throw Error('브랜드를 찾을 수 없습니다.');const b=crmBrand_(row),archive=crmRows_(BCRM.archive).filter(r=>r['브랜드ID']===code),products=crmProducts_().filter(p=>p.brandCode===code),productIds={};products.forEach(p=>productIds[p.productId]=p.productName);return {brand:b,activities:crmActivity_(code,archive,crmRows_(BCRM.notes)),archive:archive.map(r=>({id:r['자료ID'],type:r['구분'],title:r['제목'],url:r['원본URL'],body:r['본문'],properties:crmJson_(r['속성JSON']),importedAt:r['이관일']})),products:products.map(p=>({id:p.productId,name:crmText_(p.productName),option:p.optionName,barcode:p.barcode,price:p.retailPrice,status:p.reviewStatus||p.status||'자료 수집',category:p.category,trade:p.tradeType})),conditions:crmRows_('가격·공급조건').filter(r=>productIds[r['상품ID']]).map(r=>Object.assign({},r,{'상품명':productIds[r['상품ID']]})),files:crmRows_(BCRM.attachments).filter(r=>r['브랜드ID']===code),link:listBrands_({query:code}).find(x=>x.brandCode===code)?.link||null};}
 function crmValidateDate_(s){if(s&&!/^\d{4}-\d{2}-\d{2}$/.test(s))throw Error('날짜 형식을 확인해 주세요.');if(s){const d=new Date(s+'T00:00:00Z');if(isNaN(d)||d.toISOString().slice(0,10)!==s)throw Error('유효한 날짜를 입력해 주세요.');}return s;}
 function crmPatchBase_(payload){const map={brandName:'브랜드명',companyName:'회사명',salesStage:'영업단계',reStage:'재영업단계',priority:'우선순위',owner:'사내담당자',contact:'브랜드담당자',phone:'연락처',email:'이메일',category:'카테고리',trade:'거래방식',channels:'희망채널',memo:'핵심메모',nextAction:'다음행동',nextDate:'다음연락일',reference:'참고자료'};const patch={};Object.keys(map).forEach(k=>{if(Object.prototype.hasOwnProperty.call(payload,k)){const s=String(payload[k]??'').trim();if(s.length>12000)throw Error('입력 내용이 너무 깁니다: '+map[k]);patch[map[k]]=s;}});if('브랜드명'in patch&&!patch['브랜드명'])throw Error('브랜드명은 필수입니다.');if('다음연락일'in patch)crmValidateDate_(patch['다음연락일']);return patch;}
 function saveBrandProfile(payload){assertAdmin_();if(notionReviewEnabled_()&&brandValue_(findBrandByCode_(payload.brandCode),'노션페이지ID')){const notionFields=['brandName','companyName','salesStage','reStage','priority','owner','contact','phone','email','category','trade','channels','memo','nextAction','nextDate','reference'];if(notionFields.some(k=>Object.prototype.hasOwnProperty.call(payload,k)))throw Error('브랜드 원본 정보는 Notion 브랜드 수정 화면에서 저장해 주세요.');}return withLock_(function(){const rows=crmAllBrands_(),r=rows.find(x=>x['브랜드ID']===payload.brandCode);if(!r)throw Error('브랜드를 찾을 수 없습니다.');if(String(r['버전']||'0')!==String(payload.version))throw Error('다른 사용자가 먼저 수정했습니다. 상세를 다시 열고 변경사항을 확인해 주세요.');const patch=crmPatch_(payload),keys=Object.keys(patch),changed=keys.some(k=>String(r[k]||'')!==patch[k]);if(!changed)return {ok:true,changed:false};Object.assign(r,patch,{'수정일':now_(),'수정자':getActiveUserEmail_(),'버전':String(Number(r['버전']||0)+1)});const sh=getSheet_(BCRM.brands);crmWriteRow_(sh,r._row||sh.getLastRow()+1,r);logAction_('브랜드 수정','브랜드',payload.brandCode,keys.join(', '));return {ok:true,changed:true};});}
@@ -32,7 +68,7 @@ function crmInventory_(products,placeRows){products=products||crmAllProducts_();
 function getBrandWorkspace(){return crmReadScope_(crmWorkspaceRead_);}
 function crmWorkspaceRead_(){
   assertAdmin_();
-  const products=crmProducts_(),archive=crmRows_(BCRM.archive),notes=crmRows_(BCRM.notes),sub=crmRows_(BOPS.SHEETS.SUBMISSIONS),brands=crmAllBrands_();
+  const products=crmProducts_(),archive=crmRows_(BCRM.archive),notes=crmRows_(BCRM.notes),sub=crmRows_(BOPS.SHEETS.SUBMISSIONS),brands=crmLiveBrands_();
   const byBrand=(rows,key)=>rows.reduce((map,row)=>{const id=String(row[key]||'');(map[id]||(map[id]=[])).push(row);return map;},{});
   const productByBrand=products.reduce((map,p)=>{(map[p.brandCode]||(map[p.brandCode]=[])).push(p);return map;},{});
   const archiveByBrand=byBrand(archive,'브랜드ID'),notesByBrand=byBrand(notes,'브랜드ID'),subByBrand=byBrand(sub,'브랜드코드');
@@ -50,7 +86,7 @@ function crmWorkspaceRead_(){
     b.fileCount=staffFileCountByBrand[code]||0;b.barcodeMissing=pp.filter(p=>!p.barcode).length;b.productCount=pp.length;b.reviewCount=ss.filter(s=>/신규|검수|제출/.test(s['상태'])).length;b.revisionCount=ss.filter(s=>/보완/.test(s['상태'])).length;b.activityCount=aa.length;
     b.pendingTasks=aa.filter(a=>a.source==='운영센터'&&a.nextAction&&!a.complete).map(a=>({task:a.nextAction,date:a.due}));
     b.archived=(archiveByBrand[code]||[]).some(a=>a['구분']==='브랜드 본문');
-    const recent=aa.find(a=>a.source==='운영센터'&&a.nextAction&&!a.complete);if(recent){b.nextAction=recent.nextAction;b.nextDate=recent.due;}
+    const recent=aa.find(a=>a.source==='운영센터'&&a.nextAction&&!a.complete);if(recent&&b.notionSource!=='notion'){b.nextAction=recent.nextAction;b.nextDate=recent.due;}
     b.recent=aa[0]?{text:aa[0].content||aa[0].title||aa[0].result,date:aa[0].date}:null;
     const dates=aa.map(a=>a.date).filter(Boolean).sort();if(dates.length)b.lastContact=dates[dates.length-1];
     crmEnhance_(b,r);
@@ -59,7 +95,7 @@ function crmWorkspaceRead_(){
     const cover=pp.find(p=>p.mainImageUrl);b.cover=cover?cover.mainImageUrl:'';
     return b;
   }).sort((a,b)=>a.brandCode.localeCompare(b.brandCode));
-  return {rows,today:dateOnly_(),user:getCurrentUser_(),archiveCount:archive.length,stages:CRM_STAGES,inventoryUpdated};
+  return {rows,today:dateOnly_(),user:getCurrentUser_(),archiveCount:archive.length,stages:CRM_STAGES,inventoryUpdated,notionEnabled:notionReviewEnabled_()};
 }
 function getBrandDetail(code){return crmReadScope_(()=>crmDetailRead_(code));}
 function crmDetailRead_(code){assertAdmin_();const d=crmDetailBase_(code),r=crmAllBrands_().find(r=>r['브랜드ID']===code)||{};crmEnhance_(d.brand,r);const pp=crmProducts_().filter(p=>p.brandCode===code);d.products.forEach(p=>{const full=pp.find(x=>x.productId===p.id);p.image=full?.mainImageUrl||'';p.url=full?.productUrl||full?.detailPageUrl||'';p.purchase=full?.purchasePrice||'';});d.stock=opsStock_(code);d.submitted=opsSources_(code);d.issues=opsRows_('자료 확인사항').filter(r=>r['브랜드코드']===code&&r['상태']!=='완료');d.files=d.files.concat(opsFiles_(code));const ids={};crmAllProducts_().filter(p=>p.brandCode===code).forEach(p=>ids[p.productId]=true);d.movements=crmRows_('재고거래').filter(r=>ids[r['상품ID']]);d.terms=crmRows_('거래조건 관리').filter(r=>r['브랜드ID']===code).reverse();d.stages=CRM_STAGES;d.samples=CRM_SAMPLES;return d;}
@@ -80,9 +116,9 @@ function saveSimpleMovement(p){assertAdmin_();return withLock_(function(){if(!/^
 
 // Read scopes last for one request only; writes never reuse cached stock or versions.
 function getBrandOverview(code){return crmReadScope_(function(){
- code=String(code||'');const row=crmAllBrands_().find(r=>r['브랜드ID']===code);if(!row)throw Error('브랜드를 찾을 수 없습니다.');
+ code=String(code||'');const row=crmLiveBrand_(code);if(!row)throw Error('브랜드를 찾을 수 없습니다.');
  const archive=crmRows_(BCRM.archive).filter(r=>r['브랜드ID']===code);
- return {brand:crmEnhance_(crmBrand_(row),row),notionEnabled:notionReviewEnabled_()&&!!brandValue_(findBrandByCode_(code),'노션페이지ID'),activities:crmActivity_(code,archive,crmRows_(BCRM.notes)),issues:crmRows_('자료 확인사항').filter(r=>r['브랜드코드']===code&&r['상태']!=='완료'),products:[],files:[],archive:[],conditions:[],stock:[],movements:[],terms:[],submitted:[],link:listBrands_({query:code}).find(x=>x.brandCode===code)?.link||null,stages:CRM_STAGES,samples:CRM_SAMPLES};
+ return {brand:crmEnhance_(crmBrand_(row),row),notionEnabled:row._notionSource==='notion',activities:crmActivity_(code,archive,crmRows_(BCRM.notes)),issues:crmRows_('자료 확인사항').filter(r=>r['브랜드코드']===code&&r['상태']!=='완료'),products:[],files:[],archive:[],conditions:[],stock:[],movements:[],terms:[],submitted:[],link:listBrands_({query:code}).find(x=>x.brandCode===code)?.link||null,stages:CRM_STAGES,samples:CRM_SAMPLES};
 });}
 function crmProductCards_(products){return products.map(p=>({id:p.productId,name:crmText_(p.productName),option:p.optionName,barcode:p.barcode,price:p.retailPrice,status:p.reviewStatus||p.status||'자료 수집',category:p.category,trade:p.tradeType,image:p.mainImageUrl||'',url:p.productUrl||p.detailPageUrl||'',purchase:p.purchasePrice||''}));}
 function getBrandTab(code,tab){return crmReadScope_(function(){

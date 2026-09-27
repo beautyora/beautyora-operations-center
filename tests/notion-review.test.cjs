@@ -22,6 +22,8 @@ const ctx = vm.createContext({
   findOne_: (name,key,value)=>fileRows.find(row=>row[key]===value),
   findBrandByCode_: ()=>({'노션페이지ID':brandPageId}),
   brandValue_: (row,key)=>key==='노션페이지ID'?row['노션페이지ID']:'',
+  crmAllBrands_: ()=>[{'브랜드ID':'BRAND-1','브랜드명':'시트의 오래된 이름','원본URL':''}],
+  queryAllDataSourcePages_: ()=>Object.values(pages).filter(page=>page.parent?.data_source_id==='brand-source'),
   listProducts_: ()=>[],
   getSheet_: ()=>({getLastColumn:()=>11,getRange:()=>({getDisplayValues:()=>[['파일ID','브랜드코드','상품ID','분류','파일명','Drive파일ID','DriveURL','업로드일','상태','검수메모','검수일']]})}),
   updateObjectRow_: (name,index,patch)=>Object.assign(fileRows[index-2],patch),
@@ -109,14 +111,21 @@ console.log('PASS internal product edits write Notion, verify results, and rejec
 
 brandPageId='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 schemas['brand-source']['브랜드명']={id:'brandName',name:'브랜드명',type:'title'};
+schemas['brand-source']['브랜드 ID']={id:'brandCode',name:'브랜드 ID',type:'rich_text'};
 pages[brandPageId]={id:brandPageId,url:'https://notion.so/'+brandPageId,
   parent:{data_source_id:'brand-source'},last_edited_time:'rev-1',properties:{
     '브랜드명':{id:'brandName',type:'title',title:[{plain_text:'기존 브랜드'}]},
+    '브랜드 ID':{id:'brandCode',type:'rich_text',rich_text:[{plain_text:'BRAND-1'}]},
     '사업자등록증 Drive URL':{id:'business',type:'url',url:null}
   }};
 const brandDetail=ctx.getNotionBrandDetail({brandCode:'BRAND-1'});
 assert.equal(brandDetail.properties.find(p=>p.id==='brandName').editable,true);
 assert.equal(brandDetail.properties.find(p=>p.id==='business').editable,false);
+assert.equal(brandDetail.properties.find(p=>p.id==='brandCode').editable,false);
+schemas['brand-source']['바뀐 브랜드 제목']=schemas['brand-source']['브랜드명'];
+delete schemas['brand-source']['브랜드명'];
+vm.runInContext('delete BO_BRAND_DISPLAY_SCHEMA_CACHE["brand-source"]',ctx);
+assert.equal(ctx.notionBrandDisplayIds_()['브랜드명'],'brandName');
 ctx.updateNotionBrand_({brandCode:'BRAND-1',pageId:brandPageId,lastEditedAt:'rev-1',changes:[
   {id:'brandName',value:'수정된 브랜드'}
 ]});
@@ -124,4 +133,20 @@ assert.equal(pages[brandPageId].properties.brandName.title[0].text.content,'수�
 assert.throws(()=>ctx.updateNotionBrand_({brandCode:'BRAND-1',pageId:brandPageId,lastEditedAt:'rev-2',changes:[
   {id:'business',value:'https://drive.google.com/file/d/cert/view'}
 ]}),/수정할 수 없는/);
+assert.throws(()=>ctx.updateNotionBrand_({brandCode:'BRAND-1',pageId:brandPageId,lastEditedAt:'rev-2',changes:[
+  {id:'brandCode',value:'BRAND-2'}
+]}),/수정할 수 없는/);
 console.log('PASS internal brand edits write Notion and protected document links stay review-only');
+
+const workspaceSource=fs.readFileSync(path.join(__dirname,'..','src','BO_BrandWorkspace.gs'),'utf8');
+vm.runInContext(workspaceSource,ctx);
+const sheetBrand={'브랜드ID':'BRAND-1','브랜드명':'시트의 오래된 이름','원본URL':'',
+  '사내담당자':'내부 담당자','매입전환상태':'전환 확인 전'};
+ctx.crmAllBrands_=()=>[sheetBrand];
+const listed=ctx.crmLiveBrands_();
+assert.equal(listed[0]['브랜드명'],'수정된 브랜드');
+assert.equal(listed[0]['사내담당자'],'내부 담당자');
+assert.equal(listed[0]._notionSource,'notion');
+assert.equal(ctx.crmLiveBrand_('BRAND-1')['브랜드명'],'수정된 브랜드');
+assert.equal(sheetBrand['브랜드명'],'시트의 오래된 이름');
+console.log('PASS brand list and detail read Notion while internal workflow fields stay in Sheets');
