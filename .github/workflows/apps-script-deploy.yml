@@ -47,6 +47,7 @@ jobs:
         run: |
           node tests/optimization.test.cjs
           node tests/performance-regression.test.cjs
+          node tests/partner-center.test.cjs
 
       - name: 배포 환경 선택
         shell: bash
