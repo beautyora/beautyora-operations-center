@@ -1,11 +1,8 @@
 function getDb_() {
   const props = PropertiesService.getScriptProperties();
   const id = props.getProperty(BOPS.PROPS.SPREADSHEET_ID);
-  if (id) return SpreadsheetApp.openById(id);
-  const active = SpreadsheetApp.getActiveSpreadsheet();
-  if (!active) throw new Error('관리 시트가 연결되지 않았습니다. 시트에서 초기 설정을 실행해 주세요.');
-  props.setProperty(BOPS.PROPS.SPREADSHEET_ID, active.getId());
-  return active;
+  if (!id) throw new Error('BO_SPREADSHEET_ID가 설정되지 않았습니다. 대상 환경의 DB ID를 스크립트 속성에 먼저 설정해 주세요.');
+  return SpreadsheetApp.openById(id);
 }
 
 function getSheet_(name) {
@@ -108,3 +105,5 @@ function resolveAlert_(alertId) {
   updateObjectRow_(BOPS.SHEETS.ALERTS, row._row, { '상태': '해결', '해결일': now_() });
   return { ok: true };
 }
+
+
