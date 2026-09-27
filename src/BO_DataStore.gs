@@ -1,4 +1,5 @@
 let BO_DB_CACHE_ = null;
+let BO_READ_VALUES_CACHE_ = null;
 
 function getDb_() {
   const props = PropertiesService.getScriptProperties();
@@ -16,9 +17,22 @@ function getSheet_(name) {
   return sheet;
 }
 
-function sheetObjects_(name) {
-  const sheet = getSheet_(name);
+function sheetDisplayValues_(name, optional) {
+  if (BO_READ_VALUES_CACHE_ && Object.prototype.hasOwnProperty.call(BO_READ_VALUES_CACHE_, name)) {
+    return BO_READ_VALUES_CACHE_[name];
+  }
+  const sheet = getDb_().getSheetByName(name);
+  if (!sheet) {
+    if (optional) return null;
+    throw new Error('필수 시트가 없습니다: ' + name);
+  }
   const values = sheet.getDataRange().getDisplayValues();
+  if (BO_READ_VALUES_CACHE_) BO_READ_VALUES_CACHE_[name] = values;
+  return values;
+}
+
+function sheetObjects_(name) {
+  const values = sheetDisplayValues_(name);
   if (values.length < 2) return [];
   const headers = values[0];
   return values.slice(1).filter(row => row.some(Boolean)).map((row, index) => {
