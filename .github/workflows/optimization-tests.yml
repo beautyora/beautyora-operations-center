@@ -19,3 +19,4 @@ jobs:
           node-version: '22'
       - run: node tests/optimization.test.cjs
       - run: node tests/performance-regression.test.cjs
+      - run: node tests/partner-center.test.cjs

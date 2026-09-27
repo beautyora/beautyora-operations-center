@@ -47,6 +47,7 @@ jobs:
         run: |
           node tests/optimization.test.cjs
           node tests/performance-regression.test.cjs
+          node tests/partner-center.test.cjs
 
       - name: 배포 환경 선택
         shell: bash
@@ -95,6 +96,18 @@ jobs:
           npx --yes @google/clasp@3 create-deployment \
             --deploymentId "$DEPLOYMENT_ID" \
             --description "$DEPLOY_DESCRIPTION"
+
+      - name: 브랜드용 상품등록센터도 갱신
+        if: inputs.target == 'production'
+        env:
+          DEPLOY_DESCRIPTION: ${{ inputs.description }}
+          # Public deployment identifier, not a credential. This existing endpoint
+          # runs as the owner; updating its version preserves its access settings.
+          PARTNER_DEPLOYMENT_ID: AKfycbwWlj4WX95rewTS0gGKL2ne_qQErbrNB-9tR-pTPoy4oyZEIE4EW3BuZSQa3gMfbNOc
+        run: |
+          npx --yes @google/clasp@3 create-deployment \
+            --deploymentId "$PARTNER_DEPLOYMENT_ID" \
+            --description "$DEPLOY_DESCRIPTION - 상품등록센터"
 
       - name: 결과
         run: |

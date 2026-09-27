@@ -1,14 +1,33 @@
  /** Brand partner experience v2. Existing endpoints remain compatible. */
 function uploadPartnerAsset(request) {
+  return uploadPartnerFileV2_(request, false);
+}
+
+function uploadPartnerDocument(request) {
+  return uploadPartnerFileV2_(request, true);
+}
+
+function getPartnerDocuments(request) {
+  const context = validatePartnerToken_(request.token);
+  const code = brandValue_(context.brand, '브랜드코드');
+  const files = safeObjects_(BOPS.SHEETS.FILES).filter(f => f['브랜드코드'] === code && !f['상품ID']).map(f => ({
+    name:f['파일명'], category:f['분류'], url:f['DriveURL'], createdAt:String(f['업로드일'] || '')
+  })).reverse();
+  return {ok:true, files:files};
+}
+
+function uploadPartnerFileV2_(request, document) {
   const context = validatePartnerToken_(request.token);
   const brandCode = brandValue_(context.brand, '브랜드코드');
-  if (!/^[a-zA-Z0-9-]{8,80}$/.test(request.uploadId || '') || !/^[a-zA-Z0-9-]{8,80}$/.test(request.productId || '')) throw new Error('파일 연결 정보가 올바르지 않습니다.');
+  const productId = document ? '' : request.productId;
+  if (!/^[a-zA-Z0-9-]{8,80}$/.test(request.uploadId || '') || (!document && !/^[a-zA-Z0-9-]{8,80}$/.test(productId || ''))) throw new Error('파일 연결 정보가 올바르지 않습니다.');
   const category = request.category;
-  if (!['대표 이미지','추가 이미지','상세페이지','기타'].includes(category)) throw new Error('파일 분류를 확인해 주세요.');
+  const categories = document ? ['브랜드 소개서','사업자등록증','계약서','기타 브랜드 자료'] : ['대표 이미지','추가 이미지','상세페이지','기타'];
+  if (!categories.includes(category)) throw new Error('파일 분류를 확인해 주세요.');
   const id = 'FILE-' + request.uploadId;
   const previous = findOne_(BOPS.SHEETS.FILES, '파일ID', id);
   if (previous) {
-    if (previous['브랜드코드'] !== brandCode || previous['상품ID'] !== request.productId || previous['분류'] !== category) throw new Error('파일 연결 정보를 확인해 주세요.');
+    if (previous['브랜드코드'] !== brandCode || previous['상품ID'] !== productId || previous['분류'] !== category) throw new Error('파일 연결 정보를 확인해 주세요.');
     return {ok:true,id:id,url:previous['DriveURL'],name:previous['파일명'],category:category};
   }
   const allowed = {'image/jpeg':['jpg','jpeg'],'image/png':['png'],'image/webp':['webp'],'application/pdf':['pdf']};
@@ -20,8 +39,8 @@ function uploadPartnerAsset(request) {
   if (!bytes.length || bytes.length > BOPS.MAX_UPLOAD_BYTES) throw new Error('빈 파일이거나 8MB를 초과했습니다.');
 
   // Drive 전송은 잠금 밖에서 처리해 서로 다른 파일을 동시에 저장할 수 있게 한다.
-  const folder = withLock_(function () { return getProductAssetFolder_(context.brand, request.productId); });
-  const fileName = sanitizeFileName_(request.productId + '_' + category + '_' + request.uploadId + '_' + request.fileName);
+  const folder = withLock_(function () { return document ? getBrandDocumentFolder_(context.brand) : getProductAssetFolder_(context.brand, productId); });
+  const fileName = sanitizeFileName_((productId || brandCode) + '_' + category + '_' + request.uploadId + '_' + request.fileName);
   const matches = folder.getFilesByName(fileName);
   const file = matches.hasNext() ? matches.next() : folder.createFile(Utilities.newBlob(bytes, request.mimeType, fileName));
 
@@ -29,11 +48,11 @@ function uploadPartnerAsset(request) {
   return withLock_(function () {
     const current = findOne_(BOPS.SHEETS.FILES, '파일ID', id);
     if (current) {
-      if (current['브랜드코드'] !== brandCode || current['상품ID'] !== request.productId || current['분류'] !== category) throw new Error('파일 연결 정보를 확인해 주세요.');
+      if (current['브랜드코드'] !== brandCode || current['상품ID'] !== productId || current['분류'] !== category) throw new Error('파일 연결 정보를 확인해 주세요.');
       return {ok:true,id:id,url:current['DriveURL'],name:current['파일명'],category:category};
     }
-    appendObject_(BOPS.SHEETS.FILES, {'파일ID':id,'브랜드코드':brandCode,'상품ID':request.productId,'분류':category,'파일명':file.getName(),'Drive파일ID':file.getId(),'DriveURL':file.getUrl(),'업로드일':now_(),'상태':'수령 완료'});
-    logAction_('상품 첨부 업로드','브랜드',brandCode,file.getName());
+    appendObject_(BOPS.SHEETS.FILES, {'파일ID':id,'브랜드코드':brandCode,'상품ID':productId,'분류':category,'파일명':file.getName(),'Drive파일ID':file.getId(),'DriveURL':file.getUrl(),'업로드일':now_(),'상태':'수령 완료'});
+    logAction_(document ? '브랜드 자료 업로드' : '상품 첨부 업로드','브랜드',brandCode,file.getName());
     return {ok:true,id:id,url:file.getUrl(),name:file.getName(),category:category};
   });
 }
