@@ -6,9 +6,9 @@ const source = name => fs.readFileSync(path.join(__dirname, '..', 'src', name), 
 function ui(server, storage={setItem(){},getItem:()=>null}) {
   const elements = new Map();
   const element = id => { if (!elements.has(id)) elements.set(id, {innerHTML:'',textContent:'',querySelectorAll:()=>[],classList:{toggle(){}},setAttribute(){},remove(){}}); return elements.get(id); };
-  const context = vm.createContext({console,crypto:{randomUUID:require('node:crypto').randomUUID},Map,Set,URL:{revokeObjectURL(){},createObjectURL:()=> 'blob:test'},window:{addEventListener(){},scrollTo(){}},document:{getElementById:element},localStorage:storage,State:{token:'test-token',bootstrap:{brand:{brandName:'Test'},fields:[{id:'product_name',label:'상품명',required:true,type:'text',active:true},{id:'retail_price',label:'소비자가',required:true,type:'number',active:true}],submissions:[]}},$:element,$$:()=>[],esc:v=>String(v??''),UI:{toast(){},status:s=>s},renderPartner:()=>{},server,fileBase64:async()=> 'aGVsbG8='});
+  const context = vm.createContext({console,setInterval(){},crypto:{randomUUID:require('node:crypto').randomUUID},Map,Set,URL:class extends URL{static revokeObjectURL(){}static createObjectURL(){return 'blob:test'}},window:{addEventListener(){},scrollTo(){}},document:{getElementById:element},localStorage:storage,State:{token:'test-token',bootstrap:{brand:{brandName:'Test'},fields:[{id:'product_name',label:'상품명',required:true,type:'text',active:true},{id:'retail_price',label:'소비자가',required:true,type:'number',active:true}],submissions:[]}},$:element,$$:()=>[],esc:v=>String(v??''),UI:{toast(){},status:s=>s},renderPartner:()=>{},server,fileBase64:async()=> 'aGVsbG8='});
   const script = source('PartnerExperience.html').match(/<script>([\s\S]*?)<\/script>/)[1];
-  vm.runInContext(script.replace('})();','globalThis.test={P,makeProduct,productIssues,submit,onAction,addFiles,uploadAll,catalogCards,catalogPanel,submissionsPanel,productList,editorShell};})();'),context);
+  vm.runInContext(script.replace('})();','globalThis.test={P,makeProduct,productIssues,submit,onAction,addFiles,uploadAll,catalogCards,catalogPanel,submissionsPanel,productList,editorShell,refreshSchema,imageUrl,assetPanel};})();'),context);
   context.test.P.draft={requestId:'request-original',products:[]};
   return context;
 }
@@ -16,6 +16,13 @@ const plain = x => JSON.parse(JSON.stringify(x));
 async function main(){
   // HtmlService의 script 삽입 과정은 템플릿 문자열 안의 원시 URL을 잘라낼 수 있다.
   assert.doesNotMatch(source('PartnerExperience.html'),/https:\/\//);
+  const live=ui(async()=>({ok:true,version:'new',fields:[{id:'product_name',label:'상품명',type:'text',required:true,active:true},{id:'category',label:'새 카테고리',type:'select',required:true,active:true,options:'스킨케어'}]}));
+  live.State.bootstrap.notionReviewEnabled=true;live.State.bootstrap.fieldVersion='old';
+  const lp=live.test.makeProduct({product_name:'작성 중인 상품',reference_url:''});live.test.P.draft.products=[lp];live.test.P.selected.add(lp.id);
+  await live.test.submit();assert.match(live.test.P.errors.join(' '),/새 카테고리/);assert.equal(lp.data.product_name,'작성 중인 상품');
+  assert.equal(live.test.imageUrl('https://drive.google.com/drive/folders/folder'),'');
+  assert.equal(live.test.imageUrl('https://drive.google.com/file/d/image/view'),'https://drive.google.com/thumbnail?id=image&sz=w320');
+  console.log('PASS latest form validation preserves drafts and folder links never render as images');
   let sent;
   const c=ui(async(name,r)=>{if(name==='submitPartnerDraft'){sent=plain(r);return {ok:true,count:r.products.length};}return {ok:true,...c.State.bootstrap};});
   const {P,makeProduct,productIssues}=c.test;

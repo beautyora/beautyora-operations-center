@@ -1,12 +1,12 @@
 function getAdminDashboard_() {
   const brands = safeObjects_(BOPS.SHEETS.BRANDS);
   const intake = safeObjects_(BOPS.SHEETS.INTAKE);
-  const submissions = safeObjects_(BOPS.SHEETS.SUBMISSIONS);
+  const submissions = latestSubmissionRows_(safeObjects_(BOPS.SHEETS.SUBMISSIONS));
   const files = safeObjects_(BOPS.SHEETS.FILES);
   const alerts = safeObjects_(BOPS.SHEETS.ALERTS).filter(row => row['상태'] !== '해결');
   const counts = {
     newBrands: intake.filter(row => /검토 대기|중복 의심|신규|미검토|접수/.test(row['등록 상태'] || row['상태'] || row['검토상태'] || '')).length,
-    submissions: submissions.filter(row => row['상태'] === BOPS.STATUS.SUBMITTED).length,
+    submissions: submissions.filter(row => [BOPS.STATUS.SUBMITTED,BOPS.STATUS.REVIEWING].includes(row['상태'])).length,
     revisions: submissions.filter(row => row['상태'] === BOPS.STATUS.REVISION).length,
     missingFiles: files.filter(row => row['상태'] === '누락' || (!row['상품ID'] && row['상태'] === '검수 대기')).length,
     errors: alerts.filter(row => /오류|긴급/.test(row['등급'])).length
@@ -46,6 +46,11 @@ function listBrands_(params) {
 }
 
 function listProducts_(params) {
+  if (typeof notionReviewEnabled_ === 'function' && notionReviewEnabled_()) return notionCatalog_(params);
+  return listLegacyProducts_(params);
+}
+
+function listLegacyProducts_(params) {
   params = params || {};
   const brandCode = String(params.brandCode || '').trim();
   const query = String(params.query || '').trim().toLowerCase();
@@ -227,12 +232,7 @@ function listSubmissions_(params) {
   const status = params.status || '';
   const brands = safeObjects_(BOPS.SHEETS.BRANDS);
   const rows = safeObjects_(BOPS.SHEETS.SUBMISSIONS);
-  const latestByProduct = {};
-  rows.forEach(function(row) {
-    const key = String(row['상품ID'] || row['제출ID'] || '').trim();
-    if (key) latestByProduct[key] = row;
-  });
-  return Object.keys(latestByProduct).map(function(key) { return latestByProduct[key]; }).filter(function(row) {
+  return latestSubmissionRows_(rows).filter(function(row) {
     return !status || row['상태'] === status;
   }).map(function(row) {
     const brand = brands.find(function(item) { return item['브랜드코드'] === row['브랜드코드']; }) || {};
@@ -242,7 +242,7 @@ function listSubmissions_(params) {
     const source = sourceId ? rows.find(function(item) { return item['제출ID'] === sourceId; }) : null;
     let baseData = {};
     if (source) try { baseData = JSON.parse(source['상품데이터JSON'] || '{}'); } catch (ignored) {}
-    const isChangeRequest = data._change_request === true || !!sourceId;
+    const isChangeRequest = data._change_request === true;
     return {
       submissionId: row['제출ID'], productId: row['상품ID'], brandCode: row['브랜드코드'], brandName: brand['브랜드명'] || '',
       status: row['상태'], submittedAt: row['제출일'], updatedAt: row['수정일'], reviewNote: row['검수메모'], data: data,
@@ -301,13 +301,14 @@ function reviewSubmission_(payload) {
     const action = payload.action;
     if (!['approve','revision','reject'].includes(action)) throw new Error('검수 작업을 확인해 주세요.');
     if (submission['상태'] === BOPS.STATUS.APPROVED && action === 'approve') return {ok:true,status:BOPS.STATUS.APPROVED};
+    const latest = latestSubmissionRows_(safeObjects_(BOPS.SHEETS.SUBMISSIONS)).find(function(row){return row['상품ID']===submission['상품ID']&&row['브랜드코드']===submission['브랜드코드'];});
+    if (!latest || latest['제출ID']!==submission['제출ID']) throw Error('새 제출 건이 있습니다. 최신 제출 내용을 검수해 주세요.');
     const nextStatus = action === 'approve' ? BOPS.STATUS.APPROVED : action === 'revision' ? BOPS.STATUS.REVISION : BOPS.STATUS.REJECTED;
     const reviewNote = action === 'approve' ? '' : (payload.note || '');
     if (action !== 'approve' && !String(reviewNote).trim()) throw new Error('보완·반려 사유를 입력해 주세요.');
     if (action === 'approve') {
       if (typeof notionReviewEnabled_ === 'function' && notionReviewEnabled_()) approveProductInNotion_(submission);
-      // The sheet is a compatibility projection for existing partner pages.
-      upsertMasterProduct_(submission);
+      if (!(typeof notionReviewEnabled_ === 'function' && notionReviewEnabled_())) upsertMasterProduct_(submission);
     } else {
       if (typeof notionReviewEnabled_ === 'function' && notionReviewEnabled_()) markNewProductReviewInNotion_(submission, nextStatus);
     }
