@@ -28,10 +28,14 @@ function safeObjects_(name) {
 function listBrands_(params) {
   const query = String(params.query || '').toLowerCase();
   const links = safeObjects_(BOPS.SHEETS.LINKS);
+  const activeLinkByBrand = Object.create(null);
+  links.forEach(item => {
+    if (item['상태'] === '사용 중' && item['브랜드코드']) activeLinkByBrand[item['브랜드코드']] = item;
+  });
   return safeObjects_(BOPS.SHEETS.BRANDS).filter(row => {
     return !query || [brandValue_(row, '브랜드코드'), brandValue_(row, '회사명'), brandValue_(row, '브랜드명'), brandValue_(row, '담당자')].join(' ').toLowerCase().includes(query);
   }).map(row => {
-    const link = links.slice().reverse().find(item => item['브랜드코드'] === brandValue_(row, '브랜드코드') && item['상태'] === '사용 중');
+    const link = activeLinkByBrand[brandValue_(row, '브랜드코드')];
     return {
       brandCode: brandValue_(row, '브랜드코드'), companyName: brandValue_(row, '회사명'), brandName: brandValue_(row, '브랜드명'),
       salesStage: brandValue_(row, '영업단계'), manager: brandValue_(row, '담당자'), lastContact: brandValue_(row, '최근연락일'), nextContact: brandValue_(row, '다음연락일'),
@@ -510,3 +514,5 @@ function testProductUpdateNoChange() {
   console.log('상품 수정 무변경 점검: ' + JSON.stringify({ok: result.ok, changed: result.changed}));
   return result;
 }
+
+
