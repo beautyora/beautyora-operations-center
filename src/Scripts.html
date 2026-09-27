@@ -114,7 +114,7 @@ function renderProducts(data){
   }
   renderSubmissionList(submissions);
  };
- $('[data-product-view]').forEach(btn=>btn.addEventListener('click',()=>show(btn.dataset.productView)));const initial=State.productInitialView==='review'?'review':State.notionEnabled?'notion':'master';State.productInitialView='';show(initial);
+ $$('[data-product-view]').forEach(btn=>btn.addEventListener('click',()=>show(btn.dataset.productView)));const initial=State.productInitialView==='review'?'review':State.notionEnabled?'notion':'master';State.productInitialView='';show(initial);
 }
 async function renderNotionProductList_(){
  const workspace=$('#productWorkspace');
