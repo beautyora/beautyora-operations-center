@@ -66,6 +66,7 @@ function saveAdminAction(action, payload) {
     case 'disablePartnerLink': return setPartnerLinkStatus_(payload.token, '중지');
     case 'reviewSubmission': return reviewSubmission_(payload);
     case 'reviewBrandDocument': return reviewBrandDocument_(payload);
+    case 'updateNotionProduct': return updateNotionProduct_(payload);
     case 'updateProduct':
       if (PropertiesService.getScriptProperties().getProperty('BO_NOTION_PRODUCT_DATA_SOURCE_ID')) throw new Error('Notion 상품이 원본입니다. 상품 정보를 Notion에서 수정하거나 브랜드 변경 요청을 검수해 주세요.');
       return updateProduct_(payload);
@@ -103,4 +104,5 @@ function friendlyError_(error) {
   const message = error && error.message ? error.message : String(error || '알 수 없는 오류');
   return message.replace(/^Exception:\s*/, '');
 }
+
 

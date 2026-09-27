@@ -97,7 +97,7 @@ function renderProducts(data){
  State.notionEnabled=!!(data&&data.notionEnabled);
  const cachedReview=State.sectionCache.productSubmissions;
  let submissions=cachedReview&&Date.now()-cachedReview.at<State.cacheTtl?cachedReview.data:null;
- $('#content').innerHTML=`<section class="panel"><div class="section-tabs">${State.notionEnabled?'<button data-product-view="notion">Notion 상품 조회</button>':''}<button data-product-view="master">기존 시트 목록</button><button data-product-view="review">검수 대기 <span id="reviewCount" class="subtle">${submissions?submissions.filter(s=>s.status!=='승인 완료').length:'·'}</span></button></div><div id="productWorkspace"></div></section>`;
+ $('#content').innerHTML=`<section class="panel"><div class="section-tabs">${State.notionEnabled?'<button data-product-view="notion">Notion 상품 목록·수정</button>':''}<button data-product-view="master">기존 시트 (읽기 전용)</button><button data-product-view="review">검수 대기 <span id="reviewCount" class="subtle">${submissions?submissions.filter(s=>s.status!=='승인 완료').length:'·'}</span></button></div><div id="productWorkspace"></div></section>`;
  const show=async view=>{
   $$('.section-tabs button').forEach(b=>b.classList.toggle('active',b.dataset.productView===view));
   if(view==='notion'){await renderNotionProductList_();return;}
@@ -123,7 +123,7 @@ async function renderNotionProductList_(){
   const data=await server('getAdminSection','notionProducts',{});
   const cached={data,at:Date.now()};State.sectionCache.notionProducts=cached;
   const rows=cached.data.products||[];
-  workspace.innerHTML=`<div class="panel-head"><div><h2>Notion 상품 DB</h2><p class="subtle">승인된 정보와 노션의 최신 속성을 조회합니다. 속성 이름이 바뀌면 상세 화면에 반영됩니다.</p></div><strong>${rows.length}개 상품</strong></div><div class="toolbar"><input id="notionProductSearch" class="search-input" placeholder="상품명, 바코드, 운영센터 ID 검색"></div><div id="notionProductTable"></div>`;
+  workspace.innerHTML=`<div class="panel-head"><div><h2>Notion 상품 DB</h2><p class="subtle">Notion의 최신 속성을 조회하고 직접 수정합니다. 기존 시트는 참고용입니다.</p></div><strong>${rows.length}개 상품</strong></div><div class="toolbar"><input id="notionProductSearch" class="search-input" placeholder="상품명, 바코드, 운영센터 ID 검색"></div><div id="notionProductTable"></div>`;
   const paint=()=>{const q=$('#notionProductSearch').value.trim().toLowerCase();const matches=rows.filter(p=>!q||[p.name,p.productId,p.barcode,p.reviewStatus].join(' ').toLowerCase().includes(q));$('#notionProductTable').innerHTML=matches.length?`<div class="data-table-wrap"><table class="data-table"><thead><tr><th>상품</th><th>운영센터 ID</th><th>바코드</th><th>등록 검수</th><th></th></tr></thead><tbody>${matches.slice(0,100).map(p=>`<tr><td><strong>${esc(p.name||'상품명 없음')}</strong></td><td>${esc(p.productId)}</td><td>${esc(p.barcode||'—')}</td><td>${UI.status(p.reviewStatus||'기존 상품')}</td><td><button class="small-button primary" data-notion-page="${esc(p.pageId)}">상세</button></td></tr>`).join('')}</tbody></table></div>${matches.length>100?`<p class="subtle">처음 100개를 표시합니다. 검색어로 범위를 좁혀 주세요.</p>`:''}`:UI.empty('검색 결과가 없습니다.','다른 검색어를 입력해 주세요.');$$('[data-notion-page]').forEach(button=>button.addEventListener('click',()=>openNotionProduct_(button.dataset.notionPage)))};
   $('#notionProductSearch').addEventListener('input',paint);paint();
  }catch(e){workspace.innerHTML=UI.empty('Notion 상품을 불러오지 못했습니다.',e.message)}
@@ -141,9 +141,36 @@ async function openNotionProduct_(pageId){
  UI.modal('<h2>Notion 상품 정보</h2><p>속성과 본문을 불러오는 중입니다.</p>');
  try{
   const detail=await server('getNotionProductDetail',{pageId});
-  const properties=(detail.properties||[]).filter(p=>p.value).map(p=>`<div class="field-group"><label>${esc(p.name)}</label><div class="review-value">${reviewFieldValue_(p.value)}</div></div>`).join('');
-  $('#modalBody').innerHTML=`<div class="review-modal-head"><div><span class="review-kicker">NOTION SOURCE</span><h2>상품 원본 조회</h2></div><a class="small-button" href="${esc(detail.url)}" target="_blank" rel="noopener noreferrer">Notion에서 열기</a></div><div class="form-grid">${properties}</div><section class="review-info-section"><h3>상품 본문</h3><div>${(detail.blocks||[]).map(notionBlockHtml_).join('')||'<p class="subtle">본문이 없습니다.</p>'}</div></section>`;
+  State.notionProductDetail=detail;
+  const properties=(detail.properties||[]).filter(p=>p.editable||p.value).map(p=>`<div class="field-group ${p.type==='rich_text'?'full':''}"><label>${esc(p.name)}</label>${notionProductInput_(p)}</div>`).join('');
+  $('#modalBody').innerHTML=`<div class="review-modal-head"><div><span class="review-kicker">NOTION SOURCE</span><h2>상품 원본 조회·수정</h2></div><a class="small-button" href="${esc(detail.url)}" target="_blank" rel="noopener noreferrer">Notion에서 열기</a></div><p class="subtle">수정 가능한 속성은 Notion에 직접 저장됩니다. 관계·계산 속성과 상품 본문은 Notion에서 관리합니다.</p><div class="form-grid">${properties}</div><div class="modal-actions"><button class="secondary-button" onclick="UI.closeModal()">닫기</button><button class="primary-button" onclick="saveNotionProduct_('${esc(pageId)}')">Notion에 변경 저장</button></div><section class="review-info-section"><h3>상품 본문</h3><div>${(detail.blocks||[]).map(notionBlockHtml_).join('')||'<p class="subtle">본문이 없습니다.</p>'}</div></section>`;
  }catch(e){$('#modalBody').innerHTML='<h2>조회 실패</h2><p>'+esc(e.message)+'</p>'}
+}
+function notionProductInput_(property){
+ if(!property.editable)return `<div class="review-value">${reviewFieldValue_(property.value)}</div>`;
+ const id=esc(property.id),value=esc(property.value||'');
+ if(property.type==='checkbox')return `<label class="checkbox-line"><input type="checkbox" data-notion-property="${id}" ${property.value==='예'?'checked':''}> 사용</label>`;
+ if(property.type==='select')return `<select class="field-select" data-notion-property="${id}"><option value="">선택 안 함</option>${(property.options||[]).map(option=>`<option value="${esc(option)}" ${option===property.value?'selected':''}>${esc(option)}</option>`).join('')}</select>`;
+ if(property.type==='rich_text')return `<textarea class="field-textarea" rows="3" data-notion-property="${id}">${value}</textarea>`;
+ if(property.type==='multi_select')return `<input class="field-input" data-notion-property="${id}" value="${value}"><span class="field-help">쉼표로 구분 · 선택지: ${esc((property.options||[]).join(', '))}</span>`;
+ const type=property.type==='number'?'number':property.type==='url'?'url':property.type==='email'?'email':'text';
+ return `<input class="field-input" type="${type}" data-notion-property="${id}" value="${value}">`;
+}
+async function saveNotionProduct_(pageId){
+ const detail=State.notionProductDetail;
+ if(!detail||detail.pageId!==pageId){UI.toast('상품 정보를 다시 열어 주세요.',true);return;}
+ const changes=(detail.properties||[]).filter(p=>p.editable).map(p=>{
+  const input=$$('[data-notion-property]').find(el=>el.dataset.notionProperty===p.id);
+  if(!input)return null;
+  const value=p.type==='checkbox'?input.checked:p.type==='multi_select'?input.value.split(',').map(x=>x.trim()).filter(Boolean):input.value.trim();
+  const original=p.type==='checkbox'?p.value==='예':p.type==='multi_select'?p.value.split(',').map(x=>x.trim()).filter(Boolean):p.value;
+  return JSON.stringify(value)===JSON.stringify(original)?null:{id:p.id,value};
+ }).filter(Boolean);
+ if(!changes.length){UI.toast('변경된 내용이 없습니다.');return;}
+ try{
+  await server('saveAdminAction','updateNotionProduct',{pageId,lastEditedAt:detail.lastEditedAt,changes});
+  delete State.sectionCache.notionProducts;UI.closeModal();UI.toast('Notion 상품 정보를 수정했습니다.');go('products',true);
+ }catch(e){UI.toast(e.message,true)}
 }
 function productThumbUrl_(url,size){var text=String(url||'');if(!text)return '';var id=reviewDriveId_(text);return id?'https:'+'/'+'/'+'drive.google.com/thumbnail?id='+encodeURIComponent(id)+'&sz=w'+(size||160):text;}
 function productPrefs_(){var base={mode:'table',cols:['brand','trade','retail','purchase','consignment','status']};try{var saved=JSON.parse(localStorage.getItem('boProductPrefs')||'{}');Object.keys(saved).forEach(function(k){base[k]=saved[k]})}catch(e){}return base;}
@@ -173,7 +200,7 @@ function openProduct(p){
  if(State.notionEnabled){
   const cached=State.sectionCache.notionProducts;
   const page=cached&&cached.data&&cached.data.products.find(item=>item.productId===p.productId);
-  if(page)openNotionProduct_(page.pageId);else UI.modal('<h2>Notion 원본 조회</h2><p>Notion 상품 조회 탭에서 이 상품을 검색해 주세요. 기존 시트 값은 수정할 수 없습니다.</p>');
+  if(page)openNotionProduct_(page.pageId);else UI.modal('<h2>Notion 원본 조회</h2><p>Notion 상품 목록·수정 탭에서 이 상품을 검색해 주세요. 기존 시트 값은 수정할 수 없습니다.</p>');
   return;
  }
  const option=(value,current)=>`<option value="${esc(value)}" ${String(value)===String(current)?'selected':''}>${esc(value||'선택 안 함')}</option>`;
@@ -322,6 +349,7 @@ function applyBeautyoraIdentity(){
 }
 var boIdentityObserver=new MutationObserver(function(){requestAnimationFrame(applyBeautyoraIdentity)});boIdentityObserver.observe(document.documentElement,{childList:true,subtree:true});if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',applyBeautyoraIdentity)}else{applyBeautyoraIdentity()}
 </script>
+
 
 
 

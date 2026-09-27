@@ -235,6 +235,8 @@ function notionReviewText_(property) {
   if (property.type === 'relation') return (property.relation || []).map(function(item) { return item.id; }).join(', ');
   if (property.type === 'date') return property.date ? property.date.start : '';
   if (property.type === 'checkbox') return property.checkbox ? '예' : '아니오';
+  if (property.type === 'email') return property.email || '';
+  if (property.type === 'phone_number') return property.phone_number || '';
   if (property.type === 'files') return (property.files || []).map(function(item) { return item.name || (item.file && item.file.url) || ''; }).join(', ');
   return '';
 }
@@ -264,12 +266,118 @@ function getNotionProductDetail(request) {
   const page = notionRequest_('get', '/pages/' + pageId);
   const parentId = page.parent && (page.parent.data_source_id || page.parent.database_id);
   if (parentId !== config.product) throw new Error('연결된 상품 데이터베이스의 페이지가 아닙니다.');
+  const source = notionRequest_('get', '/data_sources/' + encodeURIComponent(config.product));
+  const reviewSchema = notionReviewSchema_(config.product, 'product');
+  const protectedIds = [reviewSchema.productId, reviewSchema.review, reviewSchema.brand];
   const properties = Object.keys(page.properties || {}).map(function(name) {
     const item = page.properties[name];
-    return {id:item.id,name:name,type:item.type,value:notionReviewText_(item)};
+    const definition = Object.keys(source.properties || {}).map(function(key) { return source.properties[key]; })
+      .find(function(property) { return property.id === item.id; });
+    return {id:item.id,name:name,type:item.type,value:notionReviewText_(item),
+      editable:!!(definition && notionProductEditableTypes_()[item.type] && protectedIds.indexOf(item.id) < 0),
+      options:definition && definition[item.type] && definition[item.type].options ?
+        definition[item.type].options.map(function(option) { return option.name; }) : []};
   });
   const blocks = notionReviewBlocks_(pageId, 0);
-  return {ok:true,pageId:page.id,url:page.url,properties:properties,blocks:blocks};
+  return {ok:true,pageId:page.id,url:page.url,lastEditedAt:page.last_edited_time || '',properties:properties,blocks:blocks};
+}
+
+function notionProductEditableTypes_() {
+  return {title:true,rich_text:true,number:true,url:true,select:true,multi_select:true,
+    checkbox:true,date:true,email:true,phone_number:true};
+}
+
+function notionProductPatchValue_(definition, value, protectedDriveIds) {
+  const type = definition.type;
+  const text = String(value == null ? '' : value).trim();
+  if (type === 'title') {
+    if (!text || text.length > 2000) throw new Error('상품명은 1~2000자로 입력해 주세요.');
+    return {title:[{type:'text',text:{content:text}}]};
+  }
+  if (type === 'rich_text') {
+    if (text.length > 100000) throw new Error(definition.name + ': 내용은 100000자 이내로 입력해 주세요.');
+    return notionRichText_(text);
+  }
+  if (type === 'number') {
+    const number = Number(text);
+    if (text && !isFinite(number)) throw new Error(definition.name + ': 숫자를 입력해 주세요.');
+    return {number:text ? number : null};
+  }
+  if (type === 'url') {
+    if (text && !/^https?:\/\//i.test(text)) throw new Error(definition.name + ': 올바른 URL을 입력해 주세요.');
+    if (text && protectedDriveIds.indexOf(definition.id) >= 0 && !/^https:\/\/drive\.google\.com\//i.test(text))
+      throw new Error(definition.name + ': Google Drive 공유 링크를 입력해 주세요.');
+    return {url:text || null};
+  }
+  if (type === 'select') {
+    const options = (definition.select && definition.select.options || []).map(function(option) { return option.name; });
+    if (text && options.indexOf(text) < 0) throw new Error(definition.name + ': 등록된 선택지에서 골라 주세요.');
+    return {select:text ? {name:text} : null};
+  }
+  if (type === 'multi_select') {
+    const values = Array.isArray(value) ? value.map(function(item) { return String(item).trim(); }).filter(Boolean) :
+      text.split(',').map(function(item) { return item.trim(); }).filter(Boolean);
+    const options = (definition.multi_select && definition.multi_select.options || []).map(function(option) { return option.name; });
+    if (values.length > 100 || values.some(function(item) { return options.indexOf(item) < 0; }))
+      throw new Error(definition.name + ': 등록된 선택지만 입력해 주세요.');
+    return {multi_select:values.filter(function(item,index) { return values.indexOf(item) === index; })
+      .map(function(item) { return {name:item}; })};
+  }
+  if (type === 'checkbox') return {checkbox:value === true || String(value).toLowerCase() === 'true'};
+  if (type === 'date') {
+    if (text && !/^\d{4}-\d{2}-\d{2}(?:T.*)?$/.test(text)) throw new Error(definition.name + ': 날짜 형식을 확인해 주세요.');
+    return {date:text ? {start:text} : null};
+  }
+  if (type === 'email') {
+    if (text && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text)) throw new Error(definition.name + ': 이메일 형식을 확인해 주세요.');
+    return {email:text || null};
+  }
+  if (type === 'phone_number') return {phone_number:text || null};
+  throw new Error(definition.name + ': 운영센터에서 수정할 수 없는 Notion 속성입니다.');
+}
+
+function updateNotionProduct_(request) {
+  assertAdmin_();
+  request = request || {};
+  const config = notionReviewConfig_();
+  const pageId = String(request.pageId || '');
+  if (!/^[0-9a-f-]{32,36}$/i.test(pageId)) throw new Error('Notion 상품 페이지 ID가 올바르지 않습니다.');
+  const changes = request.changes || [];
+  if (!Array.isArray(changes) || changes.length > 40) throw new Error('수정할 속성 목록을 확인해 주세요.');
+  if (!changes.length) return {ok:true,changed:false};
+  const page = notionRequest_('get', '/pages/' + pageId);
+  const parentId = page.parent && (page.parent.data_source_id || page.parent.database_id);
+  if (parentId !== config.product) throw new Error('연결된 상품 데이터베이스의 페이지가 아닙니다.');
+  if (!request.lastEditedAt || page.last_edited_time !== request.lastEditedAt)
+    throw new Error('Notion 원본이 수정되었습니다. 화면을 다시 열고 변경 내용을 확인해 주세요.');
+  const source = notionRequest_('get', '/data_sources/' + encodeURIComponent(config.product));
+  const schema = notionReviewSchema_(config.product, 'product');
+  const protectedIds = [schema.productId, schema.review, schema.brand];
+  const driveIds = [schema.thumbnail, schema.detail];
+  const definitions = Object.keys(source.properties || {}).map(function(name) { return source.properties[name]; });
+  const patch = {}, expected = {}, seen = {};
+  changes.forEach(function(change) {
+    const id = String(change && change.id || '');
+    const definition = definitions.find(function(item) { return item.id === id; });
+    if (!definition || seen[id] || protectedIds.indexOf(id) >= 0 || !notionProductEditableTypes_()[definition.type])
+      throw new Error('수정할 수 없는 Notion 속성이 포함되어 있습니다.');
+    seen[id] = true;
+    patch[id] = notionProductPatchValue_(definition, change.value, driveIds);
+    expected[id] = change.value;
+  });
+  notionRequest_('patch', '/pages/' + pageId, {properties:patch});
+  const verified = notionRequest_('get', '/pages/' + pageId);
+  Object.keys(expected).forEach(function(id) {
+    const actual = notionPageProperty_(verified, id);
+    const value = expected[id];
+    const normalized = Array.isArray(value) ? value.map(function(item) { return String(item).trim(); })
+      .filter(Boolean).filter(function(item,index,array) { return array.indexOf(item) === index; }).join(', ') :
+      typeof value === 'boolean' ? (value ? '예' : '아니오') : String(value == null ? '' : value).trim();
+    if (!actual || notionReviewText_(actual) !== normalized)
+      throw new Error('Notion 속성 반영을 확인하지 못했습니다. 화면을 다시 열어 확인해 주세요.');
+  });
+  logAction_('Notion 상품 정보 수정', '상품', pageId, Object.keys(expected).join(', '));
+  return {ok:true,changed:true,lastEditedAt:verified.last_edited_time || ''};
 }
 
 function notionReviewBlocks_(parentId, depth) {
@@ -289,3 +397,4 @@ function notionReviewBlocks_(parentId, depth) {
   } while (cursor && out.length < 500);
   return out;
 }
+

@@ -27,6 +27,7 @@ const ctx = vm.createContext({
   now_: ()=>'today',
   logAction_: ()=>{},
   BO_READ_VALUES_CACHE_: null,
+  assertAdmin_: ()=>{},
   notionRequest_: (method, endpoint, body)=>{
     calls.push({method,endpoint,body});
     if(method==='get'&&endpoint.startsWith('/data_sources/'))return {properties:schemas[endpoint.split('/').pop()]};
@@ -40,16 +41,18 @@ const ctx = vm.createContext({
     if(method==='patch'&&endpoint.startsWith('/pages/')){
       const id=endpoint.split('/').pop();pages[id] ||= {id,properties:{}};
       Object.entries(body.properties).forEach(([key,value])=>{pages[id].properties[key]={id:key,type:Object.keys(value)[0],...value}});
+      pages[id].last_edited_time='rev-2';
       return pages[id];
     }
     if(method==='get'&&endpoint.startsWith('/pages/'))return pages[endpoint.split('/').pop()];
+    if(method==='get'&&endpoint.startsWith('/blocks/'))return {results:[],has_more:false};
     throw Error(method+' '+endpoint);
   }
 });
 vm.runInContext(source, ctx);
 for(const kind of ['product','brand']){
   const spec=vm.runInContext(`BO_REVIEW_SCHEMA.${kind}`,ctx);
-  const entries=Object.entries(spec).map(([key,[name,type]])=>[name,{id:key,type}]);
+  const entries=Object.entries(spec).map(([key,[name,type]])=>[name,{id:key,name,type}]);
   schemas[kind+'-source']=Object.fromEntries(entries);
 }
 const schema=ctx.notionReviewSchema_('product-source','product');
@@ -76,3 +79,27 @@ ctx.reviewBrandDocument_({fileId:'FILE-1',action:'approve'});
 assert.equal(pages['brand-page'].properties.business.url,'https://drive.google.com/file/d/cert/view');
 assert.equal(fileRows[0]['상태'],'승인 완료');
 console.log('PASS document approval verifies the Notion URL before marking approved');
+
+const liveId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+pages[liveId]={id:liveId,url:'https://notion.so/'+liveId,parent:{data_source_id:'product-source'},last_edited_time:'rev-1',properties:{
+  name:{id:'name',type:'title',title:[{plain_text:'기존 상품'}]},
+  barcode:{id:'barcode',type:'rich_text',rich_text:[]},
+  productId:{id:'productId',type:'rich_text',rich_text:[]},
+  thumbnail:{id:'thumbnail',type:'url',url:null}
+}};
+const detail=ctx.getNotionProductDetail({pageId:liveId});
+assert.equal(detail.lastEditedAt,'rev-1');
+assert.equal(detail.properties.find(p=>p.id==='name').editable,true);
+assert.equal(detail.properties.find(p=>p.id==='productId').editable,false);
+ctx.updateNotionProduct_({pageId:liveId,lastEditedAt:'rev-1',changes:[
+  {id:'name',value:'수정된 상품'}, {id:'barcode',value:'001234'},
+  {id:'thumbnail',value:'https://drive.google.com/file/d/image/view'}
+]});
+assert.equal(pages[liveId].properties.name.title[0].text.content,'수정된 상품');
+assert.equal(pages[liveId].properties.barcode.rich_text[0].text.content,'001234');
+assert.equal(pages[liveId].properties.thumbnail.url,'https://drive.google.com/file/d/image/view');
+assert.throws(()=>ctx.updateNotionProduct_({pageId:liveId,lastEditedAt:'rev-1',changes:[{id:'name',value:'덮어쓰기'}]}),/수정되었습니다/);
+assert.throws(()=>ctx.updateNotionProduct_({pageId:liveId,lastEditedAt:'rev-2',changes:[{id:'productId',value:'PRD-HIJACK'}]}),/수정할 수 없는/);
+assert.throws(()=>ctx.updateNotionProduct_({pageId:liveId,lastEditedAt:'rev-2',changes:[{id:'thumbnail',value:'https://example.com/image.jpg'}]}),/Google Drive/);
+console.log('PASS internal product edits write Notion, verify results, and reject stale or protected changes');
+
