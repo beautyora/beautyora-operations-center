@@ -1,8 +1,13 @@
+let BO_DB_CACHE_ = null;
+
 function getDb_() {
   const props = PropertiesService.getScriptProperties();
   const id = props.getProperty(BOPS.PROPS.SPREADSHEET_ID);
   if (!id) throw new Error('BO_SPREADSHEET_ID가 설정되지 않았습니다. 대상 환경의 DB ID를 스크립트 속성에 먼저 설정해 주세요.');
-  return SpreadsheetApp.openById(id);
+  if (BO_DB_CACHE_ && BO_DB_CACHE_.id === id) return BO_DB_CACHE_.spreadsheet;
+  const spreadsheet = SpreadsheetApp.openById(id);
+  BO_DB_CACHE_ = { id: id, spreadsheet: spreadsheet };
+  return spreadsheet;
 }
 
 function getSheet_(name) {
@@ -105,3 +110,4 @@ function resolveAlert_(alertId) {
   updateObjectRow_(BOPS.SHEETS.ALERTS, row._row, { '상태': '해결', '해결일': now_() });
   return { ok: true };
 }
+
