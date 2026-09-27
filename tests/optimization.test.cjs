@@ -64,5 +64,25 @@ function load(files, globals = {}) {
   assert.deepEqual(Array.from(context.listBrands_({ query: '첫' }), row => row.brandCode), ['BO-1']);
 }
 
-console.log('환경 격리 및 브랜드 링크 조회 검증 통과');
+{
+  let reads = 0;
+  const sheet = { getDataRange: () => ({ getDisplayValues: () => {
+    reads++;
+    return [['브랜드ID', '브랜드명'], ['BO-1', '브랜드 하나']];
+  } }) };
+  const context = load(['BO_Config.gs', 'BO_DataStore.gs', 'BO_BrandWorkspace.gs'], {
+    PropertiesService: { getScriptProperties: () => ({ getProperty: () => 'test-db' }) },
+    SpreadsheetApp: { openById: () => ({ getSheetByName: () => sheet }) }
+  });
+  context.assertAdmin_ = () => {};
+  context.crmReadScope_(() => {
+    assert.equal(context.sheetObjects_('브랜드')[0]['브랜드ID'], 'BO-1');
+    assert.equal(context.crmRows_('브랜드')[0]['브랜드ID'], 'BO-1');
+  });
+  assert.equal(reads, 1, '같은 조회에서 서로 다른 변환 함수도 시트를 한 번만 읽는다');
+  context.crmReadScope_(() => context.sheetObjects_('브랜드'));
+  assert.equal(reads, 2, '다음 요청은 최신 시트 값을 다시 읽는다');
+}
+
+console.log('환경 격리, 브랜드 링크 및 요청별 시트 재사용 검증 통과');
 
