@@ -22,6 +22,11 @@ on:
           - existing
           - new
         default: existing
+      additional_deployment_id:
+        description: "함께 갱신할 추가 웹앱 배포 ID (선택)"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -119,6 +124,20 @@ jobs:
             --deploymentId "$PARTNER_DEPLOYMENT_ID" \
             --description "$DEPLOY_DESCRIPTION - 상품등록센터"
 
+      - name: 추가 운영 웹앱도 갱신
+        if: inputs.target == 'production' && inputs.mode == 'existing' && inputs.additional_deployment_id != ''
+        env:
+          DEPLOY_DESCRIPTION: ${{ inputs.description }}
+          ADDITIONAL_DEPLOYMENT_ID: ${{ inputs.additional_deployment_id }}
+        run: |
+          if [[ ! "$ADDITIONAL_DEPLOYMENT_ID" =~ ^AKfy[a-zA-Z0-9_-]+$ ]]; then
+            echo "추가 배포 ID 형식이 올바르지 않습니다."
+            exit 1
+          fi
+          npx --yes @google/clasp@3 create-deployment \
+            --deploymentId "$ADDITIONAL_DEPLOYMENT_ID" \
+            --description "$DEPLOY_DESCRIPTION - 추가 운영 웹앱"
+
       - name: 새 웹앱 배포 생성
         if: inputs.mode == 'new'
         shell: bash
@@ -151,4 +170,5 @@ jobs:
           echo "배포 방식: ${{ inputs.mode }}"
           echo "브랜치: ${{ github.ref_name }}"
           echo "커밋: ${{ github.sha }}"
+
 
