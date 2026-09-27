@@ -109,5 +109,3 @@ function saveFieldSettings_(fields) {
 function isTrue_(value) {
   return value === true || String(value).toLowerCase() === 'true' || String(value) === '사용' || String(value) === '필수';
 }
-
-
