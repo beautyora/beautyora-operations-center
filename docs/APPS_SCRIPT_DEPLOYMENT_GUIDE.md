@@ -9,6 +9,19 @@ GitHub를 코드의 유일한 기준으로 사용합니다.
 - 테스트·운영 DB ID와 토큰은 각 Apps Script의 스크립트 속성에서 별도 관리
 - GitHub에는 실제 DB ID, Notion 토큰, Google 인증 파일을 커밋하지 않음
 
+## 배포 전 환경 연결 확인
+
+테스트와 운영 Apps Script의 **프로젝트 설정 → 스크립트 속성**에서 각각
+`BO_SPREADSHEET_ID`를 해당 환경의 DB ID로 설정합니다. 값이 없으면 앱과 초기 설정은
+실행되지 않습니다. 다른 시트나 운영 DB를 자동으로 선택하지 않습니다.
+
+`_SYNC_CONFIG`를 사용하는 브랜드 동기화 기능은 그 시트의
+`TARGET_SPREADSHEET_ID`도 `BO_SPREADSHEET_ID`와 같아야 실행됩니다.
+테스트 환경에서 폼·Notion 쓰기 기능을 실행하기 전에는
+`SOURCE_SPREADSHEET_ID`, Notion 설정, 트리거도 테스트용인지 별도로 확인합니다.
+
+테스트 DB 이름: `뷰티오라DB_테스트`. 실제 ID는 Apps Script 스크립트 속성에서만 관리합니다.
+
 ## 한 번만 설정할 항목
 
 GitHub 저장소의 **Settings → Secrets and variables → Actions → New repository secret**에서 다음 5개를 등록합니다.

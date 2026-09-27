@@ -1,8 +1,8 @@
 /* Brand workspace. Notion is an immutable source; every write is confined to Google Sheets. */
 const BCRM={brands:'브랜드 운영정보',archive:'노션 영업자료',notes:'브랜드 영업기록',attachments:'노션 첨부 이관'};
 let CRM_READ_SCOPE_=null;
-function crmReadScope_(fn){assertAdmin_();if(CRM_READ_SCOPE_)return fn();CRM_READ_SCOPE_={rows:{},products:null};try{return fn()}finally{CRM_READ_SCOPE_=null}}
-function crmRows_(name){if(CRM_READ_SCOPE_&&Object.prototype.hasOwnProperty.call(CRM_READ_SCOPE_.rows,name))return CRM_READ_SCOPE_.rows[name];const s=getDb_().getSheetByName(name);if(!s)return [];const v=s.getDataRange().getDisplayValues(),h=v.shift()||[];const rows=v.map((r,i)=>{const o={_row:i+2};h.forEach((k,j)=>{if(k)o[k]=r[j]||''});return o}).filter(o=>Object.keys(o).some(k=>k!=='_row'&&o[k]));if(CRM_READ_SCOPE_)CRM_READ_SCOPE_.rows[name]=rows;return rows;}
+function crmReadScope_(fn){assertAdmin_();if(CRM_READ_SCOPE_)return fn();CRM_READ_SCOPE_={rows:{},products:null};BO_READ_VALUES_CACHE_={};try{return fn()}finally{CRM_READ_SCOPE_=null;BO_READ_VALUES_CACHE_=null}}
+function crmRows_(name){if(CRM_READ_SCOPE_&&Object.prototype.hasOwnProperty.call(CRM_READ_SCOPE_.rows,name))return CRM_READ_SCOPE_.rows[name];const v=sheetDisplayValues_(name,true);if(!v)return [];const h=v[0]||[];const rows=v.slice(1).map((r,i)=>{const o={_row:i+2};h.forEach((k,j)=>{if(k)o[k]=r[j]||''});return o}).filter(o=>Object.keys(o).some(k=>k!=='_row'&&o[k]));if(CRM_READ_SCOPE_)CRM_READ_SCOPE_.rows[name]=rows;return rows;}
 function crmAllProducts_(){if(!CRM_READ_SCOPE_)return listProducts_({});if(!CRM_READ_SCOPE_.products)CRM_READ_SCOPE_.products=listProducts_({});return CRM_READ_SCOPE_.products;}
 function crmJson_(v){try{return JSON.parse(v||'{}')}catch(e){return {}}}
 function crmText_(v){if(Array.isArray(v))return v.join(', ');const s=String(v==null?'':v);if(s.charAt(0)==='['){try{const a=JSON.parse(s);if(Array.isArray(a))return a.join(', ')}catch(e){}}return s.replace(/<br\s*\/?>/gi,'\n').replace(/\\([\[\]])/g,'$1');}
@@ -111,3 +111,5 @@ function getBrandSourcePage(code,page){assertAdmin_();code=String(code||'');page
  return {rows,page,total:matches.length,pages};
 }
 function testStaffPerformance(){const summary=getBrandWorkspace(),code=summary.rows.find(b=>b.productCount>100)?.brandCode||summary.rows[0].brandCode,t=Date.now(),light=getBrandOverview(code);if(light.products.length||light.submitted.length||light.stock.length)throw Error('개요에서 상세 자료를 미리 조회했습니다.');const products=getBrandTab(code,'products'),stock=getBrandTab(code,'stock'),full=getBrandDetail(code),source=getBrandSourcePage(code,0),moves=getSimpleOperations();if(JSON.stringify(products.products)!==JSON.stringify(full.products))throw Error('상품 조회 결과 불일치');if(JSON.stringify(stock.stock)!==JSON.stringify(full.stock))throw Error('재고 조회 결과 불일치');if(source.rows.length>25||source.total!==full.submitted.filter(r=>r['상품명']).length)throw Error('제출자료 페이지 불일치');if('stock'in moves||moves.journal.length>100)throw Error('입출고 불필요 조회');let invalid=false;try{getBrandTab(code,'invalid')}catch(e){invalid=true}if(!invalid)throw Error('탭 검증 실패');console.log(JSON.stringify({passed:6,brands:summary.rows.length,code,products:products.products.length,sourceTotal:source.total,sourcePage:source.rows.length,elapsedMs:Date.now()-t}));}
+
+
