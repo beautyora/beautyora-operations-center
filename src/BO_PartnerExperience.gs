@@ -47,32 +47,41 @@ function submitPartnerDraft(request) {
     const fields = getSettings_().fields.filter(f => f.active);
     const submissions = sheetObjects_(BOPS.SHEETS.SUBMISSIONS);
     const files = sheetObjects_(BOPS.SHEETS.FILES).filter(f => f['브랜드코드'] === brandCode);
-    const masterProducts = listProducts_({}).filter(item => item.brandCode === brandCode);
+    const masterProducts = listProducts_({brandCode: brandCode});
+    const submissionById = new Map(), submissionsByProduct = new Map();
+    submissions.forEach(s => {
+      if (!submissionById.has(s['제출ID'])) submissionById.set(s['제출ID'], s);
+      const group = submissionsByProduct.get(s['상품ID']) || [];
+      group.push(s); submissionsByProduct.set(s['상품ID'], group);
+    });
+    const masterById = new Map(masterProducts.map(p => [p.productId, p]));
+    const fileByProduct = new Map(files.map(f => [JSON.stringify([f['파일ID'], f['상품ID']]), f]));
     const used = {};
     const products = request.products.map(p => {
       const data = Object.assign({}, p.data || {});
       if (!/^[a-zA-Z0-9-]{8,80}$/.test(p.id || '') || used[p.id]) throw new Error('중복되거나 잘못된 상품 식별자입니다.');
       used[p.id] = true;
-      const other = submissions.find(s => s['상품ID'] === p.id && s['브랜드코드'] !== brandCode);
+      const history = submissionsByProduct.get(p.id) || [];
+      const other = history.find(s => s['브랜드코드'] !== brandCode);
       if (other) throw new Error('다른 브랜드의 상품을 변경할 수 없습니다.');
       let source = null;
       if (p.sourceSubmissionId) {
         if (String(p.sourceSubmissionId).indexOf('MASTER-') === 0) {
-          const master = masterProducts.find(item => item.productId === p.id);
+          const master = masterById.get(p.id);
           if (!master) throw new Error('수정할 기존 상품을 찾을 수 없습니다.');
           source = {'제출ID':p.sourceSubmissionId,'상품ID':p.id,'브랜드코드':brandCode,'상태':BOPS.STATUS.APPROVED};
         } else {
-          source = submissions.find(s => s['제출ID'] === p.sourceSubmissionId && s['상품ID'] === p.id && s['브랜드코드'] === brandCode);
+          source = history.find(s => s['제출ID'] === p.sourceSubmissionId && s['브랜드코드'] === brandCode);
         }
         if (!source || ![BOPS.STATUS.REVISION, BOPS.STATUS.APPROVED].includes(source['상태'])) throw new Error('승인 완료 또는 보완 요청된 상품만 수정할 수 있습니다.');
       } else {
-        const conflict = submissions.find(s => s['상품ID'] === p.id && s['브랜드코드'] === brandCode && s['제출ID'] !== 'UX-' + request.requestId + '-' + p.id);
+        const conflict = history.find(s => s['브랜드코드'] === brandCode && s['제출ID'] !== 'UX-' + request.requestId + '-' + p.id);
         if (conflict) throw new Error('이미 제출한 상품입니다. 제출 현황을 확인해 주세요.');
       }
       if (!Array.isArray(p.assets || []) || (p.assets || []).length > 50) throw new Error('상품당 첨부파일은 최대 50개입니다.');
       data.product_id = p.id;
       data.attachments = (p.assets || []).map((a, index) => {
-        const file = files.find(f => f['파일ID'] === a.id && f['상품ID'] === p.id);
+        const file = fileByProduct.get(JSON.stringify([a.id, p.id]));
         if (!file) throw new Error((data.product_name || '상품') + ': 첨부파일 업로드를 완료해 주세요.');
         return {id:file['파일ID'],name:file['파일명'],url:file['DriveURL'],category:file['분류'],order:index + 1};
       });
@@ -94,15 +103,16 @@ function submitPartnerDraft(request) {
     });
     const errors = validateProducts_(products.map(p => p.data), fields, brandCode);
     if (errors.length) return {ok:false,validationErrors:errors};
-    const result = [];
+    const result = [], pending = [];
     products.forEach(p => {
       const id = 'UX-' + request.requestId + '-' + p.id;
-      const previous = submissions.find(s => s['제출ID'] === id);
+      const previous = submissionById.get(id);
       if (previous) { if (previous['브랜드코드'] !== brandCode) throw new Error('제출 정보를 확인해 주세요.'); if (previous['상품데이터JSON'] !== JSON.stringify(p.data)) throw new Error('이 상품은 이미 제출되었습니다. 제출 현황을 새로고침해 확인해 주세요.'); result.push({id:p.id,submissionId:id}); return; }
-      const version = Math.max(0,...submissions.filter(s => s['상품ID'] === p.id && s['브랜드코드'] === brandCode).map(s => Number(s['제출버전']) || 1)) + 1;
-      appendObject_(BOPS.SHEETS.SUBMISSIONS,{'제출ID':id,'브랜드코드':brandCode,'상품ID':p.id,'제출버전':version,'상태':BOPS.STATUS.SUBMITTED,'제출일':now_(),'수정일':now_(),'상품데이터JSON':JSON.stringify(p.data),'검수메모':'','제출자명':sanitize_(request.contactName),'제출자연락처':sanitize_(request.contactPhone)});
+      const version = (submissionsByProduct.get(p.id) || []).reduce((max, s) => s['브랜드코드'] === brandCode ? Math.max(max, Number(s['제출버전']) || 1) : max, 0) + 1;
+      pending.push({'제출ID':id,'브랜드코드':brandCode,'상품ID':p.id,'제출버전':version,'상태':BOPS.STATUS.SUBMITTED,'제출일':now_(),'수정일':now_(),'상품데이터JSON':JSON.stringify(p.data),'검수메모':'','제출자명':sanitize_(request.contactName),'제출자연락처':sanitize_(request.contactPhone)});
       result.push({id:p.id,submissionId:id});
     });
+    appendObjects_(BOPS.SHEETS.SUBMISSIONS, pending);
     logAction_('상품 통합 제출','브랜드',brandCode,result.length + '개 상품');
     return {ok:true,count:result.length,products:result};
   });
@@ -110,7 +120,7 @@ function submitPartnerDraft(request) {
 
 function runBeautyoraPartnerUXChecks(){
  assertAdmin_();
- const originals={withLock_,validatePartnerToken_,sheetObjects_,safeObjects_,findOne_,appendObject_,logAction_,getSettings_,getBrandFolder_};
+ const originals={withLock_,validatePartnerToken_,sheetObjects_,safeObjects_,findOne_,appendObject_,appendObjects_,logAction_,getSettings_,getBrandFolder_};
  const db={},checks=[];let created=0;
  const ensure=n=>db[n]||(db[n]=[]);
  const assert=(v,m)=>{if(!v)throw new Error('FAIL: '+m);checks.push(m);};
@@ -121,6 +131,7 @@ function runBeautyoraPartnerUXChecks(){
  sheetObjects_=n=>ensure(n);safeObjects_=n=>ensure(n);
  findOne_=(n,k,v)=>ensure(n).find(r=>r[k]===v)||null;
  appendObject_=(n,o)=>{ensure(n).push({...o});return ensure(n).length+1;};
+ appendObjects_=(n,rows)=>rows.forEach(o=>appendObject_(n,o));
  logAction_=()=>{};
  getSettings_=()=>({fields:[{id:'product_name',label:'상품명',required:true,type:'text',active:true},{id:'retail_price',label:'소비자가',required:true,type:'number',active:true}]});
  getBrandFolder_=()=>({getFilesByName:()=>({hasNext:()=>false}),createFile:blob=>{created++;return {getName:()=>blob.getName(),getId:()=> 'test-drive-'+created,getUrl:()=> 'https://drive.google.com/file/d/test-'+created+'/view'};}});
@@ -143,5 +154,5 @@ function runBeautyoraPartnerUXChecks(){
  const partial={token:'test-token',requestId:'request-partial0',products:['PRD-PARTIAL1','PRD-PARTIAL2'].map(id=>({id,data:{product_name:id,retail_price:1},assets:[]}))};
  fail(()=>submitPartnerDraft(partial),'부분 실패 시뮬레이션');submitPartnerDraft(partial);assert(ensure(BOPS.SHEETS.SUBMISSIONS).filter(r=>r['상품ID'].startsWith('PRD-PARTIAL')).length===2,'부분 실패 재시도 누락·중복 없음');
  console.log(JSON.stringify({ok:true,passed:checks.length,checks:checks,productionWrites:0}));return {ok:true,passed:checks.length};
- }finally{withLock_=originals.withLock_;validatePartnerToken_=originals.validatePartnerToken_;sheetObjects_=originals.sheetObjects_;safeObjects_=originals.safeObjects_;findOne_=originals.findOne_;appendObject_=originals.appendObject_;logAction_=originals.logAction_;getSettings_=originals.getSettings_;getBrandFolder_=originals.getBrandFolder_;}
+ }finally{withLock_=originals.withLock_;validatePartnerToken_=originals.validatePartnerToken_;sheetObjects_=originals.sheetObjects_;safeObjects_=originals.safeObjects_;findOne_=originals.findOne_;appendObject_=originals.appendObject_;appendObjects_=originals.appendObjects_;logAction_=originals.logAction_;getSettings_=originals.getSettings_;getBrandFolder_=originals.getBrandFolder_;}
 }

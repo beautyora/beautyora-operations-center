@@ -9,7 +9,7 @@ function getPartnerBootstrap_(token) {
   }).reverse();
   const submittedProductIds = {};
   submissions.forEach(item => { if (item.productId) submittedProductIds[item.productId] = true; });
-  const masterProducts = listProducts_({}).filter(item => item.brandCode === brandCode && !submittedProductIds[item.productId]).map(item => {
+  const masterProducts = listProducts_({brandCode: brandCode}).filter(item => !submittedProductIds[item.productId]).map(item => {
     const data = Object.assign({}, item.data || {}, {
       product_id: item.productId,
       product_name: item.productName || '',
@@ -61,14 +61,15 @@ function submitProducts(request) {
     const errors = validateProducts_(request.products, fields, brandCode);
     if (errors.length) return { ok: false, validationErrors: errors };
     const batchId = uuid_('SUB-');
-    request.products.forEach((product, index) => {
+    const rows = request.products.map((product, index) => {
       const productId = sanitize_(product.product_id) || uuid_('PRD-');
-      appendObject_(BOPS.SHEETS.SUBMISSIONS, {
+      return {
         '제출ID': batchId + '-' + String(index + 1).padStart(3, '0'), '브랜드코드': brandCode,
         '상품ID': productId, '제출버전': 1, '상태': BOPS.STATUS.SUBMITTED, '제출일': now_(), '수정일': now_(),
         '상품데이터JSON': JSON.stringify(product), '검수메모': '', '제출자명': sanitize_(request.contactName), '제출자연락처': sanitize_(request.contactPhone)
-      });
+      };
     });
+    appendObjects_(BOPS.SHEETS.SUBMISSIONS, rows);
     logAction_('상품 신규 제출', '브랜드', brandCode, request.products.length + '개 상품');
     return { ok: true, batchId: batchId, count: request.products.length };
   });
@@ -76,7 +77,7 @@ function submitProducts(request) {
 
 function validateProducts_(products, fields, brandCode) {
   const errors = [];
-  const masterBarcodes = safeObjects_(BOPS.SHEETS.PRODUCTS).filter(row => row['브랜드코드'] !== brandCode).map(row => row['바코드']).filter(Boolean);
+  const masterBarcodes = new Set(safeObjects_(BOPS.SHEETS.PRODUCTS).filter(row => row['브랜드코드'] !== brandCode).map(row => row['바코드']).filter(Boolean));
   const seen = {};
   products.forEach((product, index) => {
     fields.forEach(field => {
@@ -88,7 +89,7 @@ function validateProducts_(products, fields, brandCode) {
     const barcode = String(product.barcode || '').trim();
     if (barcode) {
       if (seen[barcode]) errors.push({ row: index + 1, field: 'barcode', message: '같은 파일 안에 중복된 바코드가 있습니다.' });
-      if (masterBarcodes.includes(barcode)) errors.push({ row: index + 1, field: 'barcode', message: '다른 브랜드에 이미 등록된 바코드입니다.' });
+      if (masterBarcodes.has(barcode)) errors.push({ row: index + 1, field: 'barcode', message: '다른 브랜드에 이미 등록된 바코드입니다.' });
       seen[barcode] = true;
     }
   });

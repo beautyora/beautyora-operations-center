@@ -42,7 +42,13 @@ jobs:
         with:
           node-version: "22"
 
-      - name: 배포 대상 설정
+      - name: 최적화 회귀 테스트
+        # Run regression checks before writing anything to Apps Script.
+        run: |
+          node tests/optimization.test.cjs
+          node tests/performance-regression.test.cjs
+
+      - name: 배포 환경 선택
         shell: bash
         env:
           TARGET: ${{ inputs.target }}
