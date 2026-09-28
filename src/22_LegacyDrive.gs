@@ -1,9 +1,14 @@
 /**
  * 기존 제출 자료 가져오기(1회성).
  * 운영센터 이전에 브랜드가 직접 올린 Drive 폴더([BO-0001 · BO-0002] 회사_브랜드 형식)를 읽어
- * 브랜드 자료 루트 폴더로 복사하고, Notion 브랜드의 '구글 드라이브'와 서류 URL 속성을 채운다.
- * 원본은 지우지 않는다. 여러 번 실행해도 이미 복사한 파일(appProperties.boLegacy)은 건너뛴다.
+ * 브랜드 자료 루트 폴더로 한꺼번에 복사하고, Notion 브랜드의 '구글 드라이브'에 그 폴더 링크를 건다.
+ * 중요 서류(사업자등록증·통장사본·계약서)만 따로 서류 URL 속성에 연결하고, 나머지는 폴더에만 둔다.
+ * 원본은 지우지 않는다. 여러 번 실행해도 이미 복사한 파일(appProperties.boLegacy)은 건너뛰고,
+ * 예전 실행에서 원본 폴더 안에 잘못 들어간 사본은 브랜드 자료 폴더로 옮긴다.
  */
+
+/** Notion 속성으로 따로 연결하는 중요 서류. 나머지 파일은 '구글 드라이브' 폴더 링크로만 찾는다. */
+const BO_LEGACY_KEY_DOCS = Object.freeze({ business: 'docBusiness', bank: 'docBank', contract: 'docContract' });
 
 const BO_LEGACY_RULES = Object.freeze([
   { code: 'business', test: /사업자\s*등록|사업자등록|business\s*license/i },
@@ -38,47 +43,60 @@ function legacyMatchByName_(name, brands) {
   return hits.length === 1 ? [hits[0].code] : [];
 }
 
-function legacyFilesIn_(folder, path, out) {
-  const files = folder.getFiles();
-  while (files.hasNext()) {
-    const file = files.next();
-    out.push({ id: file.getId(), name: file.getName(), mimeType: file.getMimeType(), updated: String(file.getLastUpdated() && file.getLastUpdated().toISOString ? file.getLastUpdated().toISOString() : ''), path: path });
-  }
-  const folders = folder.getFolders();
-  while (folders.hasNext()) {
-    const sub = folders.next();
-    legacyFilesIn_(sub, path.concat(sub.getName()), out);
-  }
+const BO_FOLDER_MIME = 'application/vnd.google-apps.folder';
+
+/** 폴더의 하위 항목. 운영센터가 만든 사본(boLegacy)과 바로가기는 원본으로 보지 않는다. */
+function legacyChildren_(folderId) {
+  const out = { folders: [], files: [] };
+  let token = '';
+  do {
+    const options = {
+      q: "'" + folderId + "' in parents and trashed = false", pageSize: 200, supportsAllDrives: true, includeItemsFromAllDrives: true,
+      fields: 'nextPageToken, files(id,name,mimeType,modifiedTime,appProperties)'
+    };
+    if (token) options.pageToken = token;
+    const response = Drive.Files.list(options);
+    (response.files || []).forEach(function (f) {
+      if (f.mimeType === BO_FOLDER_MIME) out.folders.push({ id: f.id, name: f.name });
+      else if (f.mimeType !== 'application/vnd.google-apps.shortcut' && !(f.appProperties && f.appProperties.boLegacy)) {
+        out.files.push({ id: f.id, name: f.name, mimeType: f.mimeType || '', updated: f.modifiedTime || '' });
+      }
+    });
+    token = response.nextPageToken || '';
+  } while (token);
+  return out;
+}
+
+function legacyFilesIn_(folderId, path, out, seen) {
+  seen[folderId] = true;
+  const children = legacyChildren_(folderId);
+  children.files.forEach(function (f) { out.push(Object.assign(f, { path: path })); });
+  children.folders.forEach(function (sub) { legacyFilesIn_(sub.id, path.concat(sub.name), out, seen); });
   return out;
 }
 
 /** 원본 폴더를 훑어 [브랜드 묶음 폴더] 목록을 만든다. 코드 없는 상위 폴더(예: '2차 확인 완료')는 안으로 들어간다. */
 function legacyScan_(sourceId, brands) {
-  const groups = [], unmatched = [], loose = [];
-  (function walk(folder, depth) {
-    const files = folder.getFiles();
-    while (files.hasNext()) {
-      const file = files.next();
-      if (depth > 0) loose.push(folder.getName() + ' / ' + file.getName());
-    }
-    const folders = folder.getFolders();
-    while (folders.hasNext()) {
-      const sub = folders.next();
-      const name = sub.getName();
-      const codes = legacyCodes_(name);
-      const matched = codes.length ? codes : legacyMatchByName_(name, brands);
+  const groups = [], unmatched = [], loose = [], seen = {};
+  (function walk(folderId, folderName, depth) {
+    seen[folderId] = true;
+    const children = legacyChildren_(folderId);
+    if (depth > 0) children.files.forEach(function (f) { loose.push(folderName + ' / ' + f.name); });
+    children.folders.forEach(function (sub) {
+      const codes = legacyCodes_(sub.name);
+      const matched = codes.length ? codes : legacyMatchByName_(sub.name, brands);
       if (matched.length) {
-        groups.push({ folder: sub, id: sub.getId(), name: name, codes: matched, byName: !codes.length, files: legacyFilesIn_(sub, [], []) });
+        groups.push({ id: sub.id, name: sub.name, codes: matched, byName: !codes.length, files: legacyFilesIn_(sub.id, [], [], seen) });
       } else if (depth < 2) {
         const before = groups.length;
-        walk(sub, depth + 1);
-        if (groups.length === before) unmatched.push(name);
+        walk(sub.id, sub.name, depth + 1);
+        if (groups.length === before) unmatched.push(sub.name);
       } else {
-        unmatched.push(name);
+        unmatched.push(sub.name);
       }
-    }
-  })(DriveApp.getFolderById(sourceId), 0);
-  return { groups: groups, unmatched: unmatched, loose: loose };
+    });
+  })(sourceId, '', 0);
+  return { groups: groups, unmatched: unmatched, loose: loose, sourceFolders: seen };
 }
 
 /** 여러 브랜드가 묶인 폴더에서 파일명에 특정 브랜드명이 들어 있으면 그 브랜드에만 연결한다. */
@@ -107,7 +125,7 @@ function legacyPlan_(folderUrl) {
       })
     });
   });
-  return { sourceId: sourceId, groups: groups, unmatched: scan.unmatched, loose: scan.loose };
+  return { sourceId: sourceId, groups: groups, unmatched: scan.unmatched, loose: scan.loose, sourceFolders: scan.sourceFolders };
 }
 
 function legacyPreview_(folderUrl) {
@@ -117,7 +135,7 @@ function legacyPreview_(folderUrl) {
       return {
         folder: g.name, byName: g.byName, missing: g.missing,
         brands: g.brands.map(function (b) { return { code: b.code, name: b.name, hasDrive: !!b.drive }; }),
-        files: g.files.map(function (f) { return { name: f.name, category: f.label, targets: f.targets }; })
+        files: g.files.map(function (f) { return { name: f.name, category: f.label, key: !!BO_LEGACY_KEY_DOCS[f.category], targets: f.targets }; })
       };
     }),
     unmatched: plan.unmatched,
@@ -130,12 +148,33 @@ function legacyPreview_(folderUrl) {
   };
 }
 
-/** 복사 대상 폴더: 이미 연결된 브랜드 폴더 → 루트의 [코드] 폴더 → 원본과 같은 이름으로 새로 만든다. */
-function legacyDestination_(group) {
+/** Drive 링크가 원본 폴더(또는 그 안)를 가리키는지. 그런 링크는 복사 대상으로 쓰지 않고 새 폴더로 바꾼다. */
+function legacyPointsToSource_(url, sourceFolders) {
+  const id = driveIdFromUrl_(url);
+  return !!(id && sourceFolders[id]);
+}
+
+/** 서류 URL을 새 사본으로 바꿔도 되는지: 비었거나, 지워진 파일이거나, 예전 가져오기가 만든 사본이면 바꾼다. 직접 넣은 링크는 둔다. */
+function legacyReplaceable_(url, newUrl) {
+  if (!url) return true;
+  if (url === newUrl) return false;
+  const id = driveIdFromUrl_(url);
+  if (!id) return false;
+  try {
+    const file = Drive.Files.get(id, { fields: 'id,trashed,appProperties', supportsAllDrives: true });
+    return !!(file.trashed || (file.appProperties && file.appProperties.boLegacy));
+  } catch (error) {
+    // 완전히 지워진 파일만 교체하고, 권한 문제 등으로 못 읽는 링크는 그대로 둔다.
+    return /not\s*found|404/i.test(errorMessage_(error));
+  }
+}
+
+/** 복사 대상 폴더: 이미 연결된 브랜드 폴더(원본 폴더 제외) → 루트의 [코드] 폴더 → 원본과 같은 이름으로 새로 만든다. */
+function legacyDestination_(group, sourceFolders) {
   for (let i = 0; i < group.brands.length; i++) {
     const brand = group.brands[i];
     const linked = driveIdFromUrl_(brand.drive);
-    if (linked && /\/folders\//.test(brand.drive || '')) {
+    if (linked && /\/folders\//.test(brand.drive || '') && !sourceFolders[linked]) {
       try { return DriveApp.getFolderById(linked); } catch (error) { logError_('legacy linked folder', error); }
     }
   }
@@ -143,6 +182,7 @@ function legacyDestination_(group) {
   const folders = root.getFolders();
   while (folders.hasNext()) {
     const folder = folders.next();
+    if (sourceFolders[folder.getId()]) continue;
     const codes = legacyCodes_(folder.getName());
     if (codes.length && group.codes.some(function (code) { return codes.indexOf(code) >= 0; })) return folder;
   }
@@ -156,7 +196,7 @@ function legacyRun_(folderUrl) {
   ensureSchemaAdditions_([]);
   const plan = legacyPlan_(folderUrl);
   const schema = notionSchema_('brand');
-  const log = { copied: 0, skipped: 0, brands: 0, errors: [], unfinished: false };
+  const log = { copied: 0, skipped: 0, moved: 0, brands: 0, errors: [], unfinished: false };
   const best = {}; // code -> { category -> {url, updated} }
   const folderOf = {};
 
@@ -164,23 +204,28 @@ function legacyRun_(folderUrl) {
     if (!group.brands.length) return;
     if (!budget()) { log.unfinished = true; return; }
     let dest;
-    try { dest = legacyDestination_(group); } catch (error) { log.errors.push(group.name + ': ' + errorMessage_(error)); return; }
+    try { dest = legacyDestination_(group, plan.sourceFolders); } catch (error) { log.errors.push(group.name + ': ' + errorMessage_(error)); return; }
     group.brands.forEach(function (b) { folderOf[b.code] = dest.getUrl(); });
     const subfolder = {};
     group.files.forEach(function (file) {
       if (!budget()) { log.unfinished = true; return; }
       try {
+        let parent = dest;
+        if (file.path.length) {
+          const key = file.path.join('/');
+          if (!subfolder[key]) subfolder[key] = file.path.reduce(function (f, name) { return childFolder_(f, name); }, dest);
+          parent = subfolder[key];
+        }
         const existing = driveList_({ boLegacy: file.id }, 1);
         let copy = existing[0];
-        if (copy) {
+        const strayParent = copy && (copy.parents || []).find(function (id) { return plan.sourceFolders[id]; });
+        if (strayParent) {
+          // 예전 실행이 원본 폴더 안에 만든 사본 → 브랜드 자료 폴더로 옮긴다(파일 ID·링크는 그대로).
+          copy = Drive.Files.update({}, copy.id, null, { addParents: parent.getId(), removeParents: (copy.parents || []).join(','), fields: BO_FILE_FIELDS, supportsAllDrives: true });
+          log.moved++;
+        } else if (copy) {
           log.skipped++;
         } else {
-          let parent = dest;
-          if (file.path.length) {
-            const key = file.path.join('/');
-            if (!subfolder[key]) subfolder[key] = file.path.reduce(function (f, name) { return childFolder_(f, name); }, dest);
-            parent = subfolder[key];
-          }
           copy = Drive.Files.copy({
             name: file.name, parents: [parent.getId()],
             appProperties: { boKind: 'doc', boBrand: file.targets[0], boCat: file.category, boStatus: 'approved', boLegacy: file.id }
@@ -188,6 +233,7 @@ function legacyRun_(folderUrl) {
           log.copied++;
         }
         const url = copy.webViewLink || ('https://drive.google.com/file/d/' + copy.id + '/view');
+        if (!BO_LEGACY_KEY_DOCS[file.category]) return;
         file.targets.forEach(function (code) {
           best[code] = best[code] || {};
           const current = best[code][file.category];
@@ -199,23 +245,24 @@ function legacyRun_(folderUrl) {
     });
   });
 
-  // Notion: 비어 있는 속성만 채운다(직접 입력한 값은 그대로 둔다).
-  const docKeys = { business: 'docBusiness', intro: 'docIntro', contract: 'docContract', other: 'docOther', bank: 'docBank', products: 'docProducts' };
+  // Notion: '구글 드라이브'는 비었거나 원본 폴더를 가리킬 때 새 폴더로, 중요 서류 URL은 비어 있을 때만 채운다.
   plan.groups.forEach(function (group) {
     group.brands.forEach(function (brand) {
       const patch = {};
-      if (folderOf[brand.code] && schema.ids.drive && !brand.drive) patch[schema.ids.drive] = { url: folderOf[brand.code] };
+      if (folderOf[brand.code] && schema.ids.drive && (!brand.drive || legacyPointsToSource_(brand.drive, plan.sourceFolders)) && brand.drive !== folderOf[brand.code]) {
+        patch[schema.ids.drive] = { url: folderOf[brand.code] };
+      }
       const docs = best[brand.code] || {};
       Object.keys(docs).forEach(function (category) {
-        const key = docKeys[category];
+        const key = BO_LEGACY_KEY_DOCS[category];
         const current = (brand.docs || {})[category];
-        if (key && schema.ids[key] && !current) patch[schema.ids[key]] = { url: docs[category].url };
+        if (key && schema.ids[key] && legacyReplaceable_(current, docs[category].url)) patch[schema.ids[key]] = { url: docs[category].url };
       });
       if (!Object.keys(patch).length) return;
       try { notionPatch_(brand.pageId, patch); log.brands++; } catch (error) { log.errors.push(brand.code + ' Notion: ' + errorMessage_(error)); }
     });
   });
   bumpCache_('brand');
-  logInfo_('legacy.drive', { copied: log.copied, skipped: log.skipped, brands: log.brands, errors: log.errors.length });
+  logInfo_('legacy.drive', { copied: log.copied, skipped: log.skipped, moved: log.moved, brands: log.brands, errors: log.errors.length });
   return log;
 }

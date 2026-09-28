@@ -207,10 +207,11 @@ function apiDocumentReview_(payload) {
     if (file.kind !== 'doc') throw userError_('브랜드 서류가 아닙니다.');
     if (file.statusCode === 'approved' && action === 'approve') return { file: file };
     const brand = requireBrand_(file.brandCode);
-    if (action === 'approve') {
-      const schemaKey = BO.DOC_CATEGORIES[file.category];
+    // 입점 상품 리스트처럼 Notion 속성이 없는 분류는 브랜드 폴더에만 두고 승인만 기록한다.
+    const schemaKey = BO.DOC_CATEGORIES[file.category];
+    if (action === 'approve' && schemaKey) {
       const schema = notionSchema_('brand');
-      if (!schemaKey || !schema.ids[schemaKey]) throw userError_('Notion 브랜드 DB에 "' + file.category + '" 서류 링크 속성이 없습니다.');
+      if (!schema.ids[schemaKey]) throw userError_('Notion 브랜드 DB에 "' + file.category + '" 서류 링크 속성이 없습니다. 설정 → 초기 설정을 실행해 주세요.');
       const patch = {};
       patch[schema.ids[schemaKey]] = { url: file.url };
       const updated = notionPatch_(brand.pageId, patch);

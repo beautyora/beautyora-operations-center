@@ -13,7 +13,7 @@ function brandSummary_(row) {
     owners: (row.owner || []).map(function (p) { return p.name; }).filter(Boolean),
     formSubmitted: !!row.formSubmitted, issue: row.issue || '', drive: row.drive || '', bizNo: row.bizNo || '',
     formResponseId: row.formResponseId || '',
-    docs: { business: row.docBusiness || '', bank: row.docBank || '', products: row.docProducts || '', intro: row.docIntro || '', contract: row.docContract || '', other: row.docOther || '' }
+    docs: { business: row.docBusiness || '', bank: row.docBank || '', intro: row.docIntro || '', contract: row.docContract || '', other: row.docOther || '' }
   };
 }
 
@@ -66,7 +66,7 @@ function brandPage_(brand) {
 }
 
 function brandProtectedIds_(schema) {
-  return ['code', 'formResponseId', 'docBusiness', 'docBank', 'docProducts', 'docIntro', 'docContract', 'docOther']
+  return ['code', 'formResponseId', 'docBusiness', 'docBank', 'docIntro', 'docContract', 'docOther']
     .map(function (key) { return schema.ids[key]; }).filter(Boolean);
 }
 
