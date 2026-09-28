@@ -122,10 +122,24 @@ async function pageHome(view) {
   setCounts(d.counts);
   const c = d.counts;
   const tile = (label, value, hint, href) => '<a class="stat' + (value ? ' attention' : ' zero') + '" href="' + href + '" data-link="' + href.slice(1) + '"><span class="label">' + esc(label) + '</span><span class="value">' + Fmt.num(value) + '</span><span class="hint">' + esc(hint) + '</span></a>';
+  const recent = c.intakeRecent || 0;
+  const share = c.intake ? recent / c.intake : 0;
+  const hour = new Date().getHours();
+  const hello = hour < 11 ? '좋은 아침이에요.' : hour < 18 ? '좋은 오후예요.' : '오늘도 수고 많으셨어요.';
+  const hero = '<a class="stat hero' + (c.intake ? '' : ' zero') + '" href="#/intake" data-link="/intake">' +
+    '<span class="hero-text"><span class="label">입점 신청 · 접수·검토 단계</span>' +
+      '<span class="value">' + Fmt.num(c.intake) + '<small>건</small></span>' +
+      '<span class="hint">최근 14일 접수 ' + Fmt.num(recent) + '건 · 그 이전 ' + Fmt.num(c.intake - recent) + '건</span>' +
+      '<span class="go">검토 시작' + icon('chevron') + '</span></span>' +
+    '<svg class="ring" viewBox="0 0 120 120" aria-hidden="true"><circle class="track" cx="60" cy="60" r="48" fill="none" stroke-width="12"></circle>' +
+      '<circle class="bar" cx="60" cy="60" r="48" fill="none" stroke-width="12" stroke-linecap="round" stroke-dasharray="301.6" stroke-dashoffset="301.6" data-offset="' + (301.6 * (1 - share)).toFixed(1) + '" transform="rotate(-90 60 60)"></circle>' +
+      '<text x="60" y="60" text-anchor="middle" font-size="22" font-weight="700">' + Math.round(share * 100) + '%</text>' +
+      '<text x="60" y="78" text-anchor="middle" font-size="10">최근 14일</text></svg></a>';
   view.innerHTML =
+    '<div class="hello"><span class="date">' + esc(new Date().toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', weekday: 'long' })) + '</span><h2>' + hello + '</h2></div>' +
     (d.warnings && d.warnings.length ? '<div class="notice warn">' + icon('alert') + '<div>일부 정보를 불러오지 못했습니다: ' + esc(d.warnings.join(' / ')) + ' <a href="#/settings" data-link="/settings">연결 상태 확인</a></div></div>' : '') +
     '<section class="stats" aria-label="처리할 일">' +
-      tile('입점 신청', c.intake, '접수·검토 단계 브랜드', '#/intake') +
+      hero +
       tile('상품 검수', c.review + c.change, '신규 ' + c.review + ' · 변경 요청 ' + c.change, '#/review') +
       tile('서류 검수', c.documents, '사업자등록증·계약서 등', '#/review?tab=docs') +
       tile('오늘까지 후속 연락', c.followups, '영업 기록의 후속 확인일', '#/home') +
@@ -142,19 +156,30 @@ async function pageHome(view) {
     '</div>' +
     (d.expiringLinks.length ? '<section class="card"><div class="card-head"><h2>7일 안에 만료되는 상품등록 링크</h2></div><div class="list">' + d.expiringLinks.map((l) => '<a class="list-item" href="#/brands/' + encodeURIComponent(l.brandCode) + '" data-link="/brands/' + encodeURIComponent(l.brandCode) + '?tab=links"><div class="grow cell-title">' + esc(l.brandName) + '</div><span class="small muted">만료 ' + esc(l.expiry) + '</span></a>').join('') + '</div></section>' : '') +
     '<p class="small muted">브랜드 ' + Fmt.num(d.totals.brands) + '곳 · 상품 ' + Fmt.num(d.totals.products) + '개(승인 ' + Fmt.num(d.totals.approved) + ') · ' + esc(Fmt.datetime(d.generatedAt)) + ' 기준</p>';
+  const ring = $('.ring .bar', view);
+  if (ring) requestAnimationFrame(() => requestAnimationFrame(() => ring.setAttribute('stroke-dashoffset', ring.dataset.offset)));
 }
 
 /* ---------- 입점 신청 ---------- */
 async function pageIntake(view) {
   const data = await Api.get('intake.list', {}, 30000);
   Admin.state.intake = data;
+  const from = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
+  const isRecent = (b) => String(b.received || b.createdAt || '').slice(0, 10) >= from;
+  const nRecent = data.items.filter(isRecent).length;
+  const filter = Admin.route.query.when || '';
+  const items = data.items.filter((b) => !filter || (filter === 'recent') === isRecent(b));
+  const chip = (key, label, n) => '<button class="btn btn-sm' + (filter === key ? ' btn-primary' : '') + '" data-when="' + key + '" aria-pressed="' + (filter === key) + '">' + esc(label) + ' <span class="num" style="opacity:.7">' + Fmt.num(n) + '</span></button>';
   view.innerHTML =
+    '<div class="toolbar" role="group" aria-label="접수 시기">' + chip('', '전체', data.items.length) + chip('recent', '최근 14일', nRecent) + chip('older', '그 이전', data.items.length - nRecent) + '</div>' +
     '<div class="toolbar"><span class="muted grow">' + (data.formConnected ? 'Google Form 제출은 자동으로 Notion에 "접수·검토"로 등록됩니다.' : '입점 신청 폼이 연결되지 않았습니다. 설정 → 연결 상태를 확인해 주세요.') + '</span>' +
       (data.formConnected ? '<button class="btn btn-sm" id="importForm">' + icon('refresh') + '빠진 폼 응답 가져오기</button>' : '') + '</div>' +
-    (data.items.length ? '<section class="card table-wrap"><table class="table"><thead><tr><th>접수일</th><th>브랜드</th><th class="hide-sm">담당자</th><th class="hide-sm">희망 거래·채널</th><th>확인</th></tr></thead><tbody>' +
-      data.items.map((b) => '<tr class="clickable" data-code="' + esc(b.code) + '"><td class="nowrap">' + esc(Fmt.date(b.received || b.createdAt)) + '</td><td><div class="cell-title">' + esc(b.name) + '</div><div class="cell-sub">' + esc(b.code) + ' · ' + esc(b.company) + '</div></td><td class="hide-sm">' + esc(b.contactName || '—') + '<div class="cell-sub">' + esc(b.phone) + '</div></td><td class="hide-sm">' + esc(Fmt.list(b.trade) || '—') + '<div class="cell-sub ellipsis" style="max-width:260px">' + esc([b.channel1, b.channel2, b.channelAny].filter(Boolean).join(' / ')) + '</div></td><td>' + (b.sameBiz.length ? pill('사업자번호 중복', 'warn') : pill('신규', 'info')) + '</td></tr>').join('') +
+    (items.length ? '<section class="card table-wrap"><table class="table"><thead><tr><th>접수일</th><th>브랜드</th><th class="hide-sm">담당자</th><th class="hide-sm">희망 거래·채널</th><th>확인</th></tr></thead><tbody>' +
+      items.map((b) => '<tr class="clickable" data-code="' + esc(b.code) + '"><td class="nowrap">' + esc(Fmt.date(b.received || b.createdAt)) + '</td><td><div class="cell-title">' + esc(b.name) + '</div><div class="cell-sub">' + esc(b.code) + ' · ' + esc(b.company) + '</div></td><td class="hide-sm">' + esc(b.contactName || '—') + '<div class="cell-sub">' + esc(b.phone) + '</div></td><td class="hide-sm">' + esc(Fmt.list(b.trade) || '—') + '<div class="cell-sub ellipsis" style="max-width:260px">' + esc([b.channel1, b.channel2, b.channelAny].filter(Boolean).join(' / ')) + '</div></td><td>' + (b.sameBiz.length ? pill('사업자번호 중복', 'warn') : pill('신규', 'info')) + '</td></tr>').join('') +
       '</tbody></table></section>' : '<section class="card">' + UI.empty('검토할 입점 신청이 없습니다', '새 폼 응답이 들어오면 여기에 표시됩니다.') + '</section>');
   view.addEventListener('click', (e) => {
+    const when = e.target.closest('[data-when]');
+    if (when) { Nav.go('/intake' + queryString({ when: when.dataset.when })); return; }
     const row = e.target.closest('tr[data-code]');
     if (row) openIntake(row.dataset.code);
   });
