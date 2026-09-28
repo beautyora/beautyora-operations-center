@@ -28,6 +28,9 @@ function renderTabs() {
 }
 
 function go(tab) {
+  // 이전 탭에 예약된 목록 다시 그리기를 취소한다(사라진 요소를 그리지 않게).
+  clearTimeout(P.listTimer);
+  P.paintDraftList = null;
   P.tab = tab;
   renderTabs();
   const old = $('#pview');
@@ -130,6 +133,7 @@ function viewDrafts(view) {
   if (!P.drafts.some((d) => d.id === P.current)) P.current = P.drafts[0].id;
   view.innerHTML = '<div class="editor"><aside class="card draft-list"><div class="card-head"><h3>작성 중 ' + P.drafts.length + '</h3><button class="btn btn-sm" id="dAdd">' + icon('plus') + '추가</button></div><div class="list" id="dList"></div><div class="sticky-actions" style="justify-content:space-between"><label class="check small"><input type="checkbox" id="dAll"> 모두 선택</label><button class="btn btn-primary" id="dSubmit">선택 제출</button></div></aside><section id="dEditor"></section></div>';
   const paintList = () => {
+    if (!$('#dList')) return;
     $('#dList').innerHTML = P.drafts.map((d) => {
       const issues = draftIssues(d);
       return '<div class="list-item' + (d.id === P.current ? ' selected' : '') + '" style="padding:10px 12px' + (d.id === P.current ? ';background:var(--brand-soft)' : '') + '"><input type="checkbox" data-sel="' + esc(d.id) + '"' + (P.selected.has(d.id) ? ' checked' : '') + ' aria-label="제출 선택"><button class="grow btn-ghost" style="border:0;background:none;text-align:left;cursor:pointer;padding:0" data-pick="' + esc(d.id) + '"><div class="cell-title ellipsis">' + esc(d.data.product_name || d.name || '이름 없는 상품') + '</div><div class="cell-sub">' + ({ new: '새 상품', revision: '보완 재제출', change: '수정 요청' })[d.mode] + ' · ' + (issues.length ? '<span style="color:var(--bad)">' + issues.length + '개 남음</span>' : '<span style="color:var(--ok)">제출 가능</span>') + '</div></button></div>';
