@@ -44,6 +44,8 @@ function legacyMatchByName_(name, brands) {
 }
 
 const BO_FOLDER_MIME = 'application/vnd.google-apps.folder';
+/** 이 시각 이후에 만들어진 파일만 예전 가져오기의 사본 후보로 본다(기능 배포일). */
+const BO_LEGACY_SINCE = '2026-09-28T00:00:00';
 
 /** 폴더의 하위 항목. 운영센터가 만든 사본(boLegacy)과 바로가기는 원본으로 보지 않는다. */
 function legacyChildren_(folderId) {
@@ -52,14 +54,14 @@ function legacyChildren_(folderId) {
   do {
     const options = {
       q: "'" + folderId + "' in parents and trashed = false", pageSize: 200, supportsAllDrives: true, includeItemsFromAllDrives: true,
-      fields: 'nextPageToken, files(id,name,mimeType,modifiedTime,appProperties)'
+      fields: 'nextPageToken, files(id,name,mimeType,modifiedTime,md5Checksum,appProperties)'
     };
     if (token) options.pageToken = token;
     const response = Drive.Files.list(options);
     (response.files || []).forEach(function (f) {
       if (f.mimeType === BO_FOLDER_MIME) out.folders.push({ id: f.id, name: f.name });
       else if (f.mimeType !== 'application/vnd.google-apps.shortcut' && !(f.appProperties && f.appProperties.boLegacy)) {
-        out.files.push({ id: f.id, name: f.name, mimeType: f.mimeType || '', updated: f.modifiedTime || '' });
+        out.files.push({ id: f.id, name: f.name, mimeType: f.mimeType || '', updated: f.modifiedTime || '', md5: f.md5Checksum || '' });
       }
     });
     token = response.nextPageToken || '';
@@ -190,13 +192,47 @@ function legacyDestination_(group, sourceFolders) {
   return root.createFolder(name);
 }
 
+function legacyAppProperties_(file) {
+  return { boKind: 'doc', boBrand: file.targets[0], boCat: file.category, boStatus: 'approved', boLegacy: file.id };
+}
+
+/**
+ * 예전 실행에서 표시(boLegacy) 없이 내 드라이브 첫 화면에 떨어진 사본: 이름·내용(md5)이 같고
+ * 가져오기 기능을 배포한 뒤 내가 만든 파일만 사본으로 본다.
+ */
+function legacyRootStrays_(file) {
+  if (!file.md5) return [];
+  const q = "name = '" + String(file.name).replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "' and 'root' in parents and 'me' in owners and trashed = false and createdTime > '" + BO_LEGACY_SINCE + "'";
+  const response = Drive.Files.list({ q: q, pageSize: 50, fields: 'files(' + BO_FILE_FIELDS + ',md5Checksum)', supportsAllDrives: true });
+  return (response.files || []).filter(function (f) { return f.id !== file.id && f.md5Checksum === file.md5; });
+}
+
+/** 사본을 목표 폴더로 옮기고 운영센터 표시를 붙인다. 이미 맞으면 그대로 돌려준다. */
+function legacyEnsurePlaced_(copy, parentId, appProperties, log) {
+  const parents = copy.parents || [];
+  const app = copy.appProperties || {};
+  const needsMove = parents.length !== 1 || parents[0] !== parentId;
+  const needsTag = Object.keys(appProperties).some(function (k) { return k !== 'boStatus' && app[k] !== appProperties[k]; }) || !app.boStatus;
+  if (!needsMove && !needsTag) return copy;
+  const options = { fields: BO_FILE_FIELDS, supportsAllDrives: true };
+  if (needsMove) {
+    options.addParents = parentId;
+    const remove = parents.filter(function (id) { return id !== parentId; });
+    if (remove.length) options.removeParents = remove.join(',');
+    log.moved++;
+  }
+  const updated = Drive.Files.update(needsTag ? { appProperties: Object.assign({}, appProperties, app.boStatus ? { boStatus: app.boStatus } : {}) } : {}, copy.id, null, options);
+  if (needsMove && (updated.parents || []).indexOf(parentId) < 0) throw new Error('사본을 브랜드 폴더로 옮기지 못했습니다(' + copy.id + ').');
+  return updated;
+}
+
 function legacyRun_(folderUrl) {
   const started = Date.now();
   const budget = function () { return Date.now() - started < 270000; };
   ensureSchemaAdditions_([]);
   const plan = legacyPlan_(folderUrl);
   const schema = notionSchema_('brand');
-  const log = { copied: 0, skipped: 0, moved: 0, brands: 0, errors: [], unfinished: false };
+  const log = { copied: 0, skipped: 0, moved: 0, trashed: 0, brands: 0, errors: [], unfinished: false };
   const best = {}; // code -> { category -> {url, updated} }
   const folderOf = {};
 
@@ -216,22 +252,27 @@ function legacyRun_(folderUrl) {
           if (!subfolder[key]) subfolder[key] = file.path.reduce(function (f, name) { return childFolder_(f, name); }, dest);
           parent = subfolder[key];
         }
-        const existing = driveList_({ boLegacy: file.id }, 1);
-        let copy = existing[0];
-        const strayParent = copy && (copy.parents || []).find(function (id) { return plan.sourceFolders[id]; });
-        if (strayParent) {
-          // 예전 실행이 원본 폴더 안에 만든 사본 → 브랜드 자료 폴더로 옮긴다(파일 ID·링크는 그대로).
-          copy = Drive.Files.update({}, copy.id, null, { addParents: parent.getId(), removeParents: (copy.parents || []).join(','), fields: BO_FILE_FIELDS, supportsAllDrives: true });
-          log.moved++;
-        } else if (copy) {
-          log.skipped++;
-        } else {
+        const tagged = driveList_({ boLegacy: file.id }, 50);
+        const strays = tagged.length ? [] : legacyRootStrays_(file);
+        const found = tagged.concat(strays);
+        let copy = found.find(function (f) { return (f.parents || []).indexOf(parent.getId()) >= 0; }) || found[0];
+        // 같은 원본의 사본이 여러 개면 하나만 남기고 휴지통으로 보낸다(예전 실행이 중복으로 만든 것).
+        found.forEach(function (f) {
+          if (f.id === copy.id) return;
+          Drive.Files.update({ trashed: true }, f.id, null, { supportsAllDrives: true });
+          log.trashed++;
+        });
+        if (!copy) {
           copy = Drive.Files.copy({
             name: file.name, parents: [parent.getId()],
-            appProperties: { boKind: 'doc', boBrand: file.targets[0], boCat: file.category, boStatus: 'approved', boLegacy: file.id }
+            appProperties: legacyAppProperties_(file)
           }, file.id, { fields: BO_FILE_FIELDS, supportsAllDrives: true });
           log.copied++;
+        } else {
+          log.skipped++;
         }
+        // 사본이 브랜드 폴더 밖(원본 폴더·내 드라이브 첫 화면 등)에 있거나 표시가 빠졌으면 바로잡는다.
+        copy = legacyEnsurePlaced_(copy, parent.getId(), legacyAppProperties_(file), log);
         const url = copy.webViewLink || ('https://drive.google.com/file/d/' + copy.id + '/view');
         if (!BO_LEGACY_KEY_DOCS[file.category]) return;
         file.targets.forEach(function (code) {
@@ -263,6 +304,6 @@ function legacyRun_(folderUrl) {
     });
   });
   bumpCache_('brand');
-  logInfo_('legacy.drive', { copied: log.copied, skipped: log.skipped, moved: log.moved, brands: log.brands, errors: log.errors.length });
+  logInfo_('legacy.drive', { copied: log.copied, skipped: log.skipped, moved: log.moved, trashed: log.trashed, brands: log.brands, errors: log.errors.length });
   return log;
 }

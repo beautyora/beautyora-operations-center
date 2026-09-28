@@ -315,7 +315,7 @@ class FakeDrive {
   }
   file(resource, blob) {
     const id = this.nextId('file');
-    const file = { id, name: resource.name, mimeType: resource.mimeType || (blob && blob.getContentType()) || '', parents: resource.parents || [], appProperties: Object.assign({}, resource.appProperties || {}), description: resource.description || '', createdTime: new Date(Date.UTC(2026, 8, 28, 0, this.seq)).toISOString(), size: blob ? String(blob.getBytes().length) : '0', trashed: false };
+    const file = { id, name: resource.name, md5Checksum: resource.md5Checksum || ('md5-' + id), mimeType: resource.mimeType || (blob && blob.getContentType()) || '', parents: resource.parents || [], appProperties: Object.assign({}, resource.appProperties || {}), description: resource.description || '', createdTime: new Date(Date.UTC(2026, 8, 28, 0, this.seq)).toISOString(), size: blob ? String(blob.getBytes().length) : '0', trashed: false };
     file.webViewLink = 'https://drive.google.com/file/d/' + id + '/view';
     file.thumbnailLink = 'https://thumb.test/' + id + '=s220';
     this.items[id] = file;
@@ -323,6 +323,8 @@ class FakeDrive {
   }
   matchesQuery(file, q) {
     if (file.trashed) return false;
+    const byName = /name = '((?:[^'\\]|\\.)*)'/.exec(q);
+    if (byName && file.name !== byName[1].replace(/\\'/g, "'")) return false;
     const parent = /'([^']+)' in parents/.exec(q);
     if (parent) return (file.parents || []).indexOf(parent[1]) >= 0;
     if (file.folder) return false;
@@ -345,13 +347,14 @@ class FakeDrive {
           const f = self.items[id]; if (!f) throw new Error('File not found: ' + id);
           if (opts && opts.addParents) f.parents = [opts.addParents].concat(f.parents.filter((p) => String(opts.removeParents || '').split(',').indexOf(p) < 0));
           if (resource.appProperties) f.appProperties = Object.assign({}, f.appProperties, resource.appProperties);
+          if (resource.trashed) f.trashed = true;
           if (resource.description != null) f.description = resource.description;
           return JSON.parse(JSON.stringify(f));
         },
         remove: (id) => { delete self.items[id]; },
         copy: (resource, id) => {
           const src = self.items[id]; if (!src || src.folder) throw new Error('File not found: ' + id);
-          return JSON.parse(JSON.stringify(self.file(Object.assign({ name: src.name, mimeType: src.mimeType }, resource), null)));
+          return JSON.parse(JSON.stringify(self.file(Object.assign({ name: src.name, mimeType: src.mimeType, md5Checksum: src.md5Checksum }, resource), null)));
         }
       }
     };

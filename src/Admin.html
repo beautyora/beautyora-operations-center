@@ -743,7 +743,7 @@ async function pageSettings(view) {
       if (!await Modal.confirm('기존 제출 자료 가져오기', '파일을 브랜드 자료 폴더로 복사하고 Notion의 빈 서류 URL 칸을 채웁니다. 원본은 그대로 둡니다.', '실행')) return;
       const r = await Api.call('legacy.run', { folderUrl });
       Api.invalidate();
-      lOut.innerHTML = '<div class="notice ' + (r.errors.length ? 'warn' : 'ok') + '"><div>복사 ' + r.copied + '개 · 이미 복사됨 ' + r.skipped + '개' + (r.moved ? ' · 원본 폴더에서 옮김 ' + r.moved + '개' : '') + ' · Notion 갱신 브랜드 ' + r.brands + '곳' + (r.unfinished ? '<br><strong>시간이 부족해 일부만 처리했습니다. 한 번 더 실행해 주세요.</strong>' : '') + (r.errors.length ? '<br>오류: ' + esc(r.errors.slice(0, 10).join(' / ')) : '') + '</div></div>';
+      lOut.innerHTML = '<div class="notice ' + (r.errors.length ? 'warn' : 'ok') + '"><div>복사 ' + r.copied + '개 · 이미 복사됨 ' + r.skipped + '개' + (r.moved ? ' · 브랜드 폴더로 옮김 ' + r.moved + '개' : '') + (r.trashed ? ' · 중복 사본 휴지통 ' + r.trashed + '개' : '') + ' · Notion 갱신 브랜드 ' + r.brands + '곳' + (r.unfinished ? '<br><strong>시간이 부족해 일부만 처리했습니다. 한 번 더 실행해 주세요.</strong>' : '') + (r.errors.length ? '<br>오류: ' + esc(r.errors.slice(0, 10).join(' / ')) : '') + '</div></div>';
     } catch (err) { Toast.error(err); }
   }));
   const out = $('#sMigrateOut');
