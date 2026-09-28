@@ -392,13 +392,13 @@ test('no Google Sheets dependency remains outside the one-time migration', () =>
   });
 });
 
-test('legacy drive import copies brand folders and fills empty Notion document URLs', () => {
+test('legacy drive import copies brand folders, links key documents only, and repairs stray copies', () => {
   const { env, data } = setup();
   ok(env.api('system.setup'));
   const d = env.drive;
   const src = d.folder('기존 제출', null);
   const f1 = d.folder('[BO-0001 · BO-0002] 루엠 주식회사_루엠 · 셀리본', src);
-  d.file({ name: '사업자등록증.pdf', mimeType: 'application/pdf', parents: [f1] }, null);
+  const biz = d.file({ name: '사업자등록증.pdf', mimeType: 'application/pdf', parents: [f1] }, null);
   d.file({ name: '농협_통장사본.png', mimeType: 'image/png', parents: [f1] }, null);
   d.file({ name: '뷰티오라_입점 상품 리스트_셀리본.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', parents: [f1] }, null);
   const done = d.folder('2차 확인 완료', src);
@@ -406,39 +406,51 @@ test('legacy drive import copies brand folders and fills empty Notion document U
   d.file({ name: '새싹랩 제품소개서.pdf', mimeType: 'application/pdf', parents: [f2] }, null);
   d.folder('[BO-0999] 없는 브랜드', src);
   d.file({ name: '_TEMPLATE_상품 제출 시트', mimeType: 'application/vnd.google-apps.spreadsheet', parents: [src] }, null);
-  // 이미 직접 넣은 값은 덮어쓰지 않는다.
+  // 직접 넣은 서류 값은 덮어쓰지 않는다.
   env.notion.pages[data.b1.id].properties['사업자등록증 Drive URL'] = { id: 'x', type: 'url', url: 'https://drive.google.com/file/d/manual/view' };
+  // 셀리본의 '구글 드라이브'가 원본 폴더를 가리키고, 예전 실행이 그 안에 사본을 만들어 둔 상태.
+  env.notion.pages[data.b2.id].properties['구글 드라이브'] = { id: 'y', type: 'url', url: 'https://drive.google.com/drive/folders/' + f1 };
+  const stray = d.file({ name: '사업자등록증.pdf', mimeType: 'application/pdf', parents: [f1], appProperties: { boKind: 'doc', boBrand: 'BO-0001', boCat: 'business', boStatus: 'approved', boLegacy: biz.id } }, null);
   env.api('system.refresh');
 
   const url = 'https://drive.google.com/drive/folders/' + src + '?usp=sharing';
   const preview = ok(env.api('legacy.preview', { folderUrl: url }));
-  assert.deepEqual([preview.totals.folders, preview.totals.files], [3, 4]);
+  assert.deepEqual([preview.totals.folders, preview.totals.files], [3, 4], 'the stray copy is not treated as a source file');
   const g1 = preview.groups.find((g) => g.folder.startsWith('[BO-0001'));
-  assert.deepEqual(g1.files.map((f) => f.category), ['사업자등록증', '통장사본', '입점 상품 리스트']);
+  assert.deepEqual(g1.files.map((f) => [f.category, f.key]), [['사업자등록증', true], ['통장사본', true], ['입점 상품 리스트', false]]);
   assert.deepEqual(g1.files[2].targets, ['BO-0002'], 'file named after one brand goes to that brand only');
   assert.ok(preview.groups.some((g) => g.byName && g.brands[0].code === 'BO-0003'), 'code-less folder matched by name');
   assert.deepEqual(preview.groups.find((g) => g.folder.startsWith('[BO-0999')).missing, ['BO-0999']);
 
   const run = ok(env.api('legacy.run', { folderUrl: url }));
-  assert.deepEqual([run.copied, run.skipped, run.errors.length], [4, 0, 0], JSON.stringify(run.errors));
+  assert.deepEqual([run.copied, run.moved, run.skipped, run.errors.length], [3, 1, 0, 0], JSON.stringify(run));
   const page = (p) => env.notion.pages[p.id].properties;
+  const newFolder = page(data.b1)['구글 드라이브'].url;
+  assert.match(newFolder, /\/folders\//);
+  assert.ok(!newFolder.includes(f1), 'never links the original folder');
+  assert.equal(page(data.b2)['구글 드라이브'].url, newFolder, 'link that pointed at the original folder is replaced');
+  assert.ok(d.items[stray.id].parents[0] !== f1, 'stray copy moved out of the original folder');
+  assert.equal(Object.values(d.items).filter((f) => !f.folder && f.parents[0] === f1).length, 3, 'original folder holds only the originals');
   assert.equal(page(data.b1)['사업자등록증 Drive URL'].url, 'https://drive.google.com/file/d/manual/view', 'manual value kept');
   assert.match(page(data.b2)['사업자등록증 Drive URL'].url, /\/file\/d\//);
   assert.match(page(data.b2)['통장사본 Drive URL'].url, /\/file\/d\//);
-  assert.match(page(data.b2)['입점 상품 리스트 Drive URL'].url, /\/file\/d\//);
-  assert.ok(!page(data.b1)['입점 상품 리스트 Drive URL'] || !page(data.b1)['입점 상품 리스트 Drive URL'].url);
-  assert.match(page(data.b3)['브랜드 소개서 Drive URL'].url, /\/file\/d\//);
-  assert.match(page(data.b1)['구글 드라이브'].url, /\/folders\//);
-  assert.equal(page(data.b1)['구글 드라이브'].url, page(data.b2)['구글 드라이브'].url, 'grouped brands share one folder');
+  assert.ok(!page(data.b2)['입점 상품 리스트 Drive URL'], 'no separate property for product lists');
+  assert.ok(!page(data.b3)['브랜드 소개서 Drive URL'] || !page(data.b3)['브랜드 소개서 Drive URL'].url, 'non-key files stay in the folder only');
+  assert.match(page(data.b3)['구글 드라이브'].url, /\/folders\//);
   const copies = Object.values(d.items).filter((f) => f.appProperties && f.appProperties.boLegacy);
   assert.equal(copies.length, 4);
   assert.ok(copies.every((f) => f.appProperties.boStatus === 'approved' && f.appProperties.boKind === 'doc'));
-  const docs = ok(env.api('brands.documents', { code: 'BO-0002' }));
-  assert.ok(docs.documents.some((f) => f.category === '입점 상품 리스트'));
-  assert.equal(ok(env.api('documents.pending')).documents.filter((f) => /통장|사업자/.test(f.name)).length, 0, 'legacy docs skip the review queue');
+  assert.ok(ok(env.api('brands.documents', { code: 'BO-0002' })).documents.some((f) => f.category === '입점 상품 리스트'));
 
   const rerun = ok(env.api('legacy.run', { folderUrl: url }));
-  assert.deepEqual([rerun.copied, rerun.skipped], [0, 4], 'second run copies nothing');
+  assert.deepEqual([rerun.copied, rerun.moved, rerun.skipped, rerun.brands], [0, 0, 4, 0], 'second run changes nothing');
+
+  // 사본을 지웠다면 다시 복사하고 Notion 링크도 새 사본으로 바꾼다.
+  const bankCopy = copies.find((f) => f.name === '농협_통장사본.png');
+  bankCopy.trashed = true;
+  const again = ok(env.api('legacy.run', { folderUrl: url }));
+  assert.equal(again.copied, 1);
+  assert.ok(!page(data.b2)['통장사본 Drive URL'].url.includes(bankCopy.id), 'link to the deleted copy replaced');
 });
 
 test('setup keeps going when one step fails and says how to fix it', () => {

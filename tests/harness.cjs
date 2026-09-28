@@ -322,7 +322,10 @@ class FakeDrive {
     return file;
   }
   matchesQuery(file, q) {
-    if (file.folder || file.trashed) return false;
+    if (file.trashed) return false;
+    const parent = /'([^']+)' in parents/.exec(q);
+    if (parent) return (file.parents || []).indexOf(parent[1]) >= 0;
+    if (file.folder) return false;
     const re = /appProperties has \{ key='([^']+)' and value='((?:[^'\\]|\\.)*)' \}/g;
     let m, ok = true;
     while ((m = re.exec(q))) { if ((file.appProperties || {})[m[1]] !== m[2].replace(/\\'/g, "'")) ok = false; }
@@ -336,10 +339,11 @@ class FakeDrive {
           if (resource.mimeType === 'application/vnd.google-apps.spreadsheet') { const f = self.file(resource, blob); f.converted = true; return f; }
           return JSON.parse(JSON.stringify(self.file(resource, blob)));
         },
-        list: (opts) => ({ files: Object.values(self.items).filter((f) => self.matchesQuery(f, opts.q)).map((f) => JSON.parse(JSON.stringify(f))) }),
+        list: (opts) => ({ files: Object.values(self.items).filter((f) => self.matchesQuery(f, opts.q)).map((f) => Object.assign(JSON.parse(JSON.stringify(f)), f.folder ? { mimeType: 'application/vnd.google-apps.folder' } : {})) }),
         get: (id) => { const f = self.items[id]; if (!f || f.folder) throw new Error('File not found: ' + id); return JSON.parse(JSON.stringify(f)); },
-        update: (resource, id) => {
+        update: (resource, id, blob, opts) => {
           const f = self.items[id]; if (!f) throw new Error('File not found: ' + id);
+          if (opts && opts.addParents) f.parents = [opts.addParents].concat(f.parents.filter((p) => String(opts.removeParents || '').split(',').indexOf(p) < 0));
           if (resource.appProperties) f.appProperties = Object.assign({}, f.appProperties, resource.appProperties);
           if (resource.description != null) f.description = resource.description;
           return JSON.parse(JSON.stringify(f));
