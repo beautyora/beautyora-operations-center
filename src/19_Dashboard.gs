@@ -20,6 +20,7 @@ function apiDashboard_() {
   const inventory = unwrap('재고', safeSection_('inventory', function () { return listInventory_().filter(function (r) { return r.check; }); }, []), []);
   const links = unwrap('링크', safeSection_('links', listLinks_, []), []);
   const soon = addDays_(today_(), 7);
+  const recentFrom = addDays_(today_(), -14);
   const expiring = links.filter(function (l) { return l.active && l.expiry && l.expiry <= soon; });
   const brandByKey = {};
   brands.forEach(function (b) { brandByKey[String(b.pageId).replace(/-/g, '')] = b; });
@@ -33,6 +34,7 @@ function apiDashboard_() {
   return {
     counts: {
       intake: brands.filter(function (b) { return b.stage === BO.INTAKE_STAGE; }).length,
+      intakeRecent: brands.filter(function (b) { return b.stage === BO.INTAKE_STAGE && String(b.received || b.createdAt || '').slice(0, 10) >= recentFrom; }).length,
       review: products.filter(function (p) { return p.review === BO.REVIEW.PENDING; }).length,
       change: products.filter(function (p) { return p.change === BO.CHANGE.PENDING; }).length,
       waitingOnBrand: products.filter(function (p) { return p.review === BO.REVIEW.REVISION || p.change === BO.CHANGE.REVISION; }).length,

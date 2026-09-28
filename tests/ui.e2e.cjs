@@ -62,7 +62,7 @@ async function open(browser, url, viewport) {
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   return page;
 }
-const shot = (page, name) => page.screenshot({ path: path.join(OUT, name + '.png'), fullPage: true });
+const shot = async (page, name) => { await page.waitForTimeout(900); return page.screenshot({ path: path.join(OUT, name + '.png'), fullPage: true }); };
 
 (async () => {
   await new Promise((r) => server.listen(0, r));
