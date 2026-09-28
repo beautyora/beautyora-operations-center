@@ -391,3 +391,16 @@ test('no Google Sheets dependency remains outside the one-time migration', () =>
     else assert.deepEqual(uses, [], f);
   });
 });
+
+test('setup keeps going when one step fails and says how to fix it', () => {
+  const { env } = setup({ skipDiscovery: true });
+  env.notion.failNext = Object.assign(/^GET \/databases\//, { status: 404 });
+  const res = ok(env.api('system.setup'));
+  assert.equal(res.ok, false);
+  assert.ok(res.report.some((l) => /^실패: 상품등록 링크 DB/.test(l) && /연결/.test(l)), res.report.join('\n'));
+  assert.ok(env.triggers.some((t) => t.getHandlerFunction() === 'scheduledHealthCheck'), 'triggers still installed');
+  assert.ok(res.report.some((l) => l.includes('검수 메모')), 'schema additions still ran');
+  const again = ok(env.api('system.setup'));
+  assert.equal(again.ok, true, again.report.join('\n'));
+  assert.ok(env.props.BO_NOTION_LINK_DATA_SOURCE_ID);
+});
