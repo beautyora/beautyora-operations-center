@@ -11,16 +11,13 @@ GitHub를 코드의 유일한 기준으로 사용합니다.
 
 ## 배포 전 환경 연결 확인
 
-테스트와 운영 Apps Script의 **프로젝트 설정 → 스크립트 속성**에서 각각
-`BO_SPREADSHEET_ID`를 해당 환경의 DB ID로 설정합니다. 값이 없으면 앱과 초기 설정은
-실행되지 않습니다. 다른 시트나 운영 DB를 자동으로 선택하지 않습니다.
+v2부터 운영 데이터는 Notion에만 있습니다. 테스트와 운영 Apps Script의 **프로젝트 설정 → 스크립트 속성**에
+각 환경의 Notion 데이터 소스 ID와 Drive 폴더를 따로 넣습니다(목록은 `README.md` 참고).
 
-`_SYNC_CONFIG`를 사용하는 브랜드 동기화 기능은 그 시트의
-`TARGET_SPREADSHEET_ID`도 `BO_SPREADSHEET_ID`와 같아야 실행됩니다.
-테스트 환경에서 폼·Notion 쓰기 기능을 실행하기 전에는
-`SOURCE_SPREADSHEET_ID`, Notion 설정, 트리거도 테스트용인지 별도로 확인합니다.
-
-테스트 DB 이름: `뷰티오라DB_테스트`. 실제 ID는 Apps Script 스크립트 속성에서만 관리합니다.
+- **테스트 환경은 반드시 테스트용 Notion DB를 가리키게 합니다.** 운영 DB ID를 테스트 스크립트에 넣지 않습니다.
+  테스트용 DB는 운영 브랜드·상품 DB를 Notion에서 복제해 만들면 됩니다.
+- 새 환경에서는 배포 후 운영센터 → **설정 → 초기 설정 실행**을 한 번 누릅니다.
+- **설정 → 연결 상태**가 모두 "정상"인지 확인한 뒤 브랜드에 링크를 보냅니다.
 
 ## 한 번만 설정할 항목
 
@@ -99,7 +96,7 @@ fix/upload-error
 
 - 테스트 브랜치에서 production 배포
 - Apps Script 편집기와 GitHub를 동시에 수정
-- 테스트 DB의 가짜 데이터를 운영 DB로 복사
+- 테스트 Notion DB의 가짜 데이터를 운영 Notion DB로 복사
 - Notion 토큰이나 `.clasprc.json`을 저장소에 커밋
 - 테스트 프로젝트의 스크립트 속성을 운영값으로 변경
 
@@ -110,6 +107,5 @@ fix/upload-error
 ## 현재 테스트 환경
 
 - 테스트 Script ID: Apps Script 프로젝트 설정에서 확인
-- 테스트 DB: `뷰티오라DB_테스트`
 - 테스트 업로드 폴더: `뷰티오라_테스트_파일`
-- 테스트 Notion 쓰기: 사용하지 않음
+- 테스트 Notion: 운영 DB를 복제한 테스트 전용 DB (v2부터 Notion 쓰기가 필수)

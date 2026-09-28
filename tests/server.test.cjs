@@ -1,0 +1,393 @@
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { createEnv, seed } = require('./harness.cjs');
+
+function setup(opts) {
+  const env = createEnv(opts);
+  const data = seed(env, opts);
+  return { env, data };
+}
+
+function ok(result) {
+  assert.equal(result.ok, true, result.message);
+  return JSON.parse(JSON.stringify(result.data));
+}
+
+function textOf(page, name) {
+  const p = page.properties[name];
+  if (!p) return undefined;
+  const v = p[p.type];
+  if (p.type === 'title' || p.type === 'rich_text') return v.map((t) => t.plain_text).join('');
+  if (p.type === 'select') return v ? v.name : '';
+  if (p.type === 'relation') return v.map((r) => r.id);
+  return v;
+}
+
+function issueToken(env, code) {
+  const res = ok(env.api('links.issue', { code: code || 'BO-0001', days: 30 }));
+  return new URL(res.url).searchParams.get('token');
+}
+
+test('setup adds missing Notion properties, link DB, and triggers', () => {
+  const { env } = setup({ skipDiscovery: true });
+  const res = ok(env.api('system.setup'));
+  assert.ok(res.report.some((l) => l.includes('검수 메모')));
+  assert.ok(res.report.some((l) => l.includes('상품등록 링크')));
+  assert.ok(env.props.BO_NOTION_LINK_DATA_SOURCE_ID);
+  assert.ok(env.props.BO_NOTION_TERMS_DATA_SOURCE_ID, 'terms discovered via relation');
+  assert.ok(env.props.BO_NOTION_MOVEMENT_DATA_SOURCE_ID, 'movement discovered');
+  assert.ok(env.props.BO_NOTION_STORE_DATA_SOURCE_ID, 'store discovered');
+  assert.ok(env.props.BO_NOTION_INVENTORY_DATA_SOURCE_ID, 'inventory discovered');
+  assert.ok(env.triggers.some((t) => t.getHandlerFunction() === 'scheduledHealthCheck'));
+  const again = ok(env.api('system.setup'));
+  assert.deepEqual(again.report, ['변경할 설정이 없습니다. 이미 준비되어 있습니다.']);
+});
+
+test('non-admin users are rejected for every admin action', () => {
+  const { env } = setup();
+  env.setUser('stranger@gmail.com');
+  const actions = Object.keys(env.call('adminActions_'));
+  actions.forEach((action) => {
+    const res = env.api(action, {});
+    assert.equal(res.ok, false, action);
+    assert.equal(res.code, 'NOT_ADMIN', action);
+  });
+  env.setUser('');
+  assert.equal(env.api('dashboard').code, 'NO_EMAIL');
+});
+
+test('dashboard counts intake, review, and stock checks', () => {
+  const { env } = setup();
+  ok(env.api('system.setup'));
+  const d = ok(env.api('dashboard'));
+  assert.equal(d.counts.intake, 1);
+  assert.equal(d.counts.review, 1);
+  assert.equal(d.counts.stockCheck, 1);
+  assert.equal(d.totals.brands, 3);
+  assert.equal(d.totals.products, 3);
+});
+
+test('partner flow: link → bootstrap → upload → submit new product → review approve', () => {
+  const { env, data } = setup();
+  ok(env.api('system.setup'));
+  const token = await_(issueToken(env));
+  const boot = ok(env.api('partner.bootstrap', {}, token));
+  assert.equal(boot.brand.code, 'BO-0001');
+  assert.equal(boot.products.length, 2);
+  assert.ok(boot.fields.some((f) => f.id === 'product_name' && f.required));
+  assert.ok(boot.fields.some((f) => f.id === 'main_image_url' && f.type === 'asset'));
+  const productId = 'PRD-NEW-00000001';
+  const base64 = Buffer.from('fake image').toString('base64');
+  const up1 = ok(env.api('partner.upload', { kind: 'asset', productId, category: '대표 이미지', uploadId: 'UP-000000001', fileName: 'main.jpg', mimeType: 'image/jpeg', base64 }, token));
+  const again = ok(env.api('partner.upload', { kind: 'asset', productId, category: '대표 이미지', uploadId: 'UP-000000001', fileName: 'main.jpg', mimeType: 'image/jpeg', base64 }, token));
+  assert.equal(up1.file.id, again.file.id, 'upload is idempotent');
+  ok(env.api('partner.upload', { kind: 'asset', productId, category: '상세페이지', uploadId: 'UP-000000002', fileName: 'detail.pdf', mimeType: 'application/pdf', base64 }, token));
+
+  const missing = ok(env.api('partner.submit', { requestId: 'REQ-00000001', contactName: '김담당', products: [{ productId, data: { product_name: '새 토너' } }] }, token));
+  assert.equal(missing.ok, false);
+  assert.match(missing.problems[0].messages.join(' '), /바코드|카테고리|소비자가/);
+
+  const submit = ok(env.api('partner.submit', { requestId: 'REQ-00000002', contactName: '김담당', contactPhone: '010-1111-2222', products: [{ productId, data: { product_name: '새 토너', barcode: '8800000000099', category: ['스킨케어(베이직)'], retail_price: '18,000' } }] }, token));
+  assert.equal(submit.ok, true, JSON.stringify(submit));
+  assert.equal(submit.results[0].mode, 'create');
+  const page = Object.values(env.notion.pages).find((p) => textOf(p, '운영센터 상품 ID') === productId);
+  assert.equal(textOf(page, '등록 검수 상태'), '검수 대기');
+  assert.equal(textOf(page, '소비자가'), 18000);
+  assert.deepEqual(textOf(page, '브랜드'), [data.b1.id]);
+  assert.match(textOf(page, '대표 이미지 Drive URL'), /drive\.google\.com\/drive\/folders\//);
+  assert.equal(textOf(page, '제출자'), '김담당 / 010-1111-2222');
+
+  const dup = ok(env.api('partner.submit', { requestId: 'REQ-00000002', contactName: '김담당', products: [] }, token));
+  assert.equal(dup.duplicate, true, 'same request id returns stored result');
+
+  const queue = ok(env.api('review.queue'));
+  const item = queue.items.find((i) => i.productId === productId);
+  assert.equal(item.kind, 'new');
+  const detail = ok(env.api('review.detail', { pageId: item.pageId }));
+  assert.ok(detail.assets.length === 2);
+  const decide = env.api('review.decide', { pageId: item.pageId, kind: 'new', action: 'revision', note: '', expectedSubmittedAt: item.submittedAt });
+  assert.equal(decide.ok, false, 'revision needs a note');
+  ok(env.api('review.decide', { pageId: item.pageId, kind: 'new', action: 'approve', expectedSubmittedAt: item.submittedAt }));
+  assert.equal(textOf(env.notion.pages[item.pageId], '등록 검수 상태'), '승인 완료');
+  assert.ok(env.notion.comments.some((c) => c.text.includes('승인 완료')));
+});
+
+test('approved product edits become change requests and apply only on approval', () => {
+  const { env, data } = setup();
+  ok(env.api('system.setup'));
+  const token = await_(issueToken(env));
+  const base64 = Buffer.from('x').toString('base64');
+  ['대표 이미지', '상세페이지'].forEach((category, i) => ok(env.api('partner.upload', { kind: 'asset', productId: 'PRD-0001-AAAA', category, uploadId: 'UP-CHG-0000' + i, fileName: i ? 'd.pdf' : 'm.png', mimeType: i ? 'application/pdf' : 'image/png', base64 }, token)));
+  const res = ok(env.api('partner.submit', { requestId: 'REQ-CHG-000001', contactName: '박담당', products: [{ productId: 'PRD-0001-AAAA', data: { product_name: '시카 리페어 앰플 50ml', barcode: '8800000000011', category: ['스킨케어(베이직)'], retail_price: 27000 } }] }, token));
+  assert.equal(res.results[0].mode, 'change');
+  const page = env.notion.pages[data.p1.id];
+  assert.equal(textOf(page, '상품명'), '시카 리페어 앰플', 'not applied before review');
+  assert.equal(textOf(page, '변경 요청'), '검수 대기');
+  const detail = ok(env.api('review.detail', { pageId: data.p1.id }));
+  assert.ok(detail.change.diff.some((d) => d.label === '상품명' && d.after === '시카 리페어 앰플 50ml'));
+  assert.ok(detail.change.diff.some((d) => d.label === '소비자가' && d.before === '25000' && d.after === '27000'));
+  ok(env.api('review.decide', { pageId: data.p1.id, kind: 'change', action: 'approve' }));
+  assert.equal(textOf(page, '상품명'), '시카 리페어 앰플 50ml');
+  assert.equal(textOf(page, '소비자가'), 27000);
+  assert.equal(textOf(page, '변경 요청'), '반영 완료');
+  const toggle = env.notion.blocks[data.p1.id].find((b) => b.type === 'toggle');
+  assert.match(toggle.toggle.rich_text[0].plain_text, /^✅ 반영됨/);
+});
+
+test('partner cannot touch another brand product or reuse its barcode', () => {
+  const { env } = setup();
+  ok(env.api('system.setup'));
+  const token = await_(issueToken(env, 'BO-0001'));
+  const base64 = Buffer.from('x').toString('base64');
+  const r1 = ok(env.api('partner.submit', { requestId: 'REQ-X-0000001', contactName: 'a', products: [{ productId: 'PRD-0003-CCCC', data: { product_name: '탈취' } }] }, token));
+  assert.equal(r1.ok, false);
+  assert.match(r1.problems[0].messages[0], /다른 브랜드/);
+  ['대표 이미지', '상세페이지'].forEach((category, i) => ok(env.api('partner.upload', { kind: 'asset', productId: 'PRD-NEW-BARCODE1', category, uploadId: 'UP-BC-00000' + i, fileName: 'a.png', mimeType: 'image/png', base64 }, token)));
+  const r2 = ok(env.api('partner.submit', { requestId: 'REQ-X-0000002', contactName: 'a', products: [{ productId: 'PRD-NEW-BARCODE1', data: { product_name: '신상', barcode: '8800000000035', category: ['메이크업'], retail_price: 1000 } }] }, token));
+  assert.equal(r2.ok, false);
+  assert.match(r2.problems[0].messages.join(' '), /바코드/);
+  const assets = env.api('partner.assets', { productId: 'PRD-0003-CCCC' }, token);
+  assert.deepEqual(ok(assets).assets, [], 'other brand assets are not listed');
+});
+
+test('invalid, stopped, and expired tokens are rejected', () => {
+  const { env } = setup();
+  ok(env.api('system.setup'));
+  assert.equal(env.api('partner.bootstrap', {}, 'nope').code, 'BAD_TOKEN');
+  assert.equal(env.api('partner.bootstrap', {}, 'a'.repeat(48)).code, 'BAD_TOKEN');
+  const token = await_(issueToken(env));
+  ok(env.api('partner.bootstrap', {}, token));
+  const second = await_(issueToken(env));
+  assert.equal(env.api('partner.bootstrap', {}, token).code, 'BAD_TOKEN', 'old link stopped when a new one is issued');
+  ok(env.api('partner.bootstrap', {}, second));
+  const links = ok(env.api('brands.links', { code: 'BO-0001' })).links;
+  const active = links.find((l) => l.active);
+  ok(env.api('links.stop', { pageId: active.pageId }));
+  assert.equal(env.api('partner.bootstrap', {}, second).code, 'BAD_TOKEN');
+  // Partner token must not unlock admin actions.
+  const third = await_(issueToken(env));
+  env.setUser('');
+  assert.equal(env.api('brands.list', {}, third).ok, false);
+});
+
+test('intake: form response creates Notion brand once, duplicates become comments', () => {
+  const { env, data } = setup();
+  ok(env.api('system.setup'));
+  env.props.BO_GOOGLE_FORM_ID = 'form-1';
+  const response = (id, answers) => ({
+    getId: () => id, getTimestamp: () => new Date('2026-09-28T03:00:00Z'),
+    getItemResponses: () => Object.keys(answers).map((title) => ({ getItem: () => ({ getTitle: () => title }), getResponse: () => answers[title] }))
+  });
+  const r1 = response('resp-1', { '회사명': '그린랩', '브랜드명': '그린랩, 블루랩(서브, 라인)', '사업자번호': '1234567890', '담당자명': '이담당', '담당자 연락처': '01012345678', '희망 거래 방식': '위탁, 알수없음', '(현재) 판매 채널': '자사몰' });
+  const out = JSON.parse(JSON.stringify(env.call('processFormResponse_', response('resp-1', { '회사명': '그린랩', '브랜드명': '그린랩, 블루랩(서브, 라인)', '사업자번호': '1234567890', '담당자명': '이담당', '담당자 연락처': '01012345678', '희망 거래 방식': '위탁, 알수없음', '(현재) 판매 채널': '자사몰' }))));
+  assert.deepEqual(out.map((o) => o.action), ['created', 'created']);
+  assert.deepEqual(out.map((o) => o.code), ['BO-0004', 'BO-0005']);
+  const page = Object.values(env.notion.pages).find((p) => textOf(p, '브랜드명') === '블루랩(서브, 라인)');
+  assert.equal(textOf(page, '진행 단계'), '접수·검토');
+  assert.equal(textOf(page, '연락처'), '010-1234-5678');
+  assert.equal(textOf(page, '사업자 번호'), '123-45-67890');
+  assert.equal(textOf(page, '현재 판매 채널'), '자사몰', '"(현재) 판매 채널" is not confused with "판매 채널"');
+  assert.match(textOf(page, '핵심 메모'), /알수없음/);
+  assert.ok(env.notion.comments.some((c) => c.text.includes('같은 사업자번호') && c.text.includes('루엠')));
+  const again = JSON.parse(JSON.stringify(env.call('processFormResponse_', r1)));
+  assert.deepEqual(again.map((o) => o.action), ['skipped', 'skipped']);
+  const dup = env.call('processFormResponse_', response('resp-2', { '브랜드명': '루엠', '담당자명': '최' }));
+  assert.equal(dup[0].action, 'duplicate');
+  assert.ok(env.notion.comments.some((c) => c.page === data.b1.id && c.text.includes('다시 접수')));
+
+  const list = ok(env.api('intake.list'));
+  assert.equal(list.items.length, 3);
+  assert.ok(!list.stages.includes('접수·검토'));
+  ok(env.api('intake.decide', { code: 'BO-0003', stage: '통화 예정', note: '다음 주 통화' }));
+  assert.equal(textOf(env.notion.pages[data.b3.id], '진행 단계'), '통화 예정');
+  assert.equal(env.api('intake.decide', { code: 'BO-0003', stage: '확정' }).ok, false, 'already processed');
+});
+
+test('form trigger entry point refuses calls that are not from an installed trigger', () => {
+  const { env } = setup();
+  assert.throws(() => env.call('onBrandFormSubmit', { triggerUid: 'forged' }), /트리거/);
+  assert.throws(() => env.call('scheduledHealthCheck', {}), /트리거/);
+  env.setUser('stranger@gmail.com');
+  assert.throws(() => env.call('setupBeautyora'), /소유자 또는 관리자/);
+  assert.throws(() => env.call('migrateLegacySheets'), /소유자 또는 관리자/);
+});
+
+test('brand edit uses optimistic concurrency and protects system fields', () => {
+  const { env, data } = setup();
+  ok(env.api('system.setup'));
+  const detail = ok(env.api('brands.detail', { code: 'BO-0002' }));
+  const memo = detail.properties.find((p) => p.name === '핵심 메모');
+  const codeProp = detail.properties.find((p) => p.name === '브랜드 ID');
+  assert.equal(codeProp.editable, false);
+  const blocked = env.api('brands.update', { code: 'BO-0002', lastEditedAt: detail.lastEditedAt, changes: [{ id: codeProp.id, value: 'BO-9999' }] });
+  assert.equal(blocked.ok, false);
+  const saved = ok(env.api('brands.update', { code: 'BO-0002', lastEditedAt: detail.lastEditedAt, changes: [{ id: memo.id, value: '9월 샘플 발송' }] }));
+  assert.equal(textOf(env.notion.pages[data.b2.id], '핵심 메모'), '9월 샘플 발송');
+  const stale = env.api('brands.update', { code: 'BO-0002', lastEditedAt: detail.lastEditedAt, changes: [{ id: memo.id, value: 'x' }] });
+  assert.equal(stale.code, 'CONFLICT');
+  ok(env.api('brands.update', { code: 'BO-0002', lastEditedAt: saved.lastEditedAt, changes: [{ id: memo.id, value: 'y' }] }));
+  const priority = detail.properties.find((p) => p.name === '우선순위');
+  const bad = env.api('brands.update', { code: 'BO-0002', changes: [{ id: priority.id, value: '0순위' }] });
+  assert.match(bad.message, /선택지/);
+});
+
+test('inventory movement updates stock and records history; refuses negative stock and stale input', () => {
+  const { env, data } = setup();
+  ok(env.api('system.setup'));
+  const inv = ok(env.api('inventory.list', {}));
+  assert.equal(inv.rows.length, 1);
+  const row = inv.rows[0];
+  assert.equal(row.productName, '시카 리페어 앰플');
+  assert.equal(row.brandCode, 'BO-0001');
+  const res = ok(env.api('inventory.record', { requestId: 'MOV-0000001', inventoryPageId: row.pageId, direction: '-', qty: 3, kind: '재고 조정', expectedStock: 10 }));
+  assert.equal(res.after, 7);
+  assert.equal(textOf(env.notion.pages[data.inv.id], '실재고'), 7);
+  const movement = Object.values(env.notion.pages).find((p) => p.parent.data_source_id === data.ids.movementId);
+  assert.equal(textOf(movement, '수량 (+/-)'), -3);
+  assert.equal(textOf(movement, '입출고 방향'), '-');
+  const dup = ok(env.api('inventory.record', { requestId: 'MOV-0000001', inventoryPageId: row.pageId, direction: '-', qty: 3, expectedStock: 10 }));
+  assert.equal(dup.duplicate, true);
+  assert.equal(textOf(env.notion.pages[data.inv.id], '실재고'), 7, 'retry does not double count');
+  assert.equal(env.api('inventory.record', { requestId: 'MOV-0000002', inventoryPageId: row.pageId, direction: '-', qty: 1, expectedStock: 10 }).code, 'CONFLICT');
+  assert.match(env.api('inventory.record', { requestId: 'MOV-0000003', inventoryPageId: row.pageId, direction: '-', qty: 99 }).message, /현재 재고/);
+  env.notion.failNext = Object.assign(/^POST \/pages$/, { status: 400 });
+  const failed = env.api('inventory.record', { requestId: 'MOV-0000004', inventoryPageId: row.pageId, direction: '+', qty: 5 });
+  assert.equal(failed.ok, false);
+  assert.equal(textOf(env.notion.pages[data.inv.id], '실재고'), 7, 'stock reverted when history write fails');
+  const created = ok(env.api('inventory.record', { requestId: 'MOV-0000005', productPageId: data.p3.id, storePageId: data.s1.id, direction: '+', qty: 4, kind: '최초 입고' }));
+  assert.equal(created.after, 4);
+});
+
+test('activities: add, list, follow-up on dashboard, complete', () => {
+  const { env, data } = setup();
+  ok(env.api('system.setup'));
+  const today = env.call('today_');
+  ok(env.api('activities.add', { requestId: 'ACT-00000001', code: 'BO-0002', date: today, method: '전화', result: '회신 대기', content: '샘플 발송 요청', next: '샘플 발송', due: today, updateBrandNext: true }));
+  const list = ok(env.api('brands.activities', { code: 'BO-0002' }));
+  assert.equal(list.activities.length, 1);
+  assert.match(list.activities[0].content, /작성: admin@beautyora.test/);
+  assert.equal(textOf(env.notion.pages[data.b2.id], '다음 행동'), '샘플 발송');
+  const act = Object.values(env.notion.pages).find((p) => p.parent.data_source_id === data.ids.activityId);
+  assert.deepEqual(textOf(act, '상담 담당자'), [{ id: 'user-1', name: 'user' }]);
+  env.clearCache();
+  assert.equal(ok(env.api('dashboard')).counts.followups, 1);
+  ok(env.api('activities.done', { pageId: list.activities[0].pageId }));
+  env.clearCache();
+  assert.equal(ok(env.api('dashboard')).counts.followups, 0);
+});
+
+test('document upload → admin approval writes Drive link to Notion brand', () => {
+  const { env, data } = setup();
+  ok(env.api('system.setup'));
+  const token = await_(issueToken(env));
+  const file = ok(env.api('partner.upload', { kind: 'doc', category: '사업자등록증', uploadId: 'DOC-00000001', fileName: 'biz.pdf', mimeType: 'application/pdf', base64: Buffer.from('pdf').toString('base64') }, token)).file;
+  assert.equal(file.status, '검수 대기');
+  assert.equal(ok(env.api('documents.pending')).documents.length, 1);
+  assert.equal(env.api('documents.review', { fileId: file.id, action: 'reject' }).ok, false, 'reject needs reason');
+  ok(env.api('documents.review', { fileId: file.id, action: 'approve' }));
+  assert.equal(textOf(env.notion.pages[data.b1.id], '사업자등록증 Drive URL'), file.url);
+  const docs = ok(env.api('partner.documents', {}, token)).documents;
+  assert.equal(docs[0].status, '승인 완료');
+  const bad = env.api('partner.upload', { kind: 'doc', category: '사업자등록증', uploadId: 'DOC-00000002', fileName: 'x.exe', mimeType: 'application/octet-stream', base64: 'AA==' }, token);
+  assert.equal(bad.ok, false);
+});
+
+test('partner errors hide internal details; admin errors keep them', () => {
+  const { env } = setup();
+  ok(env.api('system.setup'));
+  const token = await_(issueToken(env));
+  env.context.Drive.Files.list = () => { throw new Error('internal drive stack detail'); };
+  const res = env.api('partner.documents', {}, token);
+  assert.equal(res.ok, false);
+  assert.doesNotMatch(res.message, /internal drive/);
+  assert.match(res.message, /문의 코드/);
+});
+
+test('migration moves active links, file metadata, and pending submissions', () => {
+  const { env, data } = setup();
+  ok(env.api('system.setup'));
+  const fileA = env.drive.file({ name: 'old.jpg', parents: [env.drive.root] }, null);
+  const sheet = (rows) => ({ getDataRange: () => ({ getDisplayValues: () => rows }) });
+  env.addLegacyBook('legacy-1', {
+    getName: () => '뷰티오라DB',
+    getSheetByName: (name) => ({
+      '파트너 링크': sheet([['토큰', '브랜드코드', '상태', '만료일', '마지막접속', '발급일', '발급자'], ['f'.repeat(48), 'BO-0002', '사용 중', '2099-01-01', '', '2026-09-01', 'a@b'], ['e'.repeat(48), 'BO-0001', '중지', '2099-01-01', '', '', '']]),
+      '파일 목록': sheet([['파일ID', '브랜드코드', '상품ID', '분류', '파일명', 'Drive파일ID', 'DriveURL', '업로드일', '상태', '검수메모'], ['FILE-abc', 'BO-0001', 'PRD-0001-AAAA', '대표 이미지', 'old.jpg', fileA.id, '', '', '수령 완료', '']]),
+      '상품 접수': sheet([['제출ID', '브랜드코드', '상품ID', '제출버전', '상태', '제출일', '수정일', '상품데이터JSON', '검수메모', '제출자명', '제출자연락처'],
+        ['S1', 'BO-0002', 'PRD-LEGACY-0001', '1', '신규 제출', '2026-09-20', '', JSON.stringify({ product_name: '레거시 상품', barcode: '8800000000777', retail_price: '9000' }), '', '홍', ''],
+        ['S2', 'BO-0001', 'PRD-0001-AAAA', '2', '신규 제출', '2026-09-21', '', JSON.stringify({ product_name: '앰플 변경', _change_request: true }), '', '김', ''],
+        ['S0', 'BO-0001', 'PRD-0001-AAAA', '1', '승인 완료', '2026-09-01', '', '{}', '', '', '']])
+    }[name] || null)
+  });
+  const preview = ok(env.api('migration.preview', { spreadsheetId: 'legacy-1' }));
+  assert.deepEqual([preview.links, preview.files, preview.submissions], [1, 1, 2]);
+  const run = ok(env.api('migration.run', { spreadsheetId: 'legacy-1' }));
+  assert.deepEqual([run.links, run.files, run.submissions, run.errors.length], [1, 1, 2, 0], JSON.stringify(run.errors));
+  ok(env.api('partner.bootstrap', {}, 'f'.repeat(48)));
+  assert.equal(env.drive.items[fileA.id].appProperties.boProduct, 'PRD-0001-AAAA');
+  const legacyPage = Object.values(env.notion.pages).find((p) => textOf(p, '운영센터 상품 ID') === 'PRD-LEGACY-0001');
+  assert.equal(textOf(legacyPage, '등록 검수 상태'), '검수 대기');
+  assert.equal(textOf(legacyPage, '소비자가'), 9000);
+  assert.equal(textOf(env.notion.pages[data.p1.id], '변경 요청'), '검수 대기');
+  const rerun = ok(env.api('migration.run', { spreadsheetId: 'legacy-1' }));
+  assert.deepEqual([rerun.links, rerun.files, rerun.submissions], [0, 0, 0], 'second run is a no-op');
+});
+
+test('health check reports missing configuration clearly', () => {
+  const { env } = setup();
+  delete env.props.BO_ROOT_FOLDER_ID;
+  env.props.BO_NOTION_TOKEN = 'wrong';
+  const h = ok(env.api('system.health'));
+  assert.equal(h.ok, false);
+  assert.ok(h.results.some((r) => r.target === 'Notion 연결' && r.status === '오류'));
+  assert.ok(h.results.some((r) => r.target === 'Google Drive' && r.status === '오류'));
+});
+
+test('xlsx/CSV import maps headers by label', () => {
+  const { env } = setup();
+  const fields = env.call('productFieldConfig_').fields.filter((f) => f.active && !f.asset);
+  const res = JSON.parse(JSON.stringify(env.call('mapImportRows_', [['안내'], ['상품명 *', '바코드', '카테고리', '소비자가'], ['토너', '0012', '스킨케어(베이직), 메이크업', '10,000'], ['', '', '', '']], fields)));
+  assert.deepEqual(res.rows, [{ product_name: '토너', barcode: '0012', category: ['스킨케어(베이직)', '메이크업'], retail_price: '10,000' }]);
+});
+
+test('doGet renders admin and partner shells without leaking the token into script code', () => {
+  const { env } = setup();
+  const admin = env.call('doGet', { parameter: {} });
+  assert.match(admin.getContent(), /data-view="admin"/);
+  const partner = env.call('doGet', { parameter: { token: 'abc"><script>alert(1)</script>' } });
+  assert.doesNotMatch(partner.getContent(), /<script>alert/);
+  assert.match(partner.getContent(), /data-view="partner"/);
+  assert.equal(partner.xframe, undefined, 'no ALLOWALL framing by default');
+});
+
+function await_(v) { return v; }
+
+test('only the audited entry points are callable from google.script.run', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const dir = path.join(__dirname, '..', 'src');
+  const publicFns = [];
+  fs.readdirSync(dir).filter((f) => f.endsWith('.gs')).forEach((f) => {
+    const src = fs.readFileSync(path.join(dir, f), 'utf8');
+    for (const m of src.matchAll(/^function ([A-Za-z0-9_$]+)\s*\(/gm)) if (!m[1].endsWith('_')) publicFns.push(m[1]);
+  });
+  // Each of these checks admin/owner, a partner token, or an installed trigger before doing anything.
+  assert.deepEqual(publicFns.sort(), ['api', 'doGet', 'migrateLegacySheets', 'onBrandFormSubmit', 'runHealthCheck', 'scheduledHealthCheck', 'setupBeautyora'].sort());
+  const { env } = setup();
+  env.setUser('');
+  assert.throws(() => env.call('runHealthCheck'), /계정/);
+});
+
+test('no Google Sheets dependency remains outside the one-time migration', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const dir = path.join(__dirname, '..', 'src');
+  fs.readdirSync(dir).filter((f) => f.endsWith('.gs') && f !== '21_Migration.gs').forEach((f) => {
+    const src = fs.readFileSync(path.join(dir, f), 'utf8');
+    const uses = (src.match(/SpreadsheetApp\.[a-zA-Z]+/g) || []);
+    // The xlsx import converts an uploaded workbook in Drive and reads it once; that is not a data store.
+    if (f === '13_Partner.gs') assert.deepEqual(uses, ['SpreadsheetApp.openById'], f);
+    else assert.deepEqual(uses, [], f);
+  });
+});
