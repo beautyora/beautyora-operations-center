@@ -339,7 +339,7 @@ async function brandTab(code, tab) {
       bindInventoryTable(body, r, () => { Api.invalidate(); brandTab(code, 'stock'); });
     } else if (tab === 'docs') {
       const r = await Api.get('brands.documents', { code }, 20000);
-      const labels = { business: '사업자등록증', intro: '브랜드 소개서', contract: '계약서', other: '기타 브랜드 자료' };
+      const labels = { business: '사업자등록증', bank: '통장사본', products: '입점 상품 리스트', intro: '브랜드 소개서', contract: '계약서', other: '기타 브랜드 자료' };
       if (!guard('<section class="card card-pad"><h3 class="section-title">Notion에 연결된 서류</h3><dl class="kv">' + Object.keys(labels).map((k) => '<dt>' + labels[k] + '</dt><dd>' + (r.notion[k] ? '<a href="' + esc(safeUrl(r.notion[k])) + '" target="_blank" rel="noopener">파일 열기</a>' : '<span class="muted">없음</span>') + '</dd>').join('') + '</dl></section>' +
         '<section class="card"><div class="card-head"><h3>브랜드가 올린 서류</h3><span class="small muted">승인하면 위 Notion 링크가 바뀝니다</span></div>' + documentList(r.documents, false) + '</section>')) return;
       bindDocumentActions(body, () => { Api.invalidate(); brandTab(code, 'docs'); refreshCounts(); });
@@ -714,7 +714,8 @@ async function pageSettings(view) {
   view.innerHTML =
     '<section class="card"><div class="card-head"><h2>연결 상태</h2><div class="row"><button class="btn btn-sm" id="sHealth">' + icon('refresh') + '다시 점검</button><button class="btn btn-sm btn-primary" id="sSetup">초기 설정 실행</button></div></div><div class="card-body" id="sHealthBox">' + UI.skeleton(4) + '</div></section>' +
     '<section class="card"><div class="card-head"><h2>브랜드 상품 입력 항목</h2><span class="small muted">항목 자체는 Notion 상품 DB 속성에서 만들고, 여기서는 사용·필수·안내만 정합니다</span></div><div class="card-body" id="sFields">' + UI.skeleton(4) + '</div></section>' +
-    '<section class="card"><div class="card-head"><h2>기존 시트 데이터 이관</h2><span class="small muted">한 번만 하면 됩니다</span></div><div class="card-body stack" id="sMigrate"><p class="muted">예전 Google Sheets에 남은 사용 중 링크, 파일 목록, 처리 중인 상품 접수를 Notion·Drive로 옮깁니다. 여러 번 실행해도 이미 옮긴 항목은 건너뜁니다.</p><div class="row wrap"><input class="input" id="sSheet" placeholder="스프레드시트 ID (비우면 BO_SPREADSHEET_ID)" style="max-width:420px"><button class="btn" id="sPreview">미리 보기</button><button class="btn btn-primary" id="sRun">이관 실행</button></div><div id="sMigrateOut"></div></div></section>';
+    '<section class="card"><div class="card-head"><h2>기존 시트 데이터 이관</h2><span class="small muted">한 번만 하면 됩니다</span></div><div class="card-body stack" id="sMigrate"><p class="muted">예전 Google Sheets에 남은 사용 중 링크, 파일 목록, 처리 중인 상품 접수를 Notion·Drive로 옮깁니다. 여러 번 실행해도 이미 옮긴 항목은 건너뜁니다.</p><div class="row wrap"><input class="input" id="sSheet" placeholder="스프레드시트 ID (비우면 BO_SPREADSHEET_ID)" style="max-width:420px"><button class="btn" id="sPreview">미리 보기</button><button class="btn btn-primary" id="sRun">이관 실행</button></div><div id="sMigrateOut"></div></div></section>' +
+    '<section class="card"><div class="card-head"><h2>기존 제출 자료 가져오기</h2><span class="small muted">운영센터 이전에 브랜드가 직접 올린 Drive 폴더</span></div><div class="card-body stack"><p class="muted">[BO-0001] 형식의 브랜드 폴더를 찾아 브랜드 자료 폴더로 복사하고, Notion 브랜드의 구글 드라이브·사업자등록증·통장사본·입점 상품 리스트·소개서·계약서 URL 중 비어 있는 칸을 채웁니다. 원본은 지우지 않으며, 다시 실행하면 이미 복사한 파일은 건너뜁니다.</p><div class="row wrap"><input class="input" id="lFolder" placeholder="기존 자료 폴더 주소" style="max-width:480px"><button class="btn" id="lPreview">미리 보기</button><button class="btn btn-primary" id="lRun">가져오기 실행</button></div><div id="lOut"></div></div></section>';
   const paintHealth = (h) => {
     $('#sHealthBox').innerHTML = '<div class="table-wrap"><table class="table"><tbody>' + h.results.map((r) => '<tr><td class="nowrap cell-title">' + esc(r.target) + '</td><td>' + pill(r.status) + '</td><td class="small">' + esc(r.message) + '</td></tr>').join('') + '</tbody></table></div><p class="small muted" style="margin-top:8px">' + esc(Fmt.datetime(h.checkedAt)) + ' 점검</p>';
   };
@@ -725,6 +726,26 @@ async function pageSettings(view) {
     try { const r = await Api.call('system.setup'); paintHealth(r.health); Modal.open({ title: r.ok === false ? '초기 설정 — 일부 단계 실패' : '초기 설정 결과', body: (r.ok === false ? '<div class="notice bad">' + icon('alert') + '<div>실패한 단계의 안내를 따른 뒤 초기 설정을 다시 실행해 주세요. 이미 끝난 단계는 건너뜁니다.</div></div>' : '') + '<ul>' + r.report.map((l) => '<li' + (/^실패/.test(l) ? ' style="color:var(--bad)"' : /^확인 필요/.test(l) ? ' style="color:var(--warn)"' : '') + '>' + esc(l) + '</li>').join('') + '</ul>' }); Api.invalidate(); } catch (err) { Toast.error(err); }
   }));
   settingsFields();
+  const lOut = $('#lOut');
+  const lFolder = () => { const v = $('#lFolder').value.trim(); if (!v) throw new Error('기존 자료 폴더 주소를 넣어 주세요.'); return v; };
+  $('#lPreview').addEventListener('click', (e) => busy(e.currentTarget, async () => {
+    try {
+      const r = await Api.call('legacy.preview', { folderUrl: lFolder() });
+      lOut.innerHTML = '<div class="notice"><div>브랜드 폴더 ' + r.totals.folders + '개 · 파일 ' + r.totals.files + '개 · 연결 브랜드 ' + r.totals.brands + '곳' + (r.unmatched.length ? '<br>브랜드를 찾지 못한 폴더: ' + esc(r.unmatched.join(', ')) : '') + '</div></div>' +
+        '<div class="table-wrap"><table class="table"><thead><tr><th>원본 폴더</th><th>연결 브랜드</th><th>파일 → 분류</th></tr></thead><tbody>' +
+        r.groups.map((g) => '<tr><td class="small">' + esc(g.folder) + (g.byName ? ' ' + pill('이름으로 연결', 'warn') : '') + '</td><td class="small">' + (g.brands.map((b) => esc(b.code + ' ' + b.name)).join('<br>') || '<span style="color:var(--bad)">없음</span>') + (g.missing.length ? '<div style="color:var(--bad)">Notion에 없음: ' + esc(g.missing.join(', ')) + '</div>' : '') + '</td><td class="small">' + g.files.map((f) => esc(f.name) + ' → <strong>' + esc(f.category) + '</strong>' + (g.brands.length > 1 && f.targets.length < g.brands.length ? ' (' + esc(f.targets.join(', ')) + ')' : '')).join('<br>') + '</td></tr>').join('') +
+        '</tbody></table></div>';
+    } catch (err) { Toast.error(err); }
+  }));
+  $('#lRun').addEventListener('click', (e) => busy(e.currentTarget, async () => {
+    try {
+      const folderUrl = lFolder();
+      if (!await Modal.confirm('기존 제출 자료 가져오기', '파일을 브랜드 자료 폴더로 복사하고 Notion의 빈 서류 URL 칸을 채웁니다. 원본은 그대로 둡니다.', '실행')) return;
+      const r = await Api.call('legacy.run', { folderUrl });
+      Api.invalidate();
+      lOut.innerHTML = '<div class="notice ' + (r.errors.length ? 'warn' : 'ok') + '"><div>복사 ' + r.copied + '개 · 이미 복사됨 ' + r.skipped + '개 · Notion 갱신 브랜드 ' + r.brands + '곳' + (r.unfinished ? '<br><strong>시간이 부족해 일부만 처리했습니다. 한 번 더 실행해 주세요.</strong>' : '') + (r.errors.length ? '<br>오류: ' + esc(r.errors.slice(0, 10).join(' / ')) : '') + '</div></div>';
+    } catch (err) { Toast.error(err); }
+  }));
   const out = $('#sMigrateOut');
   $('#sPreview').addEventListener('click', (e) => busy(e.currentTarget, async () => {
     try { const r = await Api.call('migration.preview', { spreadsheetId: $('#sSheet').value.trim() }); out.innerHTML = '<div class="notice"><div><strong>' + esc(r.spreadsheet) + '</strong> — 옮길 대상: 사용 중 링크 ' + r.links + '개, 파일 ' + r.files + '개, 처리 중 상품 접수 ' + r.submissions + '건' + (r.state.lastRun ? '<br>마지막 실행 ' + esc(Fmt.datetime(r.state.lastRun)) + (r.state.finished ? ' (완료)' : ' (이어서 실행 필요)') : '') + '</div></div>'; } catch (err) { Toast.error(err); }

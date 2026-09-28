@@ -392,6 +392,55 @@ test('no Google Sheets dependency remains outside the one-time migration', () =>
   });
 });
 
+test('legacy drive import copies brand folders and fills empty Notion document URLs', () => {
+  const { env, data } = setup();
+  ok(env.api('system.setup'));
+  const d = env.drive;
+  const src = d.folder('기존 제출', null);
+  const f1 = d.folder('[BO-0001 · BO-0002] 루엠 주식회사_루엠 · 셀리본', src);
+  d.file({ name: '사업자등록증.pdf', mimeType: 'application/pdf', parents: [f1] }, null);
+  d.file({ name: '농협_통장사본.png', mimeType: 'image/png', parents: [f1] }, null);
+  d.file({ name: '뷰티오라_입점 상품 리스트_셀리본.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', parents: [f1] }, null);
+  const done = d.folder('2차 확인 완료', src);
+  const f2 = d.folder('(주)새싹랩', done);
+  d.file({ name: '새싹랩 제품소개서.pdf', mimeType: 'application/pdf', parents: [f2] }, null);
+  d.folder('[BO-0999] 없는 브랜드', src);
+  d.file({ name: '_TEMPLATE_상품 제출 시트', mimeType: 'application/vnd.google-apps.spreadsheet', parents: [src] }, null);
+  // 이미 직접 넣은 값은 덮어쓰지 않는다.
+  env.notion.pages[data.b1.id].properties['사업자등록증 Drive URL'] = { id: 'x', type: 'url', url: 'https://drive.google.com/file/d/manual/view' };
+  env.api('system.refresh');
+
+  const url = 'https://drive.google.com/drive/folders/' + src + '?usp=sharing';
+  const preview = ok(env.api('legacy.preview', { folderUrl: url }));
+  assert.deepEqual([preview.totals.folders, preview.totals.files], [3, 4]);
+  const g1 = preview.groups.find((g) => g.folder.startsWith('[BO-0001'));
+  assert.deepEqual(g1.files.map((f) => f.category), ['사업자등록증', '통장사본', '입점 상품 리스트']);
+  assert.deepEqual(g1.files[2].targets, ['BO-0002'], 'file named after one brand goes to that brand only');
+  assert.ok(preview.groups.some((g) => g.byName && g.brands[0].code === 'BO-0003'), 'code-less folder matched by name');
+  assert.deepEqual(preview.groups.find((g) => g.folder.startsWith('[BO-0999')).missing, ['BO-0999']);
+
+  const run = ok(env.api('legacy.run', { folderUrl: url }));
+  assert.deepEqual([run.copied, run.skipped, run.errors.length], [4, 0, 0], JSON.stringify(run.errors));
+  const page = (p) => env.notion.pages[p.id].properties;
+  assert.equal(page(data.b1)['사업자등록증 Drive URL'].url, 'https://drive.google.com/file/d/manual/view', 'manual value kept');
+  assert.match(page(data.b2)['사업자등록증 Drive URL'].url, /\/file\/d\//);
+  assert.match(page(data.b2)['통장사본 Drive URL'].url, /\/file\/d\//);
+  assert.match(page(data.b2)['입점 상품 리스트 Drive URL'].url, /\/file\/d\//);
+  assert.ok(!page(data.b1)['입점 상품 리스트 Drive URL'] || !page(data.b1)['입점 상품 리스트 Drive URL'].url);
+  assert.match(page(data.b3)['브랜드 소개서 Drive URL'].url, /\/file\/d\//);
+  assert.match(page(data.b1)['구글 드라이브'].url, /\/folders\//);
+  assert.equal(page(data.b1)['구글 드라이브'].url, page(data.b2)['구글 드라이브'].url, 'grouped brands share one folder');
+  const copies = Object.values(d.items).filter((f) => f.appProperties && f.appProperties.boLegacy);
+  assert.equal(copies.length, 4);
+  assert.ok(copies.every((f) => f.appProperties.boStatus === 'approved' && f.appProperties.boKind === 'doc'));
+  const docs = ok(env.api('brands.documents', { code: 'BO-0002' }));
+  assert.ok(docs.documents.some((f) => f.category === '입점 상품 리스트'));
+  assert.equal(ok(env.api('documents.pending')).documents.filter((f) => /통장|사업자/.test(f.name)).length, 0, 'legacy docs skip the review queue');
+
+  const rerun = ok(env.api('legacy.run', { folderUrl: url }));
+  assert.deepEqual([rerun.copied, rerun.skipped], [0, 4], 'second run copies nothing');
+});
+
 test('setup keeps going when one step fails and says how to fix it', () => {
   const { env } = setup({ skipDiscovery: true });
   env.notion.failNext = Object.assign(/^GET \/databases\//, { status: 404 });
