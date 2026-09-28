@@ -308,6 +308,7 @@ class FakeDrive {
     return {
       getId: () => id, getName: () => item.name, getUrl: () => 'https://drive.google.com/drive/folders/' + id,
       getFolders: () => iter(children().map((c) => self.folderApi(c.id))),
+      getFiles: () => iter(Object.values(self.items).filter((x) => !x.folder && !x.trashed && x.parents[0] === id).map((f) => ({ getId: () => f.id, getName: () => f.name, getMimeType: () => f.mimeType, getLastUpdated: () => new Date(f.modifiedTime || f.createdTime) }))),
       getFoldersByName: (name) => iter(children().filter((c) => c.name === name).map((c) => self.folderApi(c.id))),
       createFolder: (name) => self.folderApi(self.folder(name, id))
     };
@@ -343,7 +344,11 @@ class FakeDrive {
           if (resource.description != null) f.description = resource.description;
           return JSON.parse(JSON.stringify(f));
         },
-        remove: (id) => { delete self.items[id]; }
+        remove: (id) => { delete self.items[id]; },
+        copy: (resource, id) => {
+          const src = self.items[id]; if (!src || src.folder) throw new Error('File not found: ' + id);
+          return JSON.parse(JSON.stringify(self.file(Object.assign({ name: src.name, mimeType: src.mimeType }, resource), null)));
+        }
       }
     };
   }

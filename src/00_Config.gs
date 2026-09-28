@@ -37,7 +37,7 @@ const BO = Object.freeze({
   FILE: Object.freeze({ PENDING: '검수 대기', RECEIVED: '수령 완료', REVISION: '보완 필요', REJECTED: '반려', APPROVED: '승인 완료' }),
   INTAKE_STAGE: '접수·검토',
   CHANGE_MARKER: '🔁 변경 요청',
-  DOC_CATEGORIES: Object.freeze({ '사업자등록증': 'docBusiness', '브랜드 소개서': 'docIntro', '계약서': 'docContract', '기타 브랜드 자료': 'docOther' }),
+  DOC_CATEGORIES: Object.freeze({ '사업자등록증': 'docBusiness', '통장사본': 'docBank', '입점 상품 리스트': 'docProducts', '브랜드 소개서': 'docIntro', '계약서': 'docContract', '기타 브랜드 자료': 'docOther' }),
   ASSET_CATEGORIES: Object.freeze(['대표 이미지', '추가 이미지', '상세페이지', '기타']),
   MOVEMENT_KINDS: Object.freeze(['최초 입고', '추가 입고', '반품', '회수', '재고 조정']),
   ACTIVITY_METHODS: Object.freeze(['전화', '이메일', '미팅', '메신저', '기타'])
@@ -87,6 +87,8 @@ const BO_SCHEMAS = Object.freeze({
       docIntro: ['url', ['브랜드 소개서 Drive URL']],
       docContract: ['url', ['계약서 Drive URL']],
       docOther: ['url', ['기타 브랜드 자료 Drive URL']],
+      docBank: ['url', ['통장사본 Drive URL']],
+      docProducts: ['url', ['입점 상품 리스트 Drive URL']],
       formResponseId: ['rich_text', ['폼 응답 ID']]
     }
   },
@@ -226,7 +228,9 @@ const BO_SCHEMA_ADDITIONS = Object.freeze({
       { name: '반려', color: 'red' }, { name: '반영 완료', color: 'green' }] } } }
   ],
   brand: [
-    { key: 'formResponseId', name: '폼 응답 ID', definition: { rich_text: {} } }
+    { key: 'formResponseId', name: '폼 응답 ID', definition: { rich_text: {} } },
+    { key: 'docBank', name: '통장사본 Drive URL', definition: { url: {} } },
+    { key: 'docProducts', name: '입점 상품 리스트 Drive URL', definition: { url: {} } }
   ]
 });
 

@@ -3,10 +3,11 @@
  * appProperties: boKind(asset|doc), boBrand(브랜드 ID), boProduct(상품 ID), boCat(분류 코드), boUpload(업로드 ID), boStatus(상태 코드)
  */
 const BO_ASSET_CODES = Object.freeze({ '대표 이미지': 'main', '추가 이미지': 'extra', '상세페이지': 'detail', '기타': 'etc' });
-const BO_DOC_CODES = Object.freeze({ '사업자등록증': 'business', '브랜드 소개서': 'intro', '계약서': 'contract', '기타 브랜드 자료': 'other' });
+const BO_DOC_CODES = Object.freeze({ '사업자등록증': 'business', '통장사본': 'bank', '입점 상품 리스트': 'products', '브랜드 소개서': 'intro', '계약서': 'contract', '기타 브랜드 자료': 'other' });
 const BO_FILE_STATUS_CODES = Object.freeze({ pending: '검수 대기', received: '수령 완료', revision: '보완 필요', rejected: '반려', approved: '승인 완료' });
 const BO_FILE_FIELDS = 'id,name,mimeType,webViewLink,thumbnailLink,createdTime,size,appProperties,description,trashed,parents';
 const BO_ALLOWED_MIME = Object.freeze({ 'image/jpeg': ['jpg', 'jpeg'], 'image/png': ['png'], 'image/webp': ['webp'], 'application/pdf': ['pdf'] });
+const BO_XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 function codeToLabel_(map, code) {
   return Object.keys(map).find(function (label) { return map[label] === code; }) || '';
@@ -144,7 +145,8 @@ function uploadBrandFile_(brand, request) {
   const fileName = sanitizeFileName_(request.fileName);
   const extension = fileName.split('.').pop().toLowerCase();
   const mimeType = String(request.mimeType || '');
-  if (!BO_ALLOWED_MIME[mimeType] || BO_ALLOWED_MIME[mimeType].indexOf(extension) < 0) throw userError_('JPG, PNG, WEBP 또는 PDF 파일만 올릴 수 있습니다.');
+  const sheetDoc = kind === 'doc' && codes[category] === 'products' && mimeType === BO_XLSX_MIME && extension === 'xlsx';
+  if (!sheetDoc && (!BO_ALLOWED_MIME[mimeType] || BO_ALLOWED_MIME[mimeType].indexOf(extension) < 0)) throw userError_(kind === 'doc' && codes[category] === 'products' ? '입점 상품 리스트는 XLSX, PDF 또는 이미지 파일로 올려 주세요.' : 'JPG, PNG, WEBP 또는 PDF 파일만 올릴 수 있습니다.');
   if (kind === 'asset' && /이미지/.test(category) && mimeType === 'application/pdf') throw userError_('대표·추가 이미지에는 이미지 파일을 올려 주세요.');
   const base64 = String(request.base64 || '');
   if (!base64 || base64.length > Math.ceil(BO.MAX_UPLOAD_BYTES / 3) * 4 + 8) throw userError_('파일은 8MB 이하로 올려 주세요.');

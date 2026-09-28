@@ -61,7 +61,9 @@ function adminActions_() {
     'system.setup': function () { return setupSystem_(); },
     'system.refresh': function () { bumpCache_('brand', 'product', 'link', 'inventory', 'activity', 'asset', 'store', 'source'); return { refreshed: true }; },
     'migration.preview': function (payload) { return migrationPreview_(payload.spreadsheetId); },
-    'migration.run': function (payload) { return migrationRun_(payload.spreadsheetId); }
+    'migration.run': function (payload) { return migrationRun_(payload.spreadsheetId); },
+    'legacy.preview': function (payload) { return legacyPreview_(payload.folderUrl); },
+    'legacy.run': function (payload) { return legacyRun_(payload.folderUrl); }
   };
 }
 

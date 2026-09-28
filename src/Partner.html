@@ -330,7 +330,7 @@ function viewDocs(view) {
   view.innerHTML = '<section class="card"><div class="card-head"><h2>브랜드 서류 올리기</h2></div><div class="card-body stack">' +
     '<p class="small muted">사업자등록증, 브랜드 소개서, 계약서 등을 올려 주세요. 뷰티오라가 확인한 뒤 상태가 바뀝니다.</p>' +
     '<div class="form-grid">' + UI.field('서류 종류', '<select class="select" id="docCat">' + UI.options(P.boot.docCategories, P.boot.docCategories[0]) + '</select>', { for: 'docCat', required: true }) +
-    '<div class="field"><span class="field-label">파일</span><label class="dropzone" id="docDrop">' + icon('upload') + '<span>눌러서 파일 선택 (PDF·JPG·PNG, 8MB 이하)</span><input type="file" class="sr-only" id="docFile" accept="application/pdf,image/jpeg,image/png,image/webp"></label></div></div>' +
+    '<div class="field"><span class="field-label">파일</span><label class="dropzone" id="docDrop">' + icon('upload') + '<span>눌러서 파일 선택 (PDF·JPG·PNG, 상품 리스트는 XLSX도 가능, 8MB 이하)</span><input type="file" class="sr-only" id="docFile" accept="application/pdf,image/jpeg,image/png,image/webp,.xlsx"></label></div></div>' +
     '</div></section>' +
     '<section class="card"><div class="card-head"><h2>올린 서류</h2></div>' + (docs.length ? '<div class="list">' + docs.map((f) => '<div class="list-item"><span class="thumb">' + icon('file') + '</span><div class="grow"><div class="cell-title ellipsis">' + esc(f.name) + '</div><div class="cell-sub">' + esc(f.category) + ' · ' + esc(Fmt.date(f.createdAt)) + '</div>' + (f.note ? '<div class="small" style="color:var(--bad)">' + esc(f.note) + '</div>' : '') + '</div>' + pill(f.status) + '</div>').join('') + '</div>' : UI.empty('아직 올린 서류가 없습니다')) + '</section>';
   $('#docFile').addEventListener('change', async (e) => {
