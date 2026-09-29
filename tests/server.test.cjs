@@ -185,6 +185,7 @@ test('intake: form response creates Notion brand once, duplicates become comment
   assert.deepEqual(out.map((o) => o.code), ['BO-0004', 'BO-0005']);
   const page = Object.values(env.notion.pages).find((p) => textOf(p, '브랜드명') === '블루랩(서브, 라인)');
   assert.equal(textOf(page, '진행 단계'), '접수·검토');
+  assert.equal(textOf(page, '재영업 분류'), '신규 · 상품 미등록', 'new brands start as 신규 · 상품 미등록');
   assert.equal(textOf(page, '연락처'), '010-1234-5678');
   assert.equal(textOf(page, '사업자 번호'), '123-45-67890');
   assert.equal(textOf(page, '현재 판매 채널'), '자사몰', '"(현재) 판매 채널" is not confused with "판매 채널"');

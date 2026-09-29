@@ -111,7 +111,7 @@ function processFormResponse_(response, options) {
       }
       const code = nextBrandCode_();
       const values = {
-        name: name, code: code, stage: BO.INTAKE_STAGE,
+        name: name, code: code, stage: BO.INTAKE_STAGE, reClass: BO.NEW_BRAND_RECLASS,
         company: answers.company || '', bizNo: formatBizNo_(answers.bizNo), contactName: answers.contactName || '',
         phone: formatPhone_(answers.phone), email: answers.email || '', received: submittedAt,
         launch: parseLaunchDate_(answers.launchDate), channel1: answers.channel1 || '', channel2: answers.channel2 || '',

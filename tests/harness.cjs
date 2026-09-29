@@ -510,7 +510,7 @@ function seed(env, opts) {
   const brandId = n.addSource('brand', { properties: {
     '브랜드명': { type: 'title' }, '브랜드 ID': { type: 'rich_text' },
     '진행 단계': { type: 'select', options: ['접수·검토', '조건 협의', '통화 예정', '통화 완료', '확정', '보류'] },
-    '협력사/회사명': { type: 'rich_text' }, '재영업 단계': { type: 'select', options: ['조건협의'] }, '재영업 분류': { type: 'select', options: ['확인 필요'] },
+    '협력사/회사명': { type: 'rich_text' }, '재영업 단계': { type: 'select', options: ['조건협의'] }, '재영업 분류': { type: 'select', options: ['확인 필요', '신규 · 상품 미등록'] },
     '우선순위': { type: 'select', options: ['1순위', '2순위', '3순위'] }, '브랜드 담당자': { type: 'rich_text' }, '연락처': { type: 'rich_text' }, '이메일': { type: 'rich_text' },
     '카테고리': { type: 'multi_select', options: ['스킨케어(베이직)', '메이크업'] }, '희망 거래 방식': { type: 'multi_select', options: ['사입', '위탁'] },
     '희망 영역': { type: 'multi_select', options: ['약국', '백화점'] }, '희망 채널 1순위': { type: 'rich_text' }, '희망 채널 2순위': { type: 'rich_text' },
