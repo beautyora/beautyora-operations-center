@@ -36,6 +36,8 @@ const BO = Object.freeze({
   LINK: Object.freeze({ ACTIVE: '사용 중', STOPPED: '중지' }),
   FILE: Object.freeze({ PENDING: '검수 대기', RECEIVED: '수령 완료', REVISION: '보완 필요', REJECTED: '반려', APPROVED: '승인 완료' }),
   INTAKE_STAGE: '접수·검토',
+  /** 폼으로 새로 등록되는 브랜드의 '재영업 분류' 기본값. */
+  NEW_BRAND_RECLASS: '신규 · 상품 미등록',
   CHANGE_MARKER: '🔁 변경 요청',
   DOC_CATEGORIES: Object.freeze({ '사업자등록증': 'docBusiness', '통장사본': 'docBank', '브랜드 소개서': 'docIntro', '계약서': 'docContract', '기타 브랜드 자료': 'docOther' }),
   ASSET_CATEGORIES: Object.freeze(['대표 이미지', '추가 이미지', '상세페이지', '기타']),
