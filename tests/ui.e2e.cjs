@@ -201,12 +201,29 @@ const shot = async (page, name) => { await page.waitForTimeout(900); return page
       { name: '3_대표.png', mimeType: 'image/png', buffer: png },
       { name: 'IMG_0001.png', mimeType: 'image/png', buffer: png }
     ]);
-    await p.waitForSelector('text=3 / 4개 준비됨');
+    await p.waitForSelector('text=3개 올림');
     await shot(p, '18b-partner-bulk-photos');
     await p.click('#bpGo');
     await p.waitForFunction(() => !document.querySelector('#modal'));
     const afterFiles = Object.values(env.drive.items).filter((f) => f.appProperties && f.appProperties.boKind === 'asset').length;
     assert.equal(afterFiles - beforeFiles, 3, 'three matched photos uploaded');
+
+    // 등록된 상품(바코드 8800000000011)은 수정 요청 초안이 자동으로 생기고, 이미 올린 같은 파일은 건너뛴다.
+    await p.click('#dPhotos');
+    await p.setInputFiles('#bpFiles', [
+      { name: '8800000000011_상세_1.png', mimeType: 'image/png', buffer: png },
+      { name: '8800000000201_대표.png', mimeType: 'image/png', buffer: png }
+    ]);
+    await p.waitForSelector('text=같은 파일 1개 건너뜀');
+    await p.waitForSelector('text=등록 상품 · 수정 요청으로');
+    await shot(p, '18c-partner-bulk-registered');
+    await p.click('#bpGo');
+    await p.waitForFunction(() => !document.querySelector('#modal'));
+    const p1Files = Object.values(env.drive.items).filter((f) => f.appProperties && f.appProperties.boProduct === 'PRD-0001-AAAA' && f.appProperties.boCat === 'detail');
+    assert.equal(p1Files.length, 1, 'photo attached to the registered product');
+    assert.ok(p1Files[0].appProperties.boHash, 'content hash stored');
+    assert.equal(Object.values(env.drive.items).filter((f) => f.appProperties && f.appProperties.boKind === 'asset').length - afterFiles, 1, 'duplicate skipped');
+    await p.waitForSelector('text=시카 리페어 앰플');
 
     const pm = await open(browser, base + '/partner', { width: 390, height: 844 });
     await pm.waitForSelector('#plist');

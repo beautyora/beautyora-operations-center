@@ -133,7 +133,13 @@ function apiReviewDecide_(payload) {
         if (values.barcode) assertBarcodeFree_(values.barcode, page.id, null);
         Object.assign(properties, productPropsFromInput_(values, fields, { partial: true }));
         const owner = brandByPageId_((row.brand || [])[0]);
+        // 요청에서 교체하기로 한 옛 파일은 승인할 때 '이전 파일'로 옮긴다.
+        if (owner && pending.request.newFiles) retireReplacedAssets_(owner, row.productId, pending.request.newFiles, pending.request.replace || ['main']);
         Object.assign(properties, assetFolderProps_(schema, listProductAssets_(owner ? owner.code : '', row.productId)));
+      } else if (action === 'reject' && pending.request.newFiles && pending.request.newFiles.length) {
+        // 반려된 요청의 새 파일은 상품 폴더에서 치운다(Notion 링크가 폴더를 가리키므로).
+        const owner = brandByPageId_((row.brand || [])[0]);
+        if (owner) retireAssetIds_(owner, row.productId, pending.request.newFiles);
       }
       Object.assign(properties, notionProps_(schema, { change: label }, { allowNewOption: true }));
       markChangeBlock_(pending, action === 'approve' ? '✅ 반영됨' : action === 'revision' ? '↩️ 보완 요청' : '⛔ 반려');

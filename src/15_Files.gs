@@ -4,7 +4,7 @@
  */
 const BO_ASSET_CODES = Object.freeze({ '대표 이미지': 'main', '추가 이미지': 'extra', '상세페이지': 'detail', '기타': 'etc' });
 const BO_DOC_CODES = Object.freeze({ '사업자등록증': 'business', '통장사본': 'bank', '입점 상품 리스트': 'products', '브랜드 소개서': 'intro', '계약서': 'contract', '기타 브랜드 자료': 'other' });
-const BO_FILE_STATUS_CODES = Object.freeze({ pending: '검수 대기', received: '수령 완료', revision: '보완 필요', rejected: '반려', approved: '승인 완료' });
+const BO_FILE_STATUS_CODES = Object.freeze({ pending: '검수 대기', received: '수령 완료', revision: '보완 필요', rejected: '반려', approved: '승인 완료', replaced: '교체됨' });
 const BO_FILE_FIELDS = 'id,name,mimeType,webViewLink,thumbnailLink,createdTime,size,appProperties,description,trashed,parents';
 const BO_ALLOWED_MIME = Object.freeze({ 'image/jpeg': ['jpg', 'jpeg'], 'image/png': ['png'], 'image/webp': ['webp'], 'application/pdf': ['pdf'] });
 const BO_XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -93,7 +93,7 @@ function fileView_(file) {
     kind: kind, brandCode: app.boBrand || '', productId: app.boProduct || '',
     categoryCode: app.boCat || '', category: codeToLabel_(kind === 'doc' ? BO_DOC_CODES : BO_ASSET_CODES, app.boCat),
     statusCode: app.boStatus || '', status: BO_FILE_STATUS_CODES[app.boStatus] || '',
-    note: file.description || '',
+    note: file.description || '', hash: app.boHash || '',
     folderUrl: file.parents && file.parents[0] ? 'https://drive.google.com/drive/folders/' + file.parents[0] : ''
   };
 }
@@ -106,7 +106,44 @@ function listProductAssets_(brandCode, productId) {
   if (!productId) return [];
   const conditions = { boKind: 'asset', boProduct: productId };
   if (brandCode) conditions.boBrand = brandCode;
-  return driveList_(conditions, 300).map(fileView_).sort(function (a, b) { return String(a.createdAt).localeCompare(String(b.createdAt)); });
+  // 교체되어 '이전 파일'로 옮긴 파일은 빼고 돌려준다.
+  return driveList_(conditions, 300).map(fileView_).filter(function (a) { return a.statusCode !== 'replaced'; })
+    .sort(function (a, b) { return String(a.createdAt).localeCompare(String(b.createdAt)); });
+}
+
+/**
+ * 파일 정리: 교체된 옛 파일을 상품 폴더의 '이전 파일' 폴더로 옮기고 '교체됨'으로 표시한다(지우지 않는다).
+ * keepIds: 이번에 새로 올린 파일. codes: 교체할 분류(main·detail·extra·etc).
+ * 새 파일이 실제로 있는 분류만 정리하므로, 새 파일 없이 옛 파일만 사라지는 일은 없다.
+ */
+function retireReplacedAssets_(brand, productId, keepIds, codes) {
+  const keep = {};
+  (keepIds || []).forEach(function (id) { keep[id] = true; });
+  const assets = listProductAssets_(brand.code, productId);
+  const hasNew = {};
+  assets.forEach(function (a) { if (keep[a.id]) hasNew[a.categoryCode] = true; });
+  return retireAssets_(brand, productId, assets.filter(function (a) { return !keep[a.id] && hasNew[a.categoryCode] && (codes || []).indexOf(a.categoryCode) >= 0; }));
+}
+
+/** 지정한 파일(반려된 요청의 새 파일 등)을 '이전 파일'로 옮긴다. */
+function retireAssetIds_(brand, productId, ids) {
+  const wanted = {};
+  (ids || []).forEach(function (id) { wanted[id] = true; });
+  return retireAssets_(brand, productId, listProductAssets_(brand.code, productId).filter(function (a) { return wanted[a.id]; }));
+}
+
+function retireAssets_(brand, productId, targets) {
+  if (!targets.length) return 0;
+  // 호출하는 쪽(제출·검수)이 이미 잠금 안에 있다.
+  const folder = childFolder_(childFolder_(childFolder_(brandFolder_(brand), '상품 이미지'), productId), '이전 파일');
+  targets.forEach(function (a) {
+    const file = driveFile_(a.id);
+    Drive.Files.update({ appProperties: { boStatus: 'replaced' } }, a.id, null,
+      { addParents: folder.getId(), removeParents: (file.parents || []).join(','), fields: BO_FILE_FIELDS, supportsAllDrives: true });
+  });
+  bumpCache_('asset');
+  logInfo_('file.retire', { brand: brand.code, productId: productId, count: targets.length });
+  return targets.length;
 }
 
 function listBrandDocs_(brandCode) {
@@ -121,7 +158,7 @@ function assetMainImages_() {
     try {
       driveList_({ boKind: 'asset', boCat: 'main' }, 5000).forEach(function (file) {
         const productId = file.appProperties && file.appProperties.boProduct;
-        if (!productId) return;
+        if (!productId || file.appProperties.boStatus === 'replaced') return;
         if (!times[productId] || String(file.createdTime) > times[productId]) {
           map[productId] = file.id;
           times[productId] = String(file.createdTime);
@@ -165,6 +202,8 @@ function uploadBrandFile_(brand, request) {
   const name = sanitizeFileName_((productId || brand.code) + '_' + category + '_' + uploadId.slice(0, 8) + '_' + fileName);
   const appProperties = { boKind: kind, boBrand: brand.code, boCat: codes[category], boUpload: uploadId, boStatus: kind === 'doc' ? 'pending' : 'received' };
   if (productId) appProperties.boProduct = productId;
+  // 같은 파일을 다시 올렸는지 알아보기 위한 내용 지문(원본 파일의 SHA-256, 화면에서 계산).
+  if (/^[a-f0-9]{64}$/.test(String(request.contentHash || ''))) appProperties.boHash = String(request.contentHash);
   const created = Drive.Files.create({ name: name, parents: [folder.getId()], appProperties: appProperties },
     Utilities.newBlob(bytes, mimeType, name), { fields: BO_FILE_FIELDS, supportsAllDrives: true });
   if (kind === 'asset' && codes[category] === 'main') bumpCache_('asset');
