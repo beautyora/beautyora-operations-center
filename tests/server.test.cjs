@@ -493,6 +493,8 @@ test('xlsx/CSV import maps headers by label', () => {
   const res = JSON.parse(JSON.stringify(env.call('mapImportRows_', [['안내'], ['상품명 *', '바코드', '카테고리', '소비자가'], ['토너', '0012', '스킨케어(베이직), 메이크업', '10,000'], ['', '', '', '']], fields)));
   assert.deepEqual(res.rows, [{ product_name: '토너', barcode: '0012', category: ['스킨케어(베이직)', '메이크업'], retail_price: '10,000' }]);
   assert.deepEqual(res.rowNumbers, [3], 'sheet row numbers let photos be named 3_대표.jpg');
+  const withId = JSON.parse(JSON.stringify(env.call('mapImportRows_', [['상품 ID', '상품명 *', '소비자가'], ['PRD-0001-AAAA', '시카 리페어 앰플', '23,000']], fields)));
+  assert.deepEqual(withId.productIds, ['PRD-0001-AAAA'], "downloaded sheets keep '상품 ID' so edits go back to the same product");
 });
 
 test('doGet renders admin and partner shells without leaking the token into script code', () => {
