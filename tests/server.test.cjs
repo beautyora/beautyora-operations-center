@@ -380,6 +380,39 @@ test('products made outside the center get an ID so the brand sees and can reque
   assert.match(textOf(env.notion.pages[other.id], '운영센터 상품 ID'), /^PRD-/);
 });
 
+test('photo replacement: old files move to 이전 파일 on approval, rejected uploads are cleared, hashes kept', () => {
+  const { env, data } = setup();
+  ok(env.api('system.setup'));
+  const token = issueToken(env, 'BO-0001');
+  const up = (uploadId, category, name, hash) => ok(env.api('partner.upload', { kind: 'asset', productId: 'PRD-0001-AAAA', category, uploadId, fileName: name, mimeType: 'image/png', base64: Buffer.from(name).toString('base64'), contentHash: hash }, token)).file;
+  const oldDetail = up('UP-OLD-00000001', '상세페이지', 'old-detail.png', 'a'.repeat(64));
+  const oldMain = up('UP-OLD-00000002', '대표 이미지', 'old-main.png', 'b'.repeat(64));
+  const assets = ok(env.api('partner.assets', { productId: 'PRD-0001-AAAA' }, token)).assets;
+  assert.equal(assets.find((a) => a.id === oldDetail.id).hash, 'a'.repeat(64), 'content hash returned to the brand screen');
+  // 새 상세·대표를 올리고 '교체'로 수정 요청
+  const newDetail = up('UP-NEW-00000001', '상세페이지', 'new-detail.png', 'c'.repeat(64));
+  const newMain = up('UP-NEW-00000002', '대표 이미지', 'new-main.png', 'd'.repeat(64));
+  const extra = up('UP-NEW-00000003', '추가 이미지', 'extra.png', 'e'.repeat(64));
+  const res = ok(env.api('partner.submit', { requestId: 'REQ-REPL-00000001', contactName: '담당', products: [{ productId: 'PRD-0001-AAAA', data: { product_name: '시카 리페어 앰플' }, replace: ['detail'], newFiles: [newDetail.id, newMain.id, extra.id, 'not-mine-000000'] }] }, token));
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.results[0].mode, 'change');
+  assert.equal(env.drive.items[oldDetail.id].appProperties.boStatus, 'received', 'nothing moves before approval');
+  ok(env.api('review.decide', { pageId: data.p1.id, kind: 'change', action: 'approve' }));
+  const moved = (f) => env.drive.items[f.id].appProperties.boStatus === 'replaced' && env.drive.items[env.drive.items[f.id].parents[0]].name === '이전 파일';
+  assert.ok(moved(oldDetail), 'old detail moved to 이전 파일');
+  assert.ok(moved(oldMain), 'old main always replaced by the new main');
+  assert.ok(!moved(newDetail) && !moved(newMain) && !moved(extra), 'new files stay');
+  const after = ok(env.api('partner.assets', { productId: 'PRD-0001-AAAA' }, token)).assets.map((a) => a.id).sort();
+  assert.deepEqual(after, [newDetail.id, newMain.id, extra.id].sort(), 'replaced files are no longer listed');
+
+  // 반려되면 그 요청의 새 파일은 상품 폴더에서 치운다. 교체할 파일이 없는 분류(추가)는 건드리지 않는다.
+  const rejected = up('UP-REJ-00000001', '추가 이미지', 'rejected.png', 'f'.repeat(64));
+  ok(env.api('partner.submit', { requestId: 'REQ-REPL-00000002', contactName: '담당', products: [{ productId: 'PRD-0001-AAAA', data: { product_name: '시카 리페어 앰플' }, replace: ['extra'], newFiles: [rejected.id] }] }, token));
+  ok(env.api('review.decide', { pageId: data.p1.id, kind: 'change', action: 'reject', note: '사진이 흐립니다' }));
+  assert.ok(moved(rejected), 'rejected upload cleared');
+  assert.ok(!moved(extra), 'existing extra image untouched by a rejected request');
+});
+
 test('link can be issued for up to a year', () => {
   const { env } = setup();
   ok(env.api('system.setup'));

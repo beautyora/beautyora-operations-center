@@ -98,13 +98,19 @@ function newDraft(data) {
   return draft;
 }
 
+/** 등록된 상품을 고치는 초안(승인·상태 없음 → 수정 요청, 그 외 → 보완 재제출). */
+function draftForProduct(p) {
+  const mode = p.review === '승인 완료' || !p.review ? 'change' : 'revision';
+  const draft = { id: p.productId, mode, name: p.name, data: JSON.parse(JSON.stringify(p.values || {})), uploads: [], existing: [], replace: [], linked: p.linked || {}, reviewNote: p.reviewNote, updatedAt: Date.now() };
+  P.drafts = P.drafts.filter((d) => d.id !== p.productId);
+  P.drafts.unshift(draft);
+  return draft;
+}
+
 async function editExisting(productId) {
   const p = P.boot.products.find((x) => x.productId === productId);
   if (!p) return;
-  const mode = p.review === '승인 완료' || !p.review ? 'change' : 'revision';
-  const draft = { id: p.productId, mode, name: p.name, data: JSON.parse(JSON.stringify(p.values || {})), uploads: [], existing: [], linked: p.linked || {}, reviewNote: p.reviewNote, updatedAt: Date.now() };
-  P.drafts = P.drafts.filter((d) => d.id !== productId);
-  P.drafts.unshift(draft);
+  const draft = draftForProduct(p);
   P.current = draft.id;
   saveDrafts();
   go('drafts');
@@ -177,6 +183,12 @@ function fieldInput(f, value) {
   }
 }
 
+/** 이 분류의 기존 파일이 제출 후 교체되는지(대표는 새 파일이 있으면 항상 교체). */
+function willReplace(d, code) {
+  const hasNew = d.uploads.some((u) => u.code === code && u.fileId);
+  return hasNew && (code === 'main' || (d.replace || []).indexOf(code) >= 0);
+}
+
 const ASSET_SLOTS = [
   { code: 'main', label: '대표 이미지', accept: 'image/jpeg,image/png,image/webp', help: '정사각형에 가까운 제품 단독 이미지 1장' },
   { code: 'extra', label: '추가 이미지', accept: 'image/jpeg,image/png,image/webp', help: '여러 장 올릴 수 있습니다' },
@@ -201,7 +213,8 @@ function paintEditor() {
         const mine = d.uploads.filter((u) => u.code === slot.code);
         const existing = (d.existing || []).filter((a) => a.categoryCode === slot.code);
         return '<div class="field"><span class="field-label">' + esc(slot.label) + (f && f.required ? '<span class="req">*</span>' : '') + ' <span class="field-help">' + esc(slot.help) + '</span></span>' +
-          '<div class="files">' + (d.mode === 'change' && d.linked && d.linked[slot.code] && !existing.length ? '<div class="file-row">' + icon('file') + '<span class="grow ellipsis">뷰티오라에 등록된 파일</span><span class="small muted">등록됨 · 바꿀 때만 올려 주세요</span></div>' : '') + existing.map((a) => '<div class="file-row">' + icon('file') + '<span class="grow ellipsis">' + esc(a.name) + '</span><span class="small muted">등록됨</span></div>').join('') +
+          '<div class="files">' + (d.mode === 'change' && d.linked && d.linked[slot.code] && !existing.length ? '<div class="file-row">' + icon('file') + '<span class="grow ellipsis">뷰티오라에 등록된 파일</span><span class="small muted">등록됨 · 바꿀 때만 올려 주세요</span></div>' : '') + existing.map((a) => '<div class="file-row">' + icon('file') + '<span class="grow ellipsis">' + esc(a.name) + '</span><span class="small muted">' + (willReplace(d, slot.code) ? '새 파일로 교체 예정' : '등록됨') + '</span></div>').join('') +
+          (existing.length && slot.code !== 'main' ? '<label class="check small" style="margin:4px 0"><input type="checkbox" data-replace="' + slot.code + '"' + ((d.replace || []).indexOf(slot.code) >= 0 ? ' checked' : '') + '> 새로 올린 파일로 기존 ' + esc(slot.label) + ' 교체</label>' : '') +
           mine.map((u) => '<div class="file-row">' + (u.preview ? '<span class="thumb" style="width:36px;height:36px"><img src="' + esc(u.preview) + '" alt=""></span>' : icon('file')) + '<span class="grow ellipsis">' + esc(u.name) + '</span>' + (u.state === 'uploading' ? '<span class="small muted">올리는 중…</span>' : u.state === 'error' ? '<span class="small" style="color:var(--bad)">' + esc(u.error) + '</span><button class="btn btn-sm" data-remove="' + esc(u.uploadId) + '">지우기</button>' : '<span class="small" style="color:var(--ok)">완료</span>') + '</div>').join('') + '</div>' +
           '<label class="dropzone" data-drop="' + slot.code + '">' + icon('upload') + '<span>눌러서 파일 선택 또는 끌어다 놓기</span><span class="small">JPG·PNG·WEBP' + (slot.code === 'detail' ? '·PDF' : '') + ', 파일당 8MB 이하</span><input type="file" class="sr-only" accept="' + slot.accept + '"' + (slot.code === 'main' ? '' : ' multiple') + ' data-upload="' + slot.code + '"></label></div>';
       }).join('') + '</div></div>' +
@@ -222,7 +235,11 @@ function paintEditor() {
   };
   form.addEventListener('input', onEdit);
   form.addEventListener('change', onEdit);
-  box.addEventListener('change', (e) => { const input = e.target.closest('[data-upload]'); if (input) uploadFiles(d, input.dataset.upload, Array.from(input.files)); });
+  box.addEventListener('change', (e) => {
+    const input = e.target.closest('[data-upload]'); if (input) uploadFiles(d, input.dataset.upload, Array.from(input.files));
+    const rep = e.target.closest('[data-replace]');
+    if (rep) { d.replace = (d.replace || []).filter((c) => c !== rep.dataset.replace).concat(rep.checked ? [rep.dataset.replace] : []); saveDrafts(); paintEditor(); }
+  });
   $$('[data-drop]', box).forEach((zone) => {
     zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('over'); });
     zone.addEventListener('dragleave', () => zone.classList.remove('over'));
@@ -247,20 +264,29 @@ function paintEditor() {
   }
 }
 
+/** 원본 파일 내용의 SHA-256(같은 파일을 두 번 올리지 않기 위해). 계산할 수 없으면 빈 값. */
+async function fileHash(file) {
+  try {
+    const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+    return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  } catch (e) { return ''; }
+}
+
 async function uploadFiles(d, code, files) {
   const slot = ASSET_SLOTS.find((s) => s.code === code);
   const label = slot.label;
   for (const original of files) {
     if (!slot.accept.split(',').includes(original.type)) { Toast.error(original.name + ': ' + (code === 'detail' ? 'JPG·PNG·WEBP·PDF' : 'JPG·PNG·WEBP') + ' 파일만 올릴 수 있습니다.'); continue; }
+    const hash = await fileHash(original);
     const file = await shrinkImage(original);
     if (file.size > P.boot.limits.maxUploadBytes) { Toast.error(original.name + ': 8MB를 넘습니다. 용량을 줄여 주세요.'); continue; }
-    const entry = { uploadId: uid('UP'), code, name: file.name, state: 'uploading', preview: /^image\//.test(file.type) ? URL.createObjectURL(file) : '' };
+    const entry = { uploadId: uid('UP'), code, name: file.name, hash, state: 'uploading', preview: /^image\//.test(file.type) ? URL.createObjectURL(file) : '' };
     if (code === 'main') d.uploads = d.uploads.filter((u) => u.code !== 'main');
     d.uploads.push(entry);
     if (P.current === d.id) paintEditor();
     try {
       const base64 = await fileToBase64(file);
-      const r = await Api.call('partner.upload', { kind: 'asset', productId: d.id, category: label, uploadId: entry.uploadId, fileName: file.name, mimeType: file.type, base64 });
+      const r = await Api.call('partner.upload', { kind: 'asset', productId: d.id, category: label, uploadId: entry.uploadId, fileName: file.name, mimeType: file.type, base64, contentHash: hash });
       entry.fileId = r.file.id;
       entry.state = 'done';
     } catch (e) {
@@ -275,51 +301,121 @@ async function uploadFiles(d, code, files) {
 }
 
 /* ---------- 사진 한꺼번에 올리기 ---------- */
-const PHOTO_KINDS = { '대표': 'main', '메인': 'main', 'main': 'main', '추가': 'extra', 'extra': 'extra', '상세': 'detail', '상세페이지': 'detail', 'detail': 'detail' };
+const PHOTO_KINDS = [
+  ['상세페이지', 'detail'], ['상세이미지', 'detail'], ['상세컷', 'detail'], ['상세', 'detail'], ['detail', 'detail'],
+  ['대표이미지', 'main'], ['메인이미지', 'main'], ['썸네일', 'main'], ['thumbnail', 'main'], ['thumb', 'main'], ['대표', 'main'], ['메인', 'main'], ['main', 'main'],
+  ['추가이미지', 'extra'], ['서브', 'extra'], ['추가', 'extra'], ['extra', 'extra'], ['sub', 'extra']
+];
+const PHOTO_RE = new RegExp('^(.+?)[\\s_-]*(' + PHOTO_KINDS.map((k) => k[0]).join('|') + ')(?:[\\s_-]*\\(?\\d+\\)?)?$', 'i');
 
-/** 파일 이름 → { key, code }. 예: 8801234567890_대표.jpg, 8801234567890_상세_2.png, 3_추가.jpg */
+/** 파일 이름 → { key, code }. 예: 8801234567890_대표.jpg, 8801234567890-상세 (2).png, 3_추가.jpg, 수분크림썸네일.jpg */
 function parsePhotoName(name) {
-  const base = String(name).replace(/\.[a-z0-9]+$/i, '').trim();
-  const m = base.match(/^(.+?)[\s_-]+(대표|메인|main|추가|extra|상세페이지|상세|detail)(?:[\s_-]*\(?\d+\)?)?$/i);
+  const base = String(name).normalize('NFC').replace(/\.[a-z0-9]+$/i, '').trim();
+  const m = base.match(PHOTO_RE);
   if (!m) return null;
-  return { key: m[1].trim(), code: PHOTO_KINDS[m[2].toLowerCase()] };
+  const kind = PHOTO_KINDS.find((k) => k[0].toLowerCase() === m[2].toLowerCase());
+  return { key: m[1].replace(/[\s_-]+$/, '').trim(), code: kind[1] };
 }
 
-/** 바코드 → 엑셀 행 번호 → 상품명 순으로 작성 중인 상품을 찾는다. */
-function matchDraft(key) {
+const normName = (v) => String(v || '').normalize('NFC').replace(/[\s_\-·()]+/g, '').toLowerCase();
+
+/**
+ * 파일 이름의 열쇠(바코드·엑셀 행 번호·상품명)로 대상을 찾는다.
+ * 작성 중 상품을 먼저 보고, 없으면 등록된 상품을 본다. → { draftId } | { productId } | null
+ */
+function matchTarget(key) {
   const digits = String(key).replace(/\D/g, '');
-  const norm = (v) => String(v || '').replace(/\s+/g, '').toLowerCase();
-  if (digits.length >= 6) { const d = P.drafts.find((x) => String(x.data.barcode || '').replace(/\D/g, '') === digits); if (d) return d; }
-  if (/^\d{1,4}$/.test(key)) { const d = P.drafts.find((x) => x.row === Number(key)); if (d) return d; }
-  return P.drafts.find((x) => norm(x.data.product_name) === norm(key)) || null;
+  const byBarcode = digits.length >= 6;
+  const same = (v) => String(v || '').replace(/\D/g, '') === digits;
+  if (byBarcode) {
+    const d = P.drafts.find((x) => same(x.data.barcode));
+    if (d) return { draftId: d.id };
+    const p = P.boot.products.find((x) => same(x.barcode));
+    if (p) return { productId: p.productId };
+  }
+  if (/^\d{1,4}$/.test(key)) { const d = P.drafts.find((x) => x.row === Number(key)); if (d) return { draftId: d.id }; }
+  const d = P.drafts.find((x) => normName(x.data.product_name || x.name) === normName(key));
+  if (d) return { draftId: d.id };
+  const p = P.boot.products.find((x) => normName(x.name) === normName(key));
+  return p ? { productId: p.productId } : null;
 }
 
 function bulkPhotoDialog() {
   const m = Modal.open({
+    wide: true,
     title: '사진 한꺼번에 올리기',
-    body: '<p class="small">파일 이름으로 상품과 사진 종류를 알아봅니다. 한 번에 여러 파일을 끌어다 놓으세요.</p>' +
-      '<ul class="small muted"><li><b>바코드_대표.jpg</b> — 대표 이미지 (상품당 1장)</li><li><b>바코드_상세_1.jpg</b>, <b>바코드_상세_2.pdf</b> — 상세페이지</li><li><b>바코드_추가_1.jpg</b> — 추가 이미지</li><li>바코드가 없으면 엑셀 행 번호(<b>3_대표.jpg</b>)나 상품명(<b>수분크림_대표.jpg</b>)도 됩니다.</li></ul>' +
+    body: '<p class="small">파일 이름으로 상품과 사진 종류를 알아봅니다. <b>이미 등록된 상품</b>도 바코드로 찾아 수정 요청을 자동으로 만들어 줍니다.</p>' +
+      '<ul class="small muted"><li><b>바코드_대표.jpg</b> — 대표 이미지 (상품당 1장, 기존 대표 이미지는 교체)</li><li><b>바코드_상세_1.jpg</b>, <b>바코드_상세_2.pdf</b> — 상세페이지</li><li><b>바코드_추가_1.jpg</b> — 추가 이미지</li><li>바코드가 없으면 엑셀 행 번호(<b>3_대표.jpg</b>)나 상품명(<b>수분크림_대표.jpg</b>)도 됩니다. 썸네일·thumb·대표이미지·상세이미지도 알아봅니다.</li></ul>' +
+      '<fieldset class="bp-mode" style="border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin:12px 0"><legend class="small" style="padding:0 6px;font-weight:600">상세·추가 이미지를 올리면</legend>' +
+        '<label class="check small" style="align-items:flex-start"><input type="radio" name="bpMode" value="replace" checked><span>기존 파일을 새 파일로 <b>교체</b> — 옛 파일은 지우지 않고 "이전 파일" 폴더로 옮깁니다</span></label>' +
+        '<label class="check small" style="align-items:flex-start;margin-top:6px"><input type="radio" name="bpMode" value="add"><span>기존 파일 뒤에 <b>추가</b></span></label></fieldset>' +
       '<label class="dropzone" id="bpDrop">' + icon('upload') + '<span>눌러서 여러 파일 선택 또는 끌어다 놓기</span><span class="small">JPG·PNG·WEBP (상세페이지는 PDF도), 파일당 8MB 이하</span><input type="file" class="sr-only" id="bpFiles" multiple accept="image/jpeg,image/png,image/webp,application/pdf"></label>' +
       '<div id="bpPlan"></div>',
     foot: '<button class="btn" data-close>닫기</button><button class="btn btn-primary" id="bpGo" disabled>올리기</button>'
   });
   let plan = [];
-  const draftOptions = (selected) => '<option value="">상품 선택 안 함</option>' + P.drafts.map((d) => '<option value="' + esc(d.id) + '"' + (d.id === selected ? ' selected' : '') + '>' + esc((d.data.product_name || '이름 없는 상품') + (d.data.barcode ? ' · ' + d.data.barcode : '') + (d.row ? ' · ' + d.row + '행' : '')) + '</option>').join('');
+  let checking = 0;
+  const existingHashes = {}; // 상품 ID → Set(내용 지문)
+  const productOf = (id) => P.boot.products.find((x) => x.productId === id);
+  const targetValue = (x) => x.draftId ? 'd:' + x.draftId : x.productId ? 'p:' + x.productId : '';
+  const draftIdsWithProducts = () => new Set(P.drafts.map((d) => d.id));
+  const options = (selected) => {
+    const drafted = draftIdsWithProducts();
+    return '<option value="">상품 선택 안 함</option><optgroup label="작성 중">' + P.drafts.map((d) => '<option value="d:' + esc(d.id) + '"' + ('d:' + d.id === selected ? ' selected' : '') + '>' + esc((d.data.product_name || d.name || '이름 없는 상품') + (d.data.barcode ? ' · ' + d.data.barcode : '') + (d.row ? ' · ' + d.row + '행' : '')) + '</option>').join('') + '</optgroup>' +
+      '<optgroup label="등록된 상품 (수정 요청)">' + P.boot.products.filter((p) => !drafted.has(p.productId) && p.change !== '검수 대기').map((p) => '<option value="p:' + esc(p.productId) + '"' + ('p:' + p.productId === selected ? ' selected' : '') + '>' + esc(p.name + (p.barcode ? ' · ' + p.barcode : '')) + '</option>').join('') + '</optgroup>';
+  };
+  const idOf = (x) => x.draftId || x.productId || '';
+  const refreshDup = () => {
+    const seen = new Set();
+    plan.forEach((x) => {
+      const id = idOf(x);
+      const d = x.draftId && P.drafts.find((y) => y.id === x.draftId);
+      const mine = new Set([...(existingHashes[id] || []), ...((d && d.uploads) || []).map((u) => u.hash).filter(Boolean)]);
+      const key = id + '|' + x.hash;
+      x.dup = !!(x.hash && id && (mine.has(x.hash) || seen.has(key)));
+      if (x.hash && id) seen.add(key);
+    });
+  };
+  const statusOf = (x) => {
+    if (!x.draftId && !x.productId) return x.blocked ? '<span style="color:var(--bad)">' + esc(x.blocked) + '</span>' : '<span style="color:var(--bad)">상품을 못 찾음</span>';
+    if (x.dup) return '<span class="muted">같은 파일이 이미 있어 건너뜀</span>';
+    if (x.productId) return '등록 상품 · 수정 요청으로';
+    return '작성 중 상품';
+  };
   const paint = () => {
-    const ready = plan.filter((x) => x.draftId && x.code).length;
-    $('#bpPlan', m).innerHTML = plan.length ? '<div class="table-wrap" style="margin-top:12px"><table class="table"><thead><tr><th>파일</th><th>상품</th><th>종류</th></tr></thead><tbody>' + plan.map((x, i) =>
-      '<tr><td class="small ellipsis" style="max-width:180px">' + esc(x.file.name) + '</td><td><select class="select" data-bp-draft="' + i + '">' + draftOptions(x.draftId) + '</select></td><td><select class="select" style="min-width:120px" data-bp-code="' + i + '">' + UI.options(ASSET_SLOTS.map((s) => ({ value: s.code, label: s.label })), x.code, '선택') + '</select></td></tr>').join('') + '</tbody></table></div>' +
-      '<p class="small" style="margin-top:8px">' + ready + ' / ' + plan.length + '개 준비됨' + (ready < plan.length ? ' — <span style="color:var(--bad)">짝을 못 찾은 파일은 상품과 종류를 직접 골라 주세요.</span>' : '') + '</p>' : '';
-    $('#bpGo', m).disabled = !ready;
+    refreshDup();
+    const ready = plan.filter((x) => (x.draftId || x.productId) && x.code && !x.dup).length;
+    const dups = plan.filter((x) => x.dup).length;
+    $('#bpPlan', m).innerHTML = plan.length ? '<div class="table-wrap" style="margin-top:12px"><table class="table"><thead><tr><th>파일 · 처리</th><th>상품</th><th>종류</th></tr></thead><tbody>' + plan.map((x, i) =>
+      '<tr><td class="small" style="max-width:150px;word-break:break-all">' + esc(x.file.name) + '<div class="cell-sub">' + statusOf(x) + '</div></td><td><select class="select" style="min-width:180px;max-width:230px" data-bp-target="' + i + '">' + options(targetValue(x)) + '</select></td><td><select class="select" style="min-width:120px" data-bp-code="' + i + '">' + UI.options(ASSET_SLOTS.map((s) => ({ value: s.code, label: s.label })), x.code, '선택') + '</select></td></tr>').join('') + '</tbody></table></div>' +
+      '<p class="small" style="margin-top:8px">' + ready + '개 올림' + (dups ? ' · 같은 파일 ' + dups + '개 건너뜀' : '') + (checking ? ' · 기존 사진 확인 중…' : '') + (plan.some((x) => !x.draftId && !x.productId) ? ' — <span style="color:var(--bad)">못 찾은 파일은 상품을 직접 골라 주세요.</span>' : '') + '</p>' : '';
+    $('#bpGo', m).disabled = !ready || checking > 0;
     $('#bpGo', m).textContent = ready ? ready + '개 올리기' : '올리기';
   };
-  const add = (files) => {
-    files.forEach((file) => {
+  // 등록 상품·작성 중 수정 초안은 이미 올라간 사진의 지문을 불러와 같은 파일을 걸러낸다.
+  const loadExisting = async (ids) => {
+    const need = ids.filter((id) => id && !existingHashes[id] && !(P.drafts.find((d) => d.id === id && d.mode === 'new')));
+    need.forEach((id) => { existingHashes[id] = new Set(); });
+    for (let i = 0; i < need.length; i += 4) {
+      checking++; paint();
+      await Promise.all(need.slice(i, i + 4).map((id) => Api.call('partner.assets', { productId: id }).then((r) => { existingHashes[id] = new Set(r.assets.map((a) => a.hash).filter(Boolean)); }).catch(() => {})));
+      checking--; paint();
+    }
+  };
+  const add = async (files) => {
+    const items = await Promise.all(files.map(async (file) => {
       const parsed = parsePhotoName(file.name);
-      const draft = parsed ? matchDraft(parsed.key) : null;
-      plan.push({ file, draftId: draft ? draft.id : '', code: parsed ? parsed.code : '' });
-    });
+      let target = parsed ? matchTarget(parsed.key) : null;
+      let blocked = '';
+      if (target && target.productId) {
+        const p = productOf(target.productId);
+        if (p && p.change === '검수 대기') { blocked = '변경 검수 중인 상품 — 끝난 뒤 올려 주세요'; target = null; }
+      }
+      return { file, hash: await fileHash(file), draftId: target && target.draftId || '', productId: target && target.productId || '', code: parsed ? parsed.code : '', blocked };
+    }));
+    plan = plan.concat(items);
     paint();
+    loadExisting(Array.from(new Set(items.map(idOf))));
   };
   const zone = $('#bpDrop', m);
   zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('over'); });
@@ -327,25 +423,36 @@ function bulkPhotoDialog() {
   zone.addEventListener('drop', (e) => { e.preventDefault(); zone.classList.remove('over'); add(Array.from(e.dataTransfer.files)); });
   $('#bpFiles', m).addEventListener('change', (e) => { add(Array.from(e.target.files)); e.target.value = ''; });
   m.addEventListener('change', (e) => {
-    const d = e.target.closest('[data-bp-draft]'); if (d) { plan[Number(d.dataset.bpDraft)].draftId = d.value; paint(); }
+    const t = e.target.closest('[data-bp-target]');
+    if (t) {
+      const x = plan[Number(t.dataset.bpTarget)];
+      x.draftId = t.value.indexOf('d:') === 0 ? t.value.slice(2) : '';
+      x.productId = t.value.indexOf('p:') === 0 ? t.value.slice(2) : '';
+      x.blocked = '';
+      paint();
+      loadExisting([idOf(x)]);
+    }
     const c = e.target.closest('[data-bp-code]'); if (c) { plan[Number(c.dataset.bpCode)].code = c.value; paint(); }
   });
   $('#bpGo', m).addEventListener('click', (e) => busy(e.currentTarget, async () => {
-    const ready = plan.filter((x) => x.draftId && x.code);
+    const replace = ($('input[name="bpMode"]:checked', m) || {}).value !== 'add';
+    const ready = plan.filter((x) => (x.draftId || x.productId) && x.code && !x.dup);
     const seenMain = new Set();
-    let skipped = 0;
+    let skipped = 0, created = 0;
     for (const x of ready) {
-      const d = P.drafts.find((y) => y.id === x.draftId);
+      let d = x.draftId ? P.drafts.find((y) => y.id === x.draftId) : P.drafts.find((y) => y.id === x.productId);
+      if (!d && x.productId) { const p = productOf(x.productId); if (p) { d = draftForProduct(p); created++; } }
       if (!d) continue;
       if (x.code === 'main') { if (seenMain.has(d.id)) { skipped++; continue; } seenMain.add(d.id); }
+      if (replace && (x.code === 'detail' || x.code === 'extra')) d.replace = Array.from(new Set((d.replace || []).concat([x.code])));
       await uploadFiles(d, x.code, [x.file]);
     }
+    saveDrafts();
     Modal.close();
     const failed = P.drafts.reduce((n, d) => n + d.uploads.filter((u) => u.state === 'error').length, 0);
-    const noMain = P.drafts.filter((d) => { const f = assetField('main'); return f && f.required && !d.uploads.some((u) => u.code === 'main' && u.fileId) && !(d.existing || []).some((a) => a.categoryCode === 'main'); }).length;
-    Toast.ok((ready.length - skipped) + '개 파일을 올렸습니다.' + (skipped ? ' (대표 이미지는 상품당 1장만 — ' + skipped + '개 건너뜀)' : '') + (failed ? ' 실패 ' + failed + '개는 상품 화면에서 확인해 주세요.' : '') + (noMain ? ' 대표 이미지가 없는 상품 ' + noMain + '개' : ''));
-    if (P.paintDraftList) P.paintDraftList();
-    paintEditor();
+    Toast.ok((ready.length - skipped) + '개 파일을 올렸습니다.' + (created ? ' 등록 상품 ' + created + '개는 수정 요청으로 담았습니다.' : '') + (skipped ? ' (대표 이미지는 상품당 1장 — ' + skipped + '개 건너뜀)' : '') + (failed ? ' 실패 ' + failed + '개는 상품 화면에서 확인해 주세요.' : '') + ' "선택 제출"로 보내 주세요.');
+    renderTabs();
+    go('drafts');
   }));
 }
 
@@ -369,7 +476,7 @@ function submitDialog() {
     if (!name) { Toast.error('이름을 입력해 주세요.'); return; }
     Store.set('bo2-contact', { name, phone: $('#sPhone', m).value.trim() });
     try {
-      const r = await Api.call('partner.submit', { requestId, contactName: name, contactPhone: $('#sPhone', m).value.trim(), products: picked.map((d) => ({ productId: d.id, data: d.data })) });
+      const r = await Api.call('partner.submit', { requestId, contactName: name, contactPhone: $('#sPhone', m).value.trim(), products: picked.map((d) => ({ productId: d.id, data: d.data, replace: d.replace || [], newFiles: d.uploads.filter((u) => u.fileId).map((u) => u.fileId) })) });
       if (!r.ok) {
         Modal.close();
         Modal.open({ title: '제출하지 못했습니다', body: '<p>아래 내용을 고친 뒤 다시 제출해 주세요. (아무것도 저장되지 않았습니다)</p><ul>' + r.problems.map((p) => '<li><strong>' + esc(p.name) + '</strong>: ' + esc(p.messages.join(' / ')) + '</li>').join('') + '</ul>' });

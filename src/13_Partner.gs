@@ -160,7 +160,14 @@ function partnerSubmitLocked_(ctx, list, requestId, submitter) {
       }
     }
     if (messages.length) problems.push({ index: index, productId: productId, name: name, messages: messages });
-    else plans.push({ productId: productId, name: name, page: page, mode: mode, data: data, properties: properties, assets: assets });
+    else {
+      // 이번 초안에서 새로 올린 파일과, 새 파일로 바꿀 분류(대표는 항상 교체).
+      const ownIds = {};
+      assets.forEach(function (a) { ownIds[a.id] = true; });
+      const newFiles = (Array.isArray(item.newFiles) ? item.newFiles : []).map(String).filter(function (id) { return ownIds[id]; }).slice(0, 200);
+      const replace = ['main'].concat((Array.isArray(item.replace) ? item.replace : []).map(String).filter(function (c) { return ['detail', 'extra', 'etc'].indexOf(c) >= 0; }));
+      plans.push({ productId: productId, name: name, page: page, mode: mode, data: data, properties: properties, assets: assets, newFiles: newFiles, replace: replace });
+    }
   });
   if (problems.length) return { ok: false, problems: problems };
 
@@ -174,7 +181,8 @@ function partnerSubmitLocked_(ctx, list, requestId, submitter) {
         .map(function (f) { return f.label + ': ' + describeValue_(current[f.id]) + ' → ' + describeValue_(plan.data[f.id]); });
       const values = {};
       fields.forEach(function (f) { if (!f.asset && hasOwn_(plan.data, f.id)) values[f.id] = plan.data[f.id]; });
-      notionAppend_(plan.page.id, [changeBlock_({ v: 1, requestId: requestId, submittedAt: submittedAt, submitter: submitter, brandCode: ctx.brand.code, values: values, assets: plan.assets.map(function (a) { return a.id; }) }, lines.length ? lines : ['변경된 입력값 없음(파일만 변경)'])]);
+      const fileLines = plan.newFiles.length ? ['새 파일 ' + plan.newFiles.length + '개' + (plan.replace.length > 1 ? ' (상세·추가 이미지는 기존 파일을 교체)' : ' (대표 이미지는 교체, 나머지는 추가)')] : [];
+      notionAppend_(plan.page.id, [changeBlock_({ v: 1, requestId: requestId, submittedAt: submittedAt, submitter: submitter, brandCode: ctx.brand.code, values: values, assets: plan.assets.map(function (a) { return a.id; }), newFiles: plan.newFiles, replace: plan.replace }, lines.concat(fileLines).length ? lines.concat(fileLines) : ['변경된 입력값 없음'])]);
       const properties = Object.assign({}, meta, notionProps_(schema, { change: BO.CHANGE.PENDING }, { allowNewOption: true }));
       if (schema.ids.reviewNote) properties[schema.ids.reviewNote] = notionRichText_('');
       notionPatch_(plan.page.id, properties);
@@ -185,6 +193,8 @@ function partnerSubmitLocked_(ctx, list, requestId, submitter) {
     if (schema.ids.reviewNote) properties[schema.ids.reviewNote] = notionRichText_('');
     if (plan.page) notionPatch_(plan.page.id, properties);
     else notionCreate_(schema.sourceId, properties);
+    // 아직 승인 전인 상품은 교체한 옛 파일을 바로 정리한다.
+    retireReplacedAssets_(ctx.brand, plan.productId, plan.newFiles, plan.replace);
     return { productId: plan.productId, name: plan.name, mode: plan.mode };
   });
   bumpCache_('product');
