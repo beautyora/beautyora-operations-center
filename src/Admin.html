@@ -44,7 +44,7 @@ function renderShell() {
   $('#root').innerHTML =
     '<div class="shell">' +
       '<aside class="sidebar" id="sidebar" aria-label="메뉴">' +
-        '<div class="logo"><strong>BEAUTYORA</strong><span>운영센터</span></div>' +
+        '<div class="logo">' + LOGO_SVG + '<span>운영센터</span></div>' +
         '<nav class="nav" id="nav"></nav>' +
         '<div class="sidebar-foot"><span class="ellipsis" title="' + esc(Admin.user.email) + '">' + esc(Admin.user.email) + '</span><span>v' + esc(App.version) + ' · 데이터 원본: Notion</span></div>' +
       '</aside>' +

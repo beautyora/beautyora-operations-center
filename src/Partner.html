@@ -14,7 +14,7 @@ function renderPartnerShell() {
   const b = P.boot.brand;
   $('#root').innerHTML =
     '<div class="p-shell"><header class="p-top"><div class="p-top-inner">' +
-      '<div class="row between wrap"><div><div class="logo" style="padding:0"><strong>BEAUTYORA</strong><span>상품등록센터</span></div></div><div class="row"><span class="pill pill-brand">' + esc(b.name) + '</span><span class="small muted hide-sm">' + esc(b.company) + '</span></div></div>' +
+      '<div class="row between wrap"><div><div class="logo" style="padding:0">' + LOGO_SVG + '<span>상품등록센터</span></div></div><div class="row"><span class="pill pill-brand">' + esc(b.name) + '</span><span class="small muted hide-sm">' + esc(b.company) + '</span></div></div>' +
       '<nav class="tabs" role="tablist" id="ptabs"></nav>' +
     '</div></header><main class="p-main" id="pview"></main></div>';
   $('#ptabs').addEventListener('click', (e) => { const t = e.target.closest('[data-ptab]'); if (t) go(t.dataset.ptab); });
