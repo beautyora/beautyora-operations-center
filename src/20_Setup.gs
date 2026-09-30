@@ -145,6 +145,19 @@ function ensureBillingDatabase_(report) {
   report.push('생성: Notion "계산서 · 입금 내역" DB');
 }
 
+/** 브랜드가 연결됐지만 운영센터 상품 ID가 없는 상품에 ID를 붙인다(한 번에 300개, 남으면 다시 실행). */
+function ensureProductIds_(report) {
+  const schema = notionSchema_('product');
+  const pages = notionQueryAll_(schema.sourceId, { filter: { and: [
+    { property: schema.ids.productId, rich_text: { is_empty: true } },
+    { property: schema.ids.brand, relation: { is_not_empty: true } }
+  ] } });
+  if (!pages.length) return;
+  const count = assignProductIds_(pages, schema, 300);
+  bumpCache_('product');
+  report.push('추가: 기존 상품 ' + count + '개에 운영센터 상품 ID' + (pages.length > 300 ? ' (남은 ' + (pages.length - 300) + '개는 초기 설정을 한 번 더 실행해 주세요)' : ''));
+}
+
 function installTriggers_(report) {
   const triggers = ScriptApp.getProjectTriggers();
   triggers.forEach(function (trigger) {
@@ -186,6 +199,7 @@ function setupSystem_() {
   step('Notion 속성 추가', ensureSchemaAdditions_);
   step('상품등록 링크 DB 만들기', ensureLinkDatabase_);
   step('계산서 · 입금 내역 DB 만들기', ensureBillingDatabase_);
+  step('기존 상품에 운영센터 상품 ID 붙이기', ensureProductIds_);
   clearSchemaMemo_();
   step('트리거 설치', installTriggers_);
   const health = healthCheck_();

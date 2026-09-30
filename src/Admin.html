@@ -245,7 +245,7 @@ function onboardCell(b) {
 }
 
 async function pageBrands(view) {
-  const data = await Api.get('brands.list', {}, 60000);
+  const data = await Api.get('brands.list', {}, 15000);
   Admin.state.brands = data;
   const q = Admin.route.query;
   view.innerHTML =
@@ -349,7 +349,7 @@ async function brandTab(code, tab) {
         try { const r = await Api.call('brands.body', { code }); $('#brandBodyBox').innerHTML = renderBlocks(r.blocks) || '<p class="muted">본문이 비어 있습니다.</p>'; } catch (err) { Toast.error(err); }
       }));
     } else if (tab === 'products') {
-      const data = await Api.get('products.list', {}, 60000);
+      const data = await Api.get('products.list', {}, 15000);
       const list = data.products.filter((p) => p.brandCode === code);
       guard(list.length ? '<section class="card"><div class="list">' + list.map((p) => '<a class="list-item" href="#/products/' + encodeURIComponent(p.pageId) + '" data-link="/products/' + encodeURIComponent(p.pageId) + '">' + UI.thumb(p.preview || UI.driveThumb(p.mainFileId)) + '<div class="grow"><div class="cell-title ellipsis">' + esc(p.name) + '</div><div class="cell-sub">' + esc([p.option, p.barcode].filter(Boolean).join(' · ') || '—') + '</div></div><span class="num small hide-sm">' + Fmt.won(p.retail) + '</span>' + pill(p.review || '상태 없음') + (p.change === '검수 대기' ? pill('변경 요청', 'warn') : '') + '</a>').join('') + '</div></section>' : '<section class="card">' + UI.empty('등록된 상품이 없습니다', '상품등록 링크를 보내면 브랜드가 직접 등록할 수 있습니다.') + '</section>');
     } else if (tab === 'activity') {
@@ -394,7 +394,7 @@ function issueLinkDialog(brand) {
   const m = Modal.open({
     title: brand.name + ' 상품등록 링크 발급',
     body: '<p class="muted small">이전에 보낸 링크는 자동으로 중지됩니다.</p>' +
-      UI.field('사용 기간', '<select class="select" id="linkDays">' + UI.options([{ value: 14, label: '14일' }, { value: 30, label: '30일' }, { value: 60, label: '60일' }, { value: 90, label: '90일' }], 30) + '</select>', { for: 'linkDays' }) +
+      UI.field('사용 기간', '<select class="select" id="linkDays">' + UI.options([{ value: 14, label: '14일' }, { value: 30, label: '30일' }, { value: 60, label: '60일' }, { value: 90, label: '90일' }, { value: 180, label: '180일' }, { value: 365, label: '1년' }], 30) + '</select>', { for: 'linkDays' }) +
       UI.field('메모', '<input class="input" id="linkMemo" placeholder="예: 9월 신상품 등록용">', { for: 'linkMemo' }) + '<div id="linkResult"></div>',
     foot: '<button class="btn" data-close>닫기</button><button class="btn btn-primary" id="linkGo">발급</button>'
   });
@@ -516,8 +516,19 @@ function renderBlocks(blocks) {
 }
 
 /* ---------- 상품 ---------- */
+/** 상세에서 읽은 최신 값이 목록과 다르면 목록도 바로 고친다(Notion에서 직접 바꾼 경우). */
+function syncListedProduct(p) {
+  const data = Admin.state.products;
+  const item = data && data.products.find((x) => x.pageId === p.pageId);
+  if (!item || ['review', 'change', 'name', 'barcode', 'retail'].every((k) => String(item[k] ?? '') === String(p[k] ?? ''))) return;
+  ['review', 'change', 'reviewNote', 'name', 'option', 'barcode', 'retail', 'category', 'edited'].forEach((k) => { item[k] = p[k]; });
+  Api.invalidate();
+  if (Admin.state.repaintProducts) Admin.state.repaintProducts();
+  refreshCounts();
+}
+
 async function pageProducts(view) {
-  const data = await Api.get('products.list', {}, 60000);
+  const data = await Api.get('products.list', {}, 15000);
   Admin.state.products = data;
   const brands = Array.from(new Set(data.products.map((p) => p.brandName).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'ko'));
   const q = Admin.route.query;
@@ -540,6 +551,7 @@ async function pageProducts(view) {
       '</tbody></table>' + (list.length > 500 ? '<p class="small muted card-pad">처음 500개만 표시합니다. 검색으로 좁혀 주세요.</p>' : '') : UI.empty('조건에 맞는 상품이 없습니다');
   };
   ['pq', 'pbrand', 'pcat', 'preview'].forEach((id) => $('#' + id).addEventListener(id === 'pq' ? 'input' : 'change', paint));
+  Admin.state.repaintProducts = paint;
   $('#ptable').addEventListener('click', (e) => { const row = e.target.closest('tr[data-page]'); if (row) Nav.go('/products/' + encodeURIComponent(row.dataset.page)); });
   paint();
 }
@@ -550,6 +562,7 @@ async function openProduct(pageId) {
   try { d = await Api.call('products.detail', { pageId }); } catch (e) { $('#pdBody', panel).innerHTML = UI.error(e); return; }
   if ($('#drawer') !== panel) return;
   const p = d.product;
+  syncListedProduct(p);
   const byCat = {};
   d.assets.forEach((a) => { (byCat[a.category || '기타'] = byCat[a.category || '기타'] || []).push(a); });
   const editable = d.properties.filter((x) => x.editable);
@@ -766,7 +779,7 @@ function inventoryEditDialog(data, row, after) {
 }
 
 async function pageInventory(view) {
-  const [data, products] = await Promise.all([Api.get('inventory.list', {}, 30000), Api.get('products.list', {}, 60000)]);
+  const [data, products] = await Promise.all([Api.get('inventory.list', {}, 15000), Api.get('products.list', {}, 15000)]);
   Admin.state.allProducts = products.products;
   if (!data.connected) { view.innerHTML = '<section class="card">' + UI.empty('재고현황 DB가 연결되지 않았습니다', '설정 → 초기 설정을 실행하면 자동으로 찾습니다.') + '</section>'; return; }
   const q = Admin.route.query;

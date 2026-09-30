@@ -32,12 +32,11 @@ function productSummary_(row, brandMap, mainImages) {
 /** 전체 상품(5분 캐시). */
 function listProducts_(fresh) {
   if (fresh) bumpCache_('product');
-  return cached_('product', 'all', BO.LIST_TTL, function () {
-    const schema = notionSchema_('product');
-    const brandMap = brandMapByPageId_();
-    const mainImages = assetMainImages_();
-    return notionQueryAll_(schema.sourceId, { sorts: [{ timestamp: 'created_time', direction: 'descending' }] })
-      .map(function (page) { return productSummary_(notionRow_(page, schema), brandMap, mainImages); });
+  notionSchema_('product');
+  let brandMap = null, mainImages = null;
+  return syncedList_('product', 'product', function (row) {
+    if (!brandMap) { brandMap = brandMapByPageId_(); mainImages = assetMainImages_(); }
+    return productSummary_(row, brandMap, mainImages);
   });
 }
 

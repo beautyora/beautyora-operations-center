@@ -1,17 +1,48 @@
 /** 브랜드(파트너) 상품등록센터 API. 모든 함수는 partnerContext_로 확인된 브랜드 범위 안에서만 동작한다. */
 
+/**
+ * 운영센터 상품 ID가 없는 상품(Notion에 직접 넣었거나 예전부터 있던 상품)에 ID를 붙인다.
+ * 브랜드 화면은 이 ID로 상품·파일을 찾으므로, ID가 있어야 브랜드가 자기 상품을 모두 보고 수정 요청할 수 있다.
+ * 반환: 새로 붙인 페이지 수. pages는 같은 DB의 페이지 목록이며, 붙인 ID는 pages의 속성에도 반영된다.
+ */
+function assignProductIds_(pages, schema, limit) {
+  const missing = pages.filter(function (page) { return !notionValue_(notionPropertyById_(page, schema.ids.productId)); }).slice(0, limit || 1000);
+  if (!missing.length) return 0;
+  let assigned = 0;
+  withLock_(function () {
+    missing.forEach(function (page) {
+      const fresh = notionPage_(page.id);
+      let id = notionValue_(notionPropertyById_(fresh, schema.ids.productId));
+      if (!id) {
+        id = 'PRD-' + uuid_('').slice(0, 8) + '-' + uuid_('').slice(0, 8);
+        const patch = {};
+        patch[schema.ids.productId] = notionRichText_(id);
+        notionPatch_(page.id, patch);
+        assigned++;
+      }
+      const property = notionPropertyById_(page, schema.ids.productId);
+      if (property) property.rich_text = [{ type: 'text', text: { content: id }, plain_text: id }];
+    });
+  }, 60000);
+  if (assigned) logInfo_('product.assignIds', { count: assigned });
+  return assigned;
+}
+
 function partnerProducts_(brand) {
-  return cached_('product', 'brand:' + brand.code, 120, function () {
+  return cached_('product', 'brand:' + brand.code, 30, function () {
     const schema = notionSchema_('product');
     const fields = productFieldConfig_().fields;
     const mainImages = assetMainImages_();
     const pages = notionQueryAll_(schema.sourceId, { filter: fRelation_(schema, 'brand', brand.pageId), sorts: [{ timestamp: 'created_time', direction: 'descending' }] }, 1000);
+    // 운영센터 밖에서 만든 상품도 브랜드가 볼 수 있게 ID를 붙인다.
+    if (assignProductIds_(pages, schema)) bumpCache_('product');
     return pages.map(function (page) {
       const row = notionRow_(page, schema);
       return {
         productId: row.productId || '', name: row.name || '', option: row.option || '', barcode: row.barcode || '',
         review: row.review || '', change: row.change || '', reviewNote: row.reviewNote || '', submittedAt: row.submittedAt || '',
         edited: row.edited, mainFileId: mainImages[row.productId] || '',
+        linked: { main: !!row.thumbnail, detail: !!row.detail },
         values: productFieldValues_(page, fields)
       };
     }).filter(function (p) { return p.productId; });
@@ -115,12 +146,14 @@ function partnerSubmitLocked_(ctx, list, requestId, submitter) {
         }
         properties = productPropsFromInput_(data, fields, { partial: mode === 'change' });
         assets = listProductAssets_(ctx.brand.code, productId);
-        const need = function (fieldId, code, label) {
+        const need = function (fieldId, code, label, schemaKey) {
           const field = fields.find(function (f) { return f.id === fieldId; });
-          if (field && field.required && !assets.some(function (a) { return a.categoryCode === code; })) messages.push(label + ' 파일을 올려 주세요.');
+          // 등록된 상품의 수정 요청은 Notion에 이미 연결된 파일이 있으면 새로 올리지 않아도 된다.
+          const linked = mode === 'change' && schema.ids[schemaKey] && notionValue_(notionPropertyById_(page, schema.ids[schemaKey]));
+          if (field && field.required && !linked && !assets.some(function (a) { return a.categoryCode === code; })) messages.push(label + ' 파일을 올려 주세요.');
         };
-        need('main_image_url', 'main', '대표 이미지');
-        need('detail_page_url', 'detail', '상세페이지');
+        need('main_image_url', 'main', '대표 이미지', 'thumbnail');
+        need('detail_page_url', 'detail', '상세페이지', 'detail');
         if (barcode) assertBarcodeFree_(barcode, page && page.id, ctx.brand);
       } catch (error) {
         messages.push(errorMessage_(error));
@@ -195,9 +228,12 @@ function mapImportRows_(values, fields) {
     const index = headers.findIndex(function (h) { return h === f.label || h === f.id || h === short; });
     if (index >= 0) columns[f.id] = index;
   });
-  const rows = values.slice(headerRow + 1).filter(function (row) { return row.some(function (cell) { return String(cell).trim(); }); }).slice(0, 300);
+  const numbered = values.map(function (row, index) { return { row: row, number: index + 1 }; }).slice(headerRow + 1)
+    .filter(function (item) { return item.row.some(function (cell) { return String(cell).trim(); }); }).slice(0, 300);
+  const rows = numbered.map(function (item) { return item.row; });
   return {
     columns: Object.keys(columns),
+    rowNumbers: numbered.map(function (item) { return item.number; }),
     rows: rows.map(function (row) {
       const data = {};
       Object.keys(columns).forEach(function (id) {

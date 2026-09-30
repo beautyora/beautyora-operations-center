@@ -139,11 +139,20 @@ class FakeNotion {
     if (!filter) return true;
     if (filter.and) return filter.and.every((f) => this.matches(page, f, source));
     if (filter.or) return filter.or.some((f) => this.matches(page, f, source));
+    if (filter.timestamp) {
+      const cond = filter[filter.timestamp] || {};
+      const v = page[filter.timestamp] || '';
+      if (cond.on_or_after) return v >= cond.on_or_after;
+      if (cond.on_or_before) return v <= cond.on_or_before;
+      return true;
+    }
     const def = this.propByKey(source, filter.property);
     if (!def) throw this.error(400, 'validation_error', 'Could not find property ' + filter.property);
     const prop = page.properties[def.name] || this.emptyProp(def);
     const cond = filter[def.type] || filter.rich_text || filter.title || filter.select || filter.relation || filter.checkbox || filter.date || filter.number;
     if (!cond) throw this.error(400, 'validation_error', 'filter type mismatch for ' + def.name);
+    if (def.type === 'relation' && cond.is_not_empty) return (prop.relation || []).length > 0;
+    if (def.type === 'relation' && cond.is_empty) return !(prop.relation || []).length;
     if (def.type === 'relation') return (prop.relation || []).some((r) => r.id.replace(/-/g, '') === String(cond.contains).replace(/-/g, ''));
     if (def.type === 'checkbox') return !!prop.checkbox === !!cond.equals;
     if (def.type === 'multi_select') return (prop.multi_select || []).some((o) => o.name === cond.contains);
