@@ -189,6 +189,25 @@ const shot = async (page, name) => { await page.waitForTimeout(900); return page
     await p.waitForSelector('#docFile', { state: 'attached' });
     await shot(p, '18-partner-docs');
 
+    // 엑셀(CSV)로 여러 상품을 불러온 뒤 사진을 파일 이름으로 한꺼번에 올린다.
+    await p.click('[data-ptab="products"]');
+    await p.setInputFiles('#importFile', { name: 'list.csv', mimeType: 'text/csv', buffer: Buffer.from('상품명 *,바코드,카테고리,소비자가\n선크림,8800000000201,스킨케어(베이직),15000\n립밤,,메이크업,9000\n') });
+    await p.waitForSelector('#dPhotos');
+    const beforeFiles = Object.values(env.drive.items).filter((f) => f.appProperties && f.appProperties.boKind === 'asset').length;
+    await p.click('#dPhotos');
+    await p.setInputFiles('#bpFiles', [
+      { name: '8800000000201_대표.png', mimeType: 'image/png', buffer: png },
+      { name: '8800000000201_상세_1.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4') },
+      { name: '3_대표.png', mimeType: 'image/png', buffer: png },
+      { name: 'IMG_0001.png', mimeType: 'image/png', buffer: png }
+    ]);
+    await p.waitForSelector('text=3 / 4개 준비됨');
+    await shot(p, '18b-partner-bulk-photos');
+    await p.click('#bpGo');
+    await p.waitForFunction(() => !document.querySelector('#modal'));
+    const afterFiles = Object.values(env.drive.items).filter((f) => f.appProperties && f.appProperties.boKind === 'asset').length;
+    assert.equal(afterFiles - beforeFiles, 3, 'three matched photos uploaded');
+
     const pm = await open(browser, base + '/partner', { width: 390, height: 844 });
     await pm.waitForSelector('#plist');
     await shot(pm, '19-partner-mobile');

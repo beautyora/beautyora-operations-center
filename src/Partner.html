@@ -54,7 +54,8 @@ function viewProducts(view) {
   view.innerHTML =
     '<section class="card card-pad stack"><div class="row between wrap"><div><h2 style="font-size:18px">상품 등록 방법</h2><div class="steps" style="margin-top:6px"><span><b>1</b>상품 정보 작성</span><span><b>2</b>대표 이미지·상세페이지 올리기</span><span><b>3</b>선택해서 제출</span><span><b>4</b>뷰티오라 검수 후 등록</span></div></div>' +
       '<div class="row wrap"><button class="btn" id="csvTemplate">' + icon('file') + '엑셀 양식</button><label class="btn" for="importFile">' + icon('upload') + '엑셀·CSV로 여러 개</label><input type="file" id="importFile" accept=".csv,.xlsx" class="sr-only"><button class="btn btn-primary" id="newProduct">' + icon('plus') + '새 상품 등록</button></div></div>' +
-      '<p class="small muted">작성 중인 내용은 이 브라우저에만 임시 저장됩니다. 제출해야 뷰티오라에 전달됩니다.</p></section>' +
+      '<p class="small muted">작성 중인 내용은 이 브라우저에만 임시 저장됩니다. 제출해야 뷰티오라에 전달됩니다.</p>' +
+      '<p class="small muted">여러 상품의 사진은 파일 이름을 <b>바코드_대표.jpg</b>, <b>바코드_상세_1.jpg</b>, <b>바코드_추가_1.jpg</b>처럼 붙여 "작성·제출" 탭의 <b>사진 한꺼번에</b>로 한 번에 올릴 수 있습니다.</p></section>' +
     '<div class="toolbar"><input class="input search" id="pq" type="search" placeholder="상품명·바코드 검색" aria-label="검색"><span class="grow"></span><span class="small muted">' + list.length + '개</span></div>' +
     '<section class="card" id="plist"></section>';
   const paint = () => {
@@ -101,7 +102,7 @@ async function editExisting(productId) {
   const p = P.boot.products.find((x) => x.productId === productId);
   if (!p) return;
   const mode = p.review === '승인 완료' || !p.review ? 'change' : 'revision';
-  const draft = { id: p.productId, mode, name: p.name, data: JSON.parse(JSON.stringify(p.values || {})), uploads: [], existing: [], reviewNote: p.reviewNote, updatedAt: Date.now() };
+  const draft = { id: p.productId, mode, name: p.name, data: JSON.parse(JSON.stringify(p.values || {})), uploads: [], existing: [], linked: p.linked || {}, reviewNote: p.reviewNote, updatedAt: Date.now() };
   P.drafts = P.drafts.filter((d) => d.id !== productId);
   P.drafts.unshift(draft);
   P.current = draft.id;
@@ -118,7 +119,7 @@ function draftIssues(d) {
     else if (!empty && f.notionType === 'number' && !isFinite(Number(String(v).replace(/[,\s원]/g, '')))) issues.push(f.label + '(숫자)');
     else if (!empty && f.notionType === 'url' && !/^https?:\/\/\S+$/i.test(String(v))) issues.push(f.label + '(주소)');
   });
-  const has = (code) => d.uploads.some((u) => u.code === code && u.fileId) || (d.existing || []).some((a) => a.categoryCode === code);
+  const has = (code) => d.uploads.some((u) => u.code === code && u.fileId) || (d.existing || []).some((a) => a.categoryCode === code) || (d.mode === 'change' && d.linked && d.linked[code]);
   ['main', 'detail'].forEach((code) => { const f = assetField(code); if (f && f.required && !has(code)) issues.push(f.label.replace(/ Drive URL$/, '')); });
   if (d.uploads.some((u) => u.state === 'uploading')) issues.push('업로드 진행 중');
   return issues;
@@ -131,7 +132,7 @@ function viewDrafts(view) {
     return;
   }
   if (!P.drafts.some((d) => d.id === P.current)) P.current = P.drafts[0].id;
-  view.innerHTML = '<div class="editor"><aside class="card draft-list"><div class="card-head"><h3>작성 중 ' + P.drafts.length + '</h3><button class="btn btn-sm" id="dAdd">' + icon('plus') + '추가</button></div><div class="list" id="dList"></div><div class="sticky-actions" style="justify-content:space-between"><label class="check small"><input type="checkbox" id="dAll"> 모두 선택</label><button class="btn btn-primary" id="dSubmit">선택 제출</button></div></aside><section id="dEditor"></section></div>';
+  view.innerHTML = '<div class="editor"><aside class="card draft-list"><div class="card-head" style="flex-wrap:wrap"><h3 class="nowrap">작성 중 ' + P.drafts.length + '</h3><div class="row wrap"><button class="btn btn-sm" id="dPhotos">' + icon('upload') + '사진 한꺼번에</button><button class="btn btn-sm" id="dAdd">' + icon('plus') + '추가</button></div></div><div class="list" id="dList"></div><div class="sticky-actions" style="justify-content:space-between"><label class="check small"><input type="checkbox" id="dAll"> 모두 선택</label><button class="btn btn-primary" id="dSubmit">선택 제출</button></div></aside><section id="dEditor"></section></div>';
   const paintList = () => {
     if (!$('#dList')) return;
     $('#dList').innerHTML = P.drafts.map((d) => {
@@ -153,6 +154,7 @@ function viewDrafts(view) {
   });
   $('#dAll').addEventListener('change', (e) => { P.drafts.forEach((d) => (e.target.checked ? P.selected.add(d.id) : P.selected.delete(d.id))); paintList(); });
   $('#dAdd').addEventListener('click', () => { newDraft(); paintList(); paintEditor(); });
+  $('#dPhotos').addEventListener('click', bulkPhotoDialog);
   $('#dSubmit').addEventListener('click', submitDialog);
   P.paintDraftList = paintList;
   paintList();
@@ -199,7 +201,7 @@ function paintEditor() {
         const mine = d.uploads.filter((u) => u.code === slot.code);
         const existing = (d.existing || []).filter((a) => a.categoryCode === slot.code);
         return '<div class="field"><span class="field-label">' + esc(slot.label) + (f && f.required ? '<span class="req">*</span>' : '') + ' <span class="field-help">' + esc(slot.help) + '</span></span>' +
-          '<div class="files">' + existing.map((a) => '<div class="file-row">' + icon('file') + '<span class="grow ellipsis">' + esc(a.name) + '</span><span class="small muted">등록됨</span></div>').join('') +
+          '<div class="files">' + (d.mode === 'change' && d.linked && d.linked[slot.code] && !existing.length ? '<div class="file-row">' + icon('file') + '<span class="grow ellipsis">뷰티오라에 등록된 파일</span><span class="small muted">등록됨 · 바꿀 때만 올려 주세요</span></div>' : '') + existing.map((a) => '<div class="file-row">' + icon('file') + '<span class="grow ellipsis">' + esc(a.name) + '</span><span class="small muted">등록됨</span></div>').join('') +
           mine.map((u) => '<div class="file-row">' + (u.preview ? '<span class="thumb" style="width:36px;height:36px"><img src="' + esc(u.preview) + '" alt=""></span>' : icon('file')) + '<span class="grow ellipsis">' + esc(u.name) + '</span>' + (u.state === 'uploading' ? '<span class="small muted">올리는 중…</span>' : u.state === 'error' ? '<span class="small" style="color:var(--bad)">' + esc(u.error) + '</span><button class="btn btn-sm" data-remove="' + esc(u.uploadId) + '">지우기</button>' : '<span class="small" style="color:var(--ok)">완료</span>') + '</div>').join('') + '</div>' +
           '<label class="dropzone" data-drop="' + slot.code + '">' + icon('upload') + '<span>눌러서 파일 선택 또는 끌어다 놓기</span><span class="small">JPG·PNG·WEBP' + (slot.code === 'detail' ? '·PDF' : '') + ', 파일당 8MB 이하</span><input type="file" class="sr-only" accept="' + slot.accept + '"' + (slot.code === 'main' ? '' : ' multiple') + ' data-upload="' + slot.code + '"></label></div>';
       }).join('') + '</div></div>' +
@@ -270,6 +272,81 @@ async function uploadFiles(d, code, files) {
     if (P.current === d.id) paintEditor();
     if (P.paintDraftList) P.paintDraftList();
   }
+}
+
+/* ---------- 사진 한꺼번에 올리기 ---------- */
+const PHOTO_KINDS = { '대표': 'main', '메인': 'main', 'main': 'main', '추가': 'extra', 'extra': 'extra', '상세': 'detail', '상세페이지': 'detail', 'detail': 'detail' };
+
+/** 파일 이름 → { key, code }. 예: 8801234567890_대표.jpg, 8801234567890_상세_2.png, 3_추가.jpg */
+function parsePhotoName(name) {
+  const base = String(name).replace(/\.[a-z0-9]+$/i, '').trim();
+  const m = base.match(/^(.+?)[\s_-]+(대표|메인|main|추가|extra|상세페이지|상세|detail)(?:[\s_-]*\(?\d+\)?)?$/i);
+  if (!m) return null;
+  return { key: m[1].trim(), code: PHOTO_KINDS[m[2].toLowerCase()] };
+}
+
+/** 바코드 → 엑셀 행 번호 → 상품명 순으로 작성 중인 상품을 찾는다. */
+function matchDraft(key) {
+  const digits = String(key).replace(/\D/g, '');
+  const norm = (v) => String(v || '').replace(/\s+/g, '').toLowerCase();
+  if (digits.length >= 6) { const d = P.drafts.find((x) => String(x.data.barcode || '').replace(/\D/g, '') === digits); if (d) return d; }
+  if (/^\d{1,4}$/.test(key)) { const d = P.drafts.find((x) => x.row === Number(key)); if (d) return d; }
+  return P.drafts.find((x) => norm(x.data.product_name) === norm(key)) || null;
+}
+
+function bulkPhotoDialog() {
+  const m = Modal.open({
+    title: '사진 한꺼번에 올리기',
+    body: '<p class="small">파일 이름으로 상품과 사진 종류를 알아봅니다. 한 번에 여러 파일을 끌어다 놓으세요.</p>' +
+      '<ul class="small muted"><li><b>바코드_대표.jpg</b> — 대표 이미지 (상품당 1장)</li><li><b>바코드_상세_1.jpg</b>, <b>바코드_상세_2.pdf</b> — 상세페이지</li><li><b>바코드_추가_1.jpg</b> — 추가 이미지</li><li>바코드가 없으면 엑셀 행 번호(<b>3_대표.jpg</b>)나 상품명(<b>수분크림_대표.jpg</b>)도 됩니다.</li></ul>' +
+      '<label class="dropzone" id="bpDrop">' + icon('upload') + '<span>눌러서 여러 파일 선택 또는 끌어다 놓기</span><span class="small">JPG·PNG·WEBP (상세페이지는 PDF도), 파일당 8MB 이하</span><input type="file" class="sr-only" id="bpFiles" multiple accept="image/jpeg,image/png,image/webp,application/pdf"></label>' +
+      '<div id="bpPlan"></div>',
+    foot: '<button class="btn" data-close>닫기</button><button class="btn btn-primary" id="bpGo" disabled>올리기</button>'
+  });
+  let plan = [];
+  const draftOptions = (selected) => '<option value="">상품 선택 안 함</option>' + P.drafts.map((d) => '<option value="' + esc(d.id) + '"' + (d.id === selected ? ' selected' : '') + '>' + esc((d.data.product_name || '이름 없는 상품') + (d.data.barcode ? ' · ' + d.data.barcode : '') + (d.row ? ' · ' + d.row + '행' : '')) + '</option>').join('');
+  const paint = () => {
+    const ready = plan.filter((x) => x.draftId && x.code).length;
+    $('#bpPlan', m).innerHTML = plan.length ? '<div class="table-wrap" style="margin-top:12px"><table class="table"><thead><tr><th>파일</th><th>상품</th><th>종류</th></tr></thead><tbody>' + plan.map((x, i) =>
+      '<tr><td class="small ellipsis" style="max-width:180px">' + esc(x.file.name) + '</td><td><select class="select" data-bp-draft="' + i + '">' + draftOptions(x.draftId) + '</select></td><td><select class="select" style="min-width:120px" data-bp-code="' + i + '">' + UI.options(ASSET_SLOTS.map((s) => ({ value: s.code, label: s.label })), x.code, '선택') + '</select></td></tr>').join('') + '</tbody></table></div>' +
+      '<p class="small" style="margin-top:8px">' + ready + ' / ' + plan.length + '개 준비됨' + (ready < plan.length ? ' — <span style="color:var(--bad)">짝을 못 찾은 파일은 상품과 종류를 직접 골라 주세요.</span>' : '') + '</p>' : '';
+    $('#bpGo', m).disabled = !ready;
+    $('#bpGo', m).textContent = ready ? ready + '개 올리기' : '올리기';
+  };
+  const add = (files) => {
+    files.forEach((file) => {
+      const parsed = parsePhotoName(file.name);
+      const draft = parsed ? matchDraft(parsed.key) : null;
+      plan.push({ file, draftId: draft ? draft.id : '', code: parsed ? parsed.code : '' });
+    });
+    paint();
+  };
+  const zone = $('#bpDrop', m);
+  zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('over'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('over'));
+  zone.addEventListener('drop', (e) => { e.preventDefault(); zone.classList.remove('over'); add(Array.from(e.dataTransfer.files)); });
+  $('#bpFiles', m).addEventListener('change', (e) => { add(Array.from(e.target.files)); e.target.value = ''; });
+  m.addEventListener('change', (e) => {
+    const d = e.target.closest('[data-bp-draft]'); if (d) { plan[Number(d.dataset.bpDraft)].draftId = d.value; paint(); }
+    const c = e.target.closest('[data-bp-code]'); if (c) { plan[Number(c.dataset.bpCode)].code = c.value; paint(); }
+  });
+  $('#bpGo', m).addEventListener('click', (e) => busy(e.currentTarget, async () => {
+    const ready = plan.filter((x) => x.draftId && x.code);
+    const seenMain = new Set();
+    let skipped = 0;
+    for (const x of ready) {
+      const d = P.drafts.find((y) => y.id === x.draftId);
+      if (!d) continue;
+      if (x.code === 'main') { if (seenMain.has(d.id)) { skipped++; continue; } seenMain.add(d.id); }
+      await uploadFiles(d, x.code, [x.file]);
+    }
+    Modal.close();
+    const failed = P.drafts.reduce((n, d) => n + d.uploads.filter((u) => u.state === 'error').length, 0);
+    const noMain = P.drafts.filter((d) => { const f = assetField('main'); return f && f.required && !d.uploads.some((u) => u.code === 'main' && u.fileId) && !(d.existing || []).some((a) => a.categoryCode === 'main'); }).length;
+    Toast.ok((ready.length - skipped) + '개 파일을 올렸습니다.' + (skipped ? ' (대표 이미지는 상품당 1장만 — ' + skipped + '개 건너뜀)' : '') + (failed ? ' 실패 ' + failed + '개는 상품 화면에서 확인해 주세요.' : '') + (noMain ? ' 대표 이미지가 없는 상품 ' + noMain + '개' : ''));
+    if (P.paintDraftList) P.paintDraftList();
+    paintEditor();
+  }));
 }
 
 function submitDialog() {
@@ -365,7 +442,7 @@ function downloadTemplate() {
   a.href = url; a.download = P.boot.brand.name + '_상품등록_양식.csv';
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 2000);
-  Toast.show('두 번째 줄의 예시는 지우고 작성해 주세요. 이미지는 등록 화면에서 올립니다.');
+  Toast.show('두 번째 줄의 예시는 지우고 작성해 주세요. 사진은 파일 이름을 "바코드_대표.jpg"처럼 붙여 한꺼번에 올릴 수 있습니다.');
 }
 
 function parseCsv(text) {
@@ -391,14 +468,14 @@ function mapRows(values) {
   const headers = values[headerRow].map(norm);
   const index = {};
   cols.forEach((f) => { const short = f.label.replace(/\s*\([^)]*\)\s*$/, ''); const i = headers.findIndex((h) => h === f.label || h === f.id || h === short); if (i >= 0) index[f.id] = i; });
-  return values.slice(headerRow + 1).filter((r) => r.some((c) => String(c).trim())).map((r) => {
+  return values.map((r, i) => ({ r, row: i + 1 })).slice(headerRow + 1).filter((x) => x.r.some((c) => String(c).trim())).map(({ r, row }) => {
     const data = {};
     Object.keys(index).forEach((id) => {
       const f = cols.find((x) => x.id === id);
       const v = String(r[index[id]] == null ? '' : r[index[id]]).trim();
       data[id] = f.notionType === 'multi_select' ? v.split(',').map((x) => x.trim()).filter(Boolean) : f.notionType === 'checkbox' ? /^(y|yes|true|예|o|1)$/i.test(v) : v;
     });
-    return data;
+    return { data, row };
   });
 }
 
@@ -411,12 +488,14 @@ async function importFile(input) {
     if (/\.csv$/i.test(file.name)) rows = mapRows(parseCsv(await file.text()));
     else if (/\.xlsx$/i.test(file.name)) {
       Toast.show('엑셀 파일을 읽는 중입니다…');
-      rows = (await Api.call('partner.importWorkbook', { fileName: file.name, base64: await fileToBase64(file) })).rows;
+      const r = await Api.call('partner.importWorkbook', { fileName: file.name, base64: await fileToBase64(file) });
+      rows = r.rows.map((data, i) => ({ data, row: (r.rowNumbers || [])[i] || 0 }));
     } else throw new Error('CSV 또는 xlsx 파일을 골라 주세요.');
-    rows = rows.filter((r) => r.product_name);
+    rows = rows.filter((r) => r.data.product_name);
     if (!rows.length) throw new Error('상품명이 있는 행이 없습니다.');
-    rows.slice(0, 300).reverse().forEach((data) => newDraft(data));
-    Toast.ok(rows.length + '개 상품을 불러왔습니다. 이미지를 올린 뒤 제출해 주세요.');
+    rows.slice(0, 300).reverse().forEach((r) => { newDraft(r.data).row = r.row; });
+    saveDrafts();
+    Toast.ok(rows.length + '개 상품을 불러왔습니다. "사진 한꺼번에 올리기"로 이미지를 올린 뒤 제출해 주세요.');
     go('drafts');
   } catch (e) { Toast.error(e); }
 }

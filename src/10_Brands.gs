@@ -28,11 +28,8 @@ function onboardTodo_(brand) {
 /** 전체 브랜드(5분 캐시). fresh=true면 Notion에서 다시 읽는다. */
 function listBrands_(fresh) {
   if (fresh) bumpCache_('brand');
-  return cached_('brand', 'all', BO.LIST_TTL, function () {
-    const schema = notionSchema_('brand');
-    return notionQueryAll_(schema.sourceId, { sorts: [{ timestamp: 'created_time', direction: 'descending' }] })
-      .map(function (page) { return brandSummary_(notionRow_(page, schema)); });
-  });
+  notionSchema_('brand');
+  return syncedList_('brand', 'brand', brandSummary_);
 }
 
 function brandMapByPageId_() {

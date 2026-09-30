@@ -337,6 +337,56 @@ test('onboarding checklist and billing: brand list, dashboard, 입점비 sync, r
   assert.deepEqual(dash.onboardTodo[0].todo, ['계약서']);
 });
 
+test('lists pick up edits made directly in Notion without waiting for the cache', () => {
+  const { env, data } = setup();
+  ok(env.api('system.setup'));
+  env.call('(function () { BO_LIST_SYNC_GAP_MS_ = 0; })');
+  const before = ok(env.api('products.list')).products.find((p) => p.pageId === data.p2.id);
+  assert.equal(before.review, '검수 대기');
+  const reviewProp = env.notion.sources[data.ids.productId].properties['등록 검수 상태'].id;
+  // 직원이 Notion에서 직접 승인 완료로 바꾼다(운영센터를 거치지 않음).
+  env.notion.handle('patch', 'https://api.notion.com/v1/pages/' + data.p2.id, { properties: { [reviewProp]: { select: { name: '승인 완료' } } } });
+  const after = ok(env.api('products.list')).products.find((p) => p.pageId === data.p2.id);
+  assert.equal(after.review, '승인 완료', 'direct Notion edit shows up on the next list call');
+  assert.equal(ok(env.api('products.list')).products.length, 3, 'no duplicates after merging');
+  // 새로 만든 페이지도 들어온다.
+  env.notion.handle('post', 'https://api.notion.com/v1/pages', { parent: { data_source_id: data.ids.brandId }, properties: { '브랜드명': { title: [{ text: { content: '새브랜드' } }] }, '브랜드 ID': { rich_text: [{ text: { content: 'BO-0050' } }] }, '진행 단계': { select: { name: '확정' } } } });
+  const brands = ok(env.api('brands.list')).brands;
+  assert.ok(brands.some((b) => b.code === 'BO-0050'));
+  assert.equal(ok(env.api('dashboard')).counts.review, 0, 'dashboard follows too');
+});
+
+test('products made outside the center get an ID so the brand sees and can request changes to all of them', () => {
+  const { env, data } = setup();
+  ok(env.api('system.setup'));
+  const legacy = env.notion.createPage(data.ids.productId, { '상품명': { title: [{ text: { content: '예전 상품' } }] }, '브랜드': { relation: [{ id: data.b1.id }] }, '바코드(텍스트)': { rich_text: [{ text: { content: '8800000000099' } }] }, '대표 이미지 Drive URL': { url: 'https://drive.google.com/file/d/old-main/view' }, '상세페이지 Drive URL': { url: 'https://drive.google.com/file/d/old-detail/view' } });
+  const token = issueToken(env, 'BO-0001');
+  const boot = ok(env.api('partner.bootstrap', {}, token));
+  const seen = boot.products.find((p) => p.name === '예전 상품');
+  assert.ok(seen, 'legacy product is listed for the brand');
+  assert.match(seen.productId, /^PRD-[A-Z0-9]{8}-[A-Z0-9]{8}$/);
+  assert.equal(textOf(env.notion.pages[legacy.id], '운영센터 상품 ID'), seen.productId, 'ID saved to Notion');
+  const again = ok(env.api('partner.bootstrap', {}, token)).products.find((p) => p.name === '예전 상품');
+  assert.equal(again.productId, seen.productId, 'ID is stable');
+  // 상태가 없는 기존 상품은 수정 요청(검수 후 반영)으로 들어간다.
+  const res = ok(env.api('partner.submit', { requestId: 'REQ-LEGACY-0001', contactName: '담당', products: [{ productId: seen.productId, data: { product_name: '예전 상품 리뉴얼', barcode: '8800000000099', category: ['스킨케어(베이직)'], retail_price: 12000 } }] }, token));
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.results[0].mode, 'change');
+  assert.equal(textOf(env.notion.pages[legacy.id], '상품명'), '예전 상품', 'not applied until approved');
+  // 초기 설정도 남은 상품에 ID를 붙인다.
+  const other = env.notion.createPage(data.ids.productId, { '상품명': { title: [{ text: { content: '또 다른 예전 상품' } }] }, '브랜드': { relation: [{ id: data.b2.id }] } });
+  const report = ok(env.api('system.setup')).report;
+  assert.ok(report.some((l) => l.includes('운영센터 상품 ID')), report.join('\n'));
+  assert.match(textOf(env.notion.pages[other.id], '운영센터 상품 ID'), /^PRD-/);
+});
+
+test('link can be issued for up to a year', () => {
+  const { env } = setup();
+  ok(env.api('system.setup'));
+  const res = ok(env.api('links.issue', { code: 'BO-0001', days: 365 }));
+  assert.equal(res.expiry, env.call('addDays_', env.call('today_'), 365));
+});
+
 test('document upload → admin approval writes Drive link to Notion brand', () => {
   const { env, data } = setup();
   ok(env.api('system.setup'));
@@ -409,6 +459,7 @@ test('xlsx/CSV import maps headers by label', () => {
   const fields = env.call('productFieldConfig_').fields.filter((f) => f.active && !f.asset);
   const res = JSON.parse(JSON.stringify(env.call('mapImportRows_', [['안내'], ['상품명 *', '바코드', '카테고리', '소비자가'], ['토너', '0012', '스킨케어(베이직), 메이크업', '10,000'], ['', '', '', '']], fields)));
   assert.deepEqual(res.rows, [{ product_name: '토너', barcode: '0012', category: ['스킨케어(베이직)', '메이크업'], retail_price: '10,000' }]);
+  assert.deepEqual(res.rowNumbers, [3], 'sheet row numbers let photos be named 3_대표.jpg');
 });
 
 test('doGet renders admin and partner shells without leaking the token into script code', () => {

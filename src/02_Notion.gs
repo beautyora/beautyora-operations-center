@@ -445,3 +445,53 @@ function notionUserIdByEmail_(email) {
   });
   return map[email] || '';
 }
+
+/* ---------- 목록 캐시 + 변경분 따라잡기 ---------- */
+
+/** 목록 전체를 다시 읽는 간격(초)과, 그 사이 Notion에 '바뀐 페이지'를 물어보는 최소 간격(밀리초). */
+var BO_LIST_FULL_TTL_ = 600;
+var BO_LIST_SYNC_GAP_MS_ = 10000;
+
+function notionMaxEdited_(pages, start) {
+  return pages.reduce(function (max, page) { return String(page.last_edited_time || '') > max ? String(page.last_edited_time) : max; }, start || '');
+}
+
+/**
+ * Notion DB 목록을 캐시하되, Notion에서 직접 고친 내용도 곧바로 보이게 한다.
+ * - 전체 목록은 BO_LIST_FULL_TTL_마다 새로 읽는다(삭제된 페이지 정리 포함).
+ * - 그 사이에는 요청 때마다(최소 BO_LIST_SYNC_GAP_MS_ 간격) '마지막으로 본 수정 시각 이후 수정된 페이지'만 물어 바꿔 끼운다.
+ * - 기준 시각은 Notion이 준 last_edited_time을 쓰므로 서버 시계와 어긋나도 빠뜨리지 않는다(Notion은 분 단위라 1분 겹쳐 묻는다).
+ * view(row, page)는 한 페이지를 목록 항목으로 바꾼다. 항목에는 pageId·createdAt이 있어야 한다.
+ */
+function syncedList_(namespace, kind, view) {
+  const schema = notionSchema_(kind, true);
+  if (!schema) return [];
+  const now = Date.now();
+  const sortItems = function (items) { return items.sort(function (a, b) { return String(b.createdAt).localeCompare(String(a.createdAt)); }); };
+  let entry = cacheGetJson_(namespace, 'synced');
+  if (!entry || !Array.isArray(entry.items) || now - entry.fullAt > BO_LIST_FULL_TTL_ * 1000) {
+    const pages = notionQueryAll_(schema.sourceId, { sorts: [{ timestamp: 'created_time', direction: 'descending' }] });
+    entry = { fullAt: now, checkedAt: now, mark: notionMaxEdited_(pages), items: pages.map(function (page) { return view(notionRow_(page, schema), page); }) };
+    return cachePutJson_(namespace, 'synced', entry, BO_LIST_FULL_TTL_).items;
+  }
+  if (!entry.mark || now - entry.checkedAt < BO_LIST_SYNC_GAP_MS_) return entry.items;
+  const since = new Date(Date.parse(entry.mark) - 60000).toISOString();
+  let pages = [];
+  try {
+    pages = notionQueryAll_(schema.sourceId, { filter: { timestamp: 'last_edited_time', last_edited_time: { on_or_after: since } }, sorts: [{ timestamp: 'last_edited_time', direction: 'descending' }] }, 200);
+  } catch (error) {
+    logError_('syncedList_ ' + kind, error);
+    return entry.items;
+  }
+  if (pages.length >= 200) { bumpCache_(namespace); return syncedList_(namespace, kind, view); }
+  if (pages.length) {
+    const byId = {};
+    pages.forEach(function (page) { byId[String(page.id).replace(/-/g, '')] = view(notionRow_(page, schema), page); });
+    const kept = entry.items.filter(function (item) { return !byId[String(item.pageId).replace(/-/g, '')]; });
+    entry.items = sortItems(kept.concat(Object.keys(byId).map(function (key) { return byId[key]; })));
+    entry.mark = notionMaxEdited_(pages, entry.mark);
+  }
+  entry.checkedAt = now;
+  const remaining = Math.max(30, BO_LIST_FULL_TTL_ - Math.floor((now - entry.fullAt) / 1000));
+  return cachePutJson_(namespace, 'synced', entry, remaining).items;
+}

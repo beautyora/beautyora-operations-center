@@ -20,7 +20,7 @@ function inventoryView_(row, maps) {
   const brand = (row.brand || []).map(function (id) { return maps.brands[String(id).replace(/-/g, '')]; }).find(Boolean) ||
     (product.brandIds || []).map(function (id) { return maps.brands[String(id).replace(/-/g, '')]; }).find(Boolean) || {};
   return {
-    pageId: row.pageId, url: row.url, edited: row.edited, name: row.name || '',
+    pageId: row.pageId, url: row.url, edited: row.edited, createdAt: row.createdAt, name: row.name || '',
     productPageId: (row.product || [])[0] || '', productName: product.name || '', productId: product.productId || '', barcode: product.barcode || '',
     storePageId: (row.store || [])[0] || '', storeName: store.name || '',
     brandCode: brand.code || '', brandName: brand.name || '',
@@ -38,11 +38,10 @@ function inventoryMaps_() {
 }
 
 function listInventory_() {
-  return cached_('inventory', 'all', BO.LIST_TTL, function () {
-    const schema = notionSchema_('inventory', true);
-    if (!schema) return [];
-    const maps = inventoryMaps_();
-    return notionQueryAll_(schema.sourceId, {}).map(function (page) { return inventoryView_(notionRow_(page, schema), maps); });
+  let maps = null;
+  return syncedList_('inventory', 'inventory', function (row) {
+    if (!maps) maps = inventoryMaps_();
+    return inventoryView_(row, maps);
   });
 }
 

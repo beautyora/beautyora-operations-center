@@ -19,12 +19,7 @@ function billingOpen_(item) {
 
 /** 전체 내역(5분 캐시). DB가 없으면 빈 목록. */
 function listBilling_() {
-  return cached_('billing', 'all', BO.LIST_TTL, function () {
-    const schema = notionSchema_('billing', true);
-    if (!schema) return [];
-    return notionQueryAll_(schema.sourceId, { sorts: [{ timestamp: 'created_time', direction: 'descending' }] })
-      .map(function (page) { return billingView_(notionRow_(page, schema)); });
-  });
+  return syncedList_('billing', 'billing', billingView_);
 }
 
 /** 입금 대기 또는 계산서 발행 대기가 남은 내역(오래된 기준일 먼저). */
