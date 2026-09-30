@@ -184,7 +184,14 @@ function apiIntakeDecide_(payload) {
     if (current !== BO.INTAKE_STAGE) throw userError_('이미 다른 단계로 처리된 신청입니다. (현재: ' + (current || '없음') + ')');
     const values = { stage: stage };
     if (payload.next && schema.ids.next) values.next = text_(payload.next, 2000);
-    notionPatch_(page.id, notionProps_(schema, values));
+    // 입점 체크리스트 시작: 비어 있는 항목만 '미발송·입금 대기·발행 대기'로 채운다.
+    if (payload.startOnboard) {
+      Object.keys(BO.ONBOARD).forEach(function (item) {
+        const spec = BO.ONBOARD[item];
+        if (schema.ids[spec.key] && !notionValue_(notionPropertyById_(page, schema.ids[spec.key]))) values[spec.key] = spec.start;
+      });
+    }
+    notionPatch_(page.id, notionProps_(schema, values, { allowNewOption: true }));
     notionComment_(page.id, '입점 신청 검토 완료 → ' + stage + (payload.note ? ' — ' + text_(payload.note, 1000) : '') + ' · ' + activeEmail_());
     bumpCache_('brand');
     return { stage: stage };

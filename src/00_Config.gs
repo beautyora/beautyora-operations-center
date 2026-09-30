@@ -39,6 +39,26 @@ const BO = Object.freeze({
   /** 폼으로 새로 등록되는 브랜드의 '재영업 분류' 기본값. */
   NEW_BRAND_RECLASS: '신규 · 상품 미등록',
   CHANGE_MARKER: '🔁 변경 요청',
+  /**
+   * 입점 체크리스트(브랜드 속성). todo: 아직 처리 안 된 값, start: 체크리스트를 시작할 때 넣는 값.
+   * 비어 있으면 '미확인'으로 보고 미완료로 세지 않는다(기존 브랜드를 한꺼번에 미완료로 만들지 않기 위해).
+   */
+  ONBOARD: Object.freeze({
+    contract: Object.freeze({ key: 'contractSent', name: '계약서 발송', short: '계약서', todo: '미발송', start: '미발송',
+      options: [['미발송', 'gray'], ['발송 완료', 'blue'], ['서명 완료', 'green'], ['해당 없음', 'default']] }),
+    pay: Object.freeze({ key: 'onboardPay', name: '입점 입금', short: '입금', todo: '입금 대기', start: '입금 대기', done: '입금 완료',
+      options: [['입금 대기', 'yellow'], ['입금 완료', 'green'], ['해당 없음', 'default']] }),
+    invoice: Object.freeze({ key: 'onboardInvoice', name: '입점 계산서', short: '계산서', todo: '발행 대기', start: '발행 대기', done: '발행 완료',
+      options: [['발행 대기', 'yellow'], ['발행 완료', 'green'], ['해당 없음', 'default']] })
+  }),
+  /** 계산서 · 입금 내역(브랜드와 반복해서 주고받는 돈). */
+  BILLING: Object.freeze({
+    KINDS: Object.freeze(['입점비', '상품 매입', '위탁 정산', '샘플·기타']),
+    ONBOARD_KIND: '입점비',
+    DIRECTIONS: Object.freeze(['받을 돈', '줄 돈']),
+    PAY: Object.freeze({ WAIT: '입금 대기', DONE: '입금 완료', NONE: '해당 없음' }),
+    INVOICE: Object.freeze({ WAIT: '발행 대기', DONE: '발행 완료', NONE: '해당 없음' })
+  }),
   DOC_CATEGORIES: Object.freeze({ '사업자등록증': 'docBusiness', '통장사본': 'docBank', '브랜드 소개서': 'docIntro', '계약서': 'docContract', '기타 브랜드 자료': 'docOther' }),
   ASSET_CATEGORIES: Object.freeze(['대표 이미지', '추가 이미지', '상세페이지', '기타']),
   MOVEMENT_KINDS: Object.freeze(['최초 입고', '추가 입고', '반품', '회수', '재고 조정']),
@@ -90,7 +110,10 @@ const BO_SCHEMAS = Object.freeze({
       docContract: ['url', ['계약서 Drive URL']],
       docOther: ['url', ['기타 브랜드 자료 Drive URL']],
       docBank: ['url', ['통장사본 Drive URL']],
-      formResponseId: ['rich_text', ['폼 응답 ID']]
+      formResponseId: ['rich_text', ['폼 응답 ID']],
+      contractSent: ['select', ['계약서 발송']],
+      onboardPay: ['select', ['입점 입금']],
+      onboardInvoice: ['select', ['입점 계산서']]
     }
   },
   product: {
@@ -149,6 +172,23 @@ const BO_SCHEMAS = Object.freeze({
       due: ['date', ['후속 확인일']],
       done: ['checkbox', ['후속 완료']],
       staff: ['people', ['상담 담당자']]
+    }
+  },
+  billing: {
+    label: '계산서 · 입금 내역', prop: 'BO_NOTION_BILLING_DATA_SOURCE_ID',
+    fields: {
+      name: ['title', ['내역명'], true],
+      brand: ['relation', ['브랜드'], true],
+      kind: ['select', ['구분']],
+      direction: ['select', ['방향']],
+      amount: ['number', ['금액']],
+      date: ['date', ['기준일']],
+      payStatus: ['select', ['입금 상태'], true],
+      paidAt: ['date', ['입금일']],
+      invoiceStatus: ['select', ['계산서 상태'], true],
+      invoicedAt: ['date', ['계산서 발행일']],
+      memo: ['rich_text', ['메모']],
+      registrar: ['rich_text', ['등록자']]
     }
   },
   inventory: {
@@ -231,10 +271,18 @@ const BO_SCHEMA_ADDITIONS = Object.freeze({
   brand: [
     { key: 'formResponseId', name: '폼 응답 ID', definition: { rich_text: {} } },
     { key: 'docBank', name: '통장사본 Drive URL', definition: { url: {} } }
-  ]
+  ].concat(Object.keys(BO.ONBOARD).map(function (item) {
+    const spec = BO.ONBOARD[item];
+    return { key: spec.key, name: spec.name, definition: { select: { options: spec.options.map(function (o) { return { name: o[0], color: o[1] }; }) } } };
+  }))
 });
 
 /** 운영센터가 쓰는 상품 검수 상태 선택지. 없으면 초기 설정에서 추가한다. */
 const BO_REQUIRED_OPTIONS = Object.freeze({
-  product: { review: [['검수 대기', 'yellow'], ['보완 필요', 'orange'], ['반려', 'red'], ['승인 완료', 'green']] }
+  product: { review: [['검수 대기', 'yellow'], ['보완 필요', 'orange'], ['반려', 'red'], ['승인 완료', 'green']] },
+  brand: (function () {
+    const out = {};
+    Object.keys(BO.ONBOARD).forEach(function (item) { out[BO.ONBOARD[item].key] = BO.ONBOARD[item].options; });
+    return out;
+  })()
 });

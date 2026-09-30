@@ -19,11 +19,14 @@ function apiDashboard_() {
   const followups = unwrap('영업 기록', safeSection_('followups', dueFollowups_, []), []);
   const inventory = unwrap('재고', safeSection_('inventory', function () { return listInventory_().filter(function (r) { return r.check; }); }, []), []);
   const links = unwrap('링크', safeSection_('links', listLinks_, []), []);
+  const billing = unwrap('계산서·입금', safeSection_('billing', openBillingItems_, []), []);
   const soon = addDays_(today_(), 7);
   const recentFrom = addDays_(today_(), -14);
   const expiring = links.filter(function (l) { return l.active && l.expiry && l.expiry <= soon; });
   const brandByKey = {};
   brands.forEach(function (b) { brandByKey[String(b.pageId).replace(/-/g, '')] = b; });
+
+  const onboardTodo = brands.filter(function (b) { return b.stage !== BO.INTAKE_STAGE && onboardTodo_(b).length; });
 
   const recent = products.slice().sort(function (a, b) { return String(b.edited).localeCompare(String(a.edited)); }).slice(0, 8)
     .map(function (p) { return { kind: 'product', title: p.name, subtitle: p.brandName, status: p.change === BO.CHANGE.PENDING ? '변경 요청' : p.review, at: p.edited, pageId: p.pageId }; })
@@ -41,7 +44,9 @@ function apiDashboard_() {
       documents: docs,
       followups: followups.length,
       stockCheck: inventory.length,
-      expiringLinks: expiring.length
+      expiringLinks: expiring.length,
+      onboardTodo: onboardTodo.length,
+      billingOpen: billing.length
     },
     totals: { brands: brands.length, products: products.length, approved: products.filter(function (p) { return p.review === BO.REVIEW.APPROVED; }).length },
     followups: followups.slice(0, 6),
@@ -50,6 +55,14 @@ function apiDashboard_() {
       return { expiry: l.expiry, brandCode: brand.code || '', brandName: brand.name || '' };
     }),
     stockCheck: inventory.slice(0, 6),
+    onboardTodo: onboardTodo.slice(0, 6).map(function (b) { return { code: b.code, name: b.name, todo: onboardTodo_(b) }; }),
+    billingOpen: billing.slice(0, 6).map(function (item) {
+      const brand = (item.brandIds || []).map(function (id) { return brandByKey[String(id).replace(/-/g, '')]; }).find(Boolean) || {};
+      return {
+        brandCode: brand.code || '', brandName: brand.name || '', kind: item.kind, direction: item.direction, amount: item.amount, date: item.date,
+        payWait: item.payStatus === BO.BILLING.PAY.WAIT, invoiceWait: item.invoiceStatus === BO.BILLING.INVOICE.WAIT
+      };
+    }),
     recent: recent,
     warnings: warnings,
     generatedAt: now_()

@@ -145,6 +145,8 @@ async function pageHome(view) {
       tile('오늘까지 후속 연락', c.followups, '영업 기록의 후속 확인일', '#/home') +
       tile('재고 확인 필요', c.stockCheck, 'Notion "확인 필요" 체크', '#/inventory?check=1') +
       tile('브랜드 보완 대기', c.waitingOnBrand, '브랜드가 고칠 차례', '#/products?review=보완 필요') +
+      tile('입점 체크 미완료', c.onboardTodo, '계약서·입금·계산서', '#/brands?onboard=todo') +
+      tile('입금·계산서 대기', c.billingOpen, '계산서 · 입금 내역', '#/brands?billing=open') +
     '</section>' +
     '<div class="two-col">' +
       '<section class="card"><div class="card-head"><h2>후속 연락</h2><span class="count quiet">' + d.followups.length + '</span></div><div class="list">' +
@@ -154,6 +156,14 @@ async function pageHome(view) {
         (d.recent.length ? d.recent.map((r) => { const href = r.kind === 'brand' ? '/brands/' + encodeURIComponent(r.code) : '/products/' + encodeURIComponent(r.pageId); return '<a class="list-item" href="#' + href + '" data-link="' + href + '"><div class="grow"><div class="cell-title ellipsis">' + esc(r.title) + '</div><div class="cell-sub">' + esc(r.kind === 'brand' ? '브랜드' : '상품') + (r.subtitle ? ' · ' + esc(r.subtitle) : '') + '</div></div>' + pill(r.status) + '<span class="small muted nowrap">' + esc(Fmt.ago(r.at)) + '</span></a>'; }).join('') : UI.empty('최근 변경이 없습니다')) +
       '</div></section>' +
     '</div>' +
+    (d.billingOpen.length || d.onboardTodo.length ? '<div class="two-col">' +
+      '<section class="card"><div class="card-head"><h2>입금·계산서 대기</h2><span class="count quiet">' + c.billingOpen + '</span></div><div class="list">' +
+        (d.billingOpen.length ? d.billingOpen.map((b) => '<a class="list-item" href="#/brands/' + encodeURIComponent(b.brandCode) + '?tab=billing" data-link="/brands/' + encodeURIComponent(b.brandCode) + '?tab=billing"><div class="grow"><div class="cell-title">' + esc(b.brandName || '브랜드 미연결') + '</div><div class="cell-sub">' + esc([b.date, b.kind, b.direction].filter(Boolean).join(' · ')) + ' · ' + Fmt.won(b.amount) + '</div></div>' + (b.payWait ? pill('입금 대기') : '') + (b.invoiceWait ? pill('발행 대기') : '') + '</a>').join('') : UI.empty('대기 중인 내역이 없습니다')) +
+      '</div></section>' +
+      '<section class="card"><div class="card-head"><h2>입점 체크 미완료</h2><span class="count quiet">' + c.onboardTodo + '</span></div><div class="list">' +
+        (d.onboardTodo.length ? d.onboardTodo.map((b) => '<a class="list-item" href="#/brands/' + encodeURIComponent(b.code) + '" data-link="/brands/' + encodeURIComponent(b.code) + '"><div class="grow cell-title">' + esc(b.name) + '</div>' + b.todo.map((t) => pill(t + ' 대기', 'warn')).join('') + '</a>').join('') : UI.empty('모두 처리했습니다')) +
+      '</div></section>' +
+    '</div>' : '') +
     (d.expiringLinks.length ? '<section class="card"><div class="card-head"><h2>7일 안에 만료되는 상품등록 링크</h2></div><div class="list">' + d.expiringLinks.map((l) => '<a class="list-item" href="#/brands/' + encodeURIComponent(l.brandCode) + '" data-link="/brands/' + encodeURIComponent(l.brandCode) + '?tab=links"><div class="grow cell-title">' + esc(l.brandName) + '</div><span class="small muted">만료 ' + esc(l.expiry) + '</span></a>').join('') + '</div></section>' : '') +
     '<p class="small muted">브랜드 ' + Fmt.num(d.totals.brands) + '곳 · 상품 ' + Fmt.num(d.totals.products) + '개(승인 ' + Fmt.num(d.totals.approved) + ') · ' + esc(Fmt.datetime(d.generatedAt)) + ' 기준</p>';
   const ring = $('.ring .bar', view);
@@ -207,6 +217,7 @@ function openIntake(code) {
         UI.field('다음 진행 단계', '<select class="select" id="intakeStage">' + UI.options(Admin.state.intake.stages, '', '단계를 선택해 주세요') + '</select>', { for: 'intakeStage', required: true }) +
         UI.field('다음 행동', '<input class="input" id="intakeNext" placeholder="예: 9/30 통화, 샘플 요청">', { for: 'intakeNext', help: 'Notion 브랜드의 "다음 행동"에 저장됩니다.' }) +
         UI.field('메모', '<textarea class="textarea" id="intakeNote" rows="3" placeholder="검토 의견 (Notion 댓글로 남습니다)"></textarea>', { for: 'intakeNote' }) +
+        '<label class="check"><input type="checkbox" id="intakeOnboard" checked> 입점 체크리스트 시작 (계약서 미발송 · 입금 대기 · 계산서 발행 대기로 표시)</label>' +
         '<div class="row between wrap"><button class="btn" id="intakeLink">' + icon('link') + '상품등록 링크 발급</button><button class="btn btn-primary" id="intakeSave">' + icon('check') + '검토 완료</button></div>' +
       '</section>' +
     '</div>');
@@ -214,7 +225,7 @@ function openIntake(code) {
     const stage = $('#intakeStage', panel).value;
     if (!stage) { Toast.error('다음 진행 단계를 선택해 주세요.'); return; }
     try {
-      await Api.call('intake.decide', { code: b.code, stage, next: $('#intakeNext', panel).value, note: $('#intakeNote', panel).value });
+      await Api.call('intake.decide', { code: b.code, stage, next: $('#intakeNext', panel).value, note: $('#intakeNote', panel).value, startOnboard: $('#intakeOnboard', panel).checked });
       Api.invalidate();
       Toast.ok(b.name + ' → ' + stage);
       Drawer.close(true);
@@ -226,6 +237,13 @@ function openIntake(code) {
 }
 
 /* ---------- 브랜드 ---------- */
+function onboardCell(b) {
+  const o = b.onboard || {};
+  const head = !o.contract && !o.pay && !o.invoice ? '<span class="muted small">미확인</span>'
+    : b.onboardTodo.length ? b.onboardTodo.map((t) => pill(t + ' 대기', 'warn')).join(' ') : pill('입점 체크 완료', 'ok');
+  return head + (b.openBilling ? ' ' + pill('정산 대기 ' + b.openBilling, 'info') : '');
+}
+
 async function pageBrands(view) {
   const data = await Api.get('brands.list', {}, 60000);
   Admin.state.brands = data;
@@ -235,24 +253,28 @@ async function pageBrands(view) {
       '<input class="input search" id="bq" type="search" placeholder="브랜드·회사·브랜드 ID·담당자 검색" value="' + esc(q.q || '') + '" aria-label="검색">' +
       '<select class="select" id="bstage" aria-label="진행 단계">' + UI.options(data.options.stage, q.stage || '', '모든 진행 단계') + '</select>' +
       '<select class="select" id="bpriority" aria-label="우선순위">' + UI.options(data.options.priority, q.priority || '', '모든 우선순위') + '</select>' +
+      '<select class="select" id="bonboard" aria-label="입점 체크">' + UI.options([{ value: 'todo', label: '입점 체크 미완료' }, { value: 'unknown', label: '입점 체크 미확인' }], q.onboard || '', '입점 체크 전체') + '</select>' +
+      '<label class="check"><input type="checkbox" id="bbilling"' + (q.billing ? ' checked' : '') + '> 입금·계산서 대기</label>' +
       '<label class="check"><input type="checkbox" id="bpending"' + (q.pending ? ' checked' : '') + '> 검수 대기 있음</label>' +
       '<span class="grow"></span><span class="small muted" id="bcount"></span>' +
     '</div><section class="card table-wrap" id="btable"></section>';
   const paint = () => {
     const text = $('#bq').value.trim().toLowerCase();
-    const stage = $('#bstage').value, priority = $('#bpriority').value, pending = $('#bpending').checked;
-    const list = data.brands.filter((b) => (!text || [b.name, b.company, b.code, b.contactName, b.email].join(' ').toLowerCase().includes(text)) && (!stage || b.stage === stage) && (!priority || b.priority === priority) && (!pending || b.pendingCount > 0));
+    const stage = $('#bstage').value, priority = $('#bpriority').value, pending = $('#bpending').checked, onboard = $('#bonboard').value, billing = $('#bbilling').checked;
+    const unknown = (b) => !b.onboard.contract && !b.onboard.pay && !b.onboard.invoice;
+    const list = data.brands.filter((b) => (!text || [b.name, b.company, b.code, b.contactName, b.email].join(' ').toLowerCase().includes(text)) && (!stage || b.stage === stage) && (!priority || b.priority === priority) && (!pending || b.pendingCount > 0) &&
+      (!onboard || (onboard === 'todo' ? b.onboardTodo.length > 0 : unknown(b))) && (!billing || b.openBilling > 0));
     $('#bcount').textContent = list.length + ' / ' + data.brands.length + '곳';
-    $('#btable').innerHTML = list.length ? '<table class="table"><thead><tr><th>브랜드</th><th>진행 단계</th><th class="hide-sm">우선순위</th><th class="right">상품</th><th class="hide-sm">상품등록 링크</th><th class="hide-sm">최근 수정</th></tr></thead><tbody>' +
-      list.slice(0, 400).map((b) => '<tr class="clickable" data-code="' + esc(b.code) + '"><td><div class="cell-title">' + esc(b.name) + (b.issue ? ' ' + pill(b.issue, 'bad') : '') + '</div><div class="cell-sub">' + esc(b.code) + (b.company ? ' · ' + esc(b.company) : '') + '</div></td><td>' + pill(b.stage) + '</td><td class="hide-sm">' + esc(b.priority || '—') + '</td><td class="right num">' + b.productCount + (b.pendingCount ? ' ' + pill('검수 ' + b.pendingCount, 'warn') : '') + '</td><td class="hide-sm">' + (b.link ? pill('사용 중', 'ok') + ' <span class="small muted">~' + esc(b.link.expiry) + '</span>' : '<span class="muted small">없음</span>') + '</td><td class="hide-sm small muted nowrap">' + esc(Fmt.ago(b.edited)) + '</td></tr>').join('') +
+    $('#btable').innerHTML = list.length ? '<table class="table"><thead><tr><th>브랜드</th><th>진행 단계</th><th class="hide-sm">우선순위</th><th class="right">상품</th><th class="hide-sm">입점 체크 · 정산</th><th class="hide-sm">상품등록 링크</th><th class="hide-sm">최근 수정</th></tr></thead><tbody>' +
+      list.slice(0, 400).map((b) => '<tr class="clickable" data-code="' + esc(b.code) + '"><td><div class="cell-title">' + esc(b.name) + (b.issue ? ' ' + pill(b.issue, 'bad') : '') + '</div><div class="cell-sub">' + esc(b.code) + (b.company ? ' · ' + esc(b.company) : '') + '</div></td><td>' + pill(b.stage) + '</td><td class="hide-sm">' + esc(b.priority || '—') + '</td><td class="right num">' + b.productCount + (b.pendingCount ? ' ' + pill('검수 ' + b.pendingCount, 'warn') : '') + '</td><td class="hide-sm">' + onboardCell(b) + '</td><td class="hide-sm">' + (b.link ? pill('사용 중', 'ok') + ' <span class="small muted">~' + esc(b.link.expiry) + '</span>' : '<span class="muted small">없음</span>') + '</td><td class="hide-sm small muted nowrap">' + esc(Fmt.ago(b.edited)) + '</td></tr>').join('') +
       '</tbody></table>' : UI.empty('조건에 맞는 브랜드가 없습니다');
   };
-  ['bq', 'bstage', 'bpriority', 'bpending'].forEach((id) => $('#' + id).addEventListener(id === 'bq' ? 'input' : 'change', paint));
+  ['bq', 'bstage', 'bpriority', 'bpending', 'bonboard', 'bbilling'].forEach((id) => $('#' + id).addEventListener(id === 'bq' ? 'input' : 'change', paint));
   $('#btable').addEventListener('click', (e) => { const row = e.target.closest('tr[data-code]'); if (row) Nav.go('/brands/' + encodeURIComponent(row.dataset.code)); });
   paint();
 }
 
-const BRAND_TABS = [['overview', '개요'], ['products', '상품'], ['activity', '영업 기록'], ['terms', '공급조건'], ['stock', '재고'], ['docs', '서류'], ['links', '상품등록 링크']];
+const BRAND_TABS = [['overview', '개요'], ['products', '상품'], ['activity', '영업 기록'], ['billing', '계산서·입금'], ['terms', '공급조건'], ['stock', '재고'], ['docs', '서류'], ['links', '상품등록 링크']];
 
 async function openBrand(code) {
   const summary = (Admin.state.brands && Admin.state.brands.brands.find((b) => b.code === code)) || { code, name: code };
@@ -290,7 +312,7 @@ async function brandTab(code, tab) {
       const editable = d.properties.filter((p) => p.editable);
       const readonly = d.properties.filter((p) => !p.editable && p.display);
       // 자주 쓰는 항목을 먼저, 나머지는 접어 둔다.
-      const MAIN = ['브랜드명', '진행 단계', '우선순위', '재영업 단계', '재영업 분류', '협력사/회사명', '브랜드 담당자', '연락처', '이메일', '다음 행동', '미팅일', '핵심 메모', '카테고리', '희망 거래 방식'];
+      const MAIN = ['브랜드명', '진행 단계', '우선순위', '계약서 발송', '입점 입금', '입점 계산서', '재영업 단계', '재영업 분류', '협력사/회사명', '브랜드 담당자', '연락처', '이메일', '다음 행동', '미팅일', '핵심 메모', '카테고리', '희망 거래 방식'];
       const rank = (p) => { const i = MAIN.indexOf(p.name); return i < 0 ? 999 : i; };
       const main = editable.filter((p) => rank(p) < 999).sort((x, y) => rank(x) - rank(y));
       const rest = editable.filter((p) => rank(p) === 999);
@@ -302,6 +324,7 @@ async function brandTab(code, tab) {
           '<dt>다음 행동</dt><dd>' + esc(b.next || '—') + '</dd>' +
           '<dt>핵심 메모</dt><dd class="pre">' + esc(b.memo || '—') + '</dd>' +
           '<dt>소통 담당</dt><dd>' + esc(b.owners.join(', ') || '—') + '</dd>' +
+          '<dt>입점 체크</dt><dd class="row wrap">' + [['계약서', b.onboard.contract], ['입금', b.onboard.pay], ['계산서', b.onboard.invoice]].map((x) => '<span class="small muted">' + x[0] + '</span>' + (x[1] ? pill(x[1]) : '<span class="muted small">미확인</span>')).join(' ') + ' <button type="button" class="btn btn-sm btn-ghost" id="goBilling">계산서·입금 내역 보기</button></dd>' +
         '</dl></section>' +
         '<section class="card"><div class="card-head"><h3>Notion 브랜드 정보</h3><span class="small muted">저장하면 Notion에 바로 반영됩니다</span></div><div class="card-body"><form id="brandForm"><div class="form-grid">' +
           main.map(fieldHtml).join('') + '</div>' +
@@ -309,6 +332,7 @@ async function brandTab(code, tab) {
         '</form></div><div class="sticky-actions"><button class="btn btn-primary" id="brandSave">' + icon('check') + '저장</button></div></section>' +
         (readonly.length ? '<section class="card card-pad"><h3 class="section-title">읽기 전용 속성</h3><dl class="kv">' + readonly.map((p) => '<dt>' + esc(p.name) + '</dt><dd class="pre">' + (/^https?:/.test(p.display) ? '<a href="' + esc(p.display) + '" target="_blank" rel="noopener">' + esc(p.display) + '</a>' : esc(p.display)) + '</dd>').join('') + '</dl></section>' : '') +
         '<section class="card"><div class="card-head"><h3>Notion 본문</h3><button class="btn btn-sm" id="brandBody">본문 불러오기</button></div><div class="card-body" id="brandBodyBox"><p class="muted small">통화 기록 템플릿 등 페이지 본문을 확인할 수 있습니다.</p></div></section>')) return;
+      $('#goBilling').addEventListener('click', () => { const t = $('.drawer-tabs [data-tab="billing"]'); if (t) t.click(); });
       let lastEditedAt = d.lastEditedAt;
       $('#brandSave').addEventListener('click', (e) => busy(e.currentTarget, async () => {
         const changes = collectPropertyChanges($('#brandForm'), d.properties);
@@ -330,6 +354,8 @@ async function brandTab(code, tab) {
       guard(list.length ? '<section class="card"><div class="list">' + list.map((p) => '<a class="list-item" href="#/products/' + encodeURIComponent(p.pageId) + '" data-link="/products/' + encodeURIComponent(p.pageId) + '">' + UI.thumb(p.preview || UI.driveThumb(p.mainFileId)) + '<div class="grow"><div class="cell-title ellipsis">' + esc(p.name) + '</div><div class="cell-sub">' + esc([p.option, p.barcode].filter(Boolean).join(' · ') || '—') + '</div></div><span class="num small hide-sm">' + Fmt.won(p.retail) + '</span>' + pill(p.review || '상태 없음') + (p.change === '검수 대기' ? pill('변경 요청', 'warn') : '') + '</a>').join('') + '</div></section>' : '<section class="card">' + UI.empty('등록된 상품이 없습니다', '상품등록 링크를 보내면 브랜드가 직접 등록할 수 있습니다.') + '</section>');
     } else if (tab === 'activity') {
       await renderActivities(body, code, guard);
+    } else if (tab === 'billing') {
+      await renderBilling(body, code, guard);
     } else if (tab === 'terms') {
       const r = await Api.get('brands.terms', { code }, 60000);
       guard(!r.connected ? UI.empty('공급조건 DB가 연결되지 않았습니다', '설정 → 초기 설정을 실행해 주세요.') : r.terms.length ? '<section class="card table-wrap"><table class="table"><thead><tr><th>조건</th><th>거래</th><th class="right">매입가</th><th class="right">위탁 공급가</th><th class="right">소비자가</th><th class="right">MOQ</th><th>상태</th></tr></thead><tbody>' + r.terms.map((t) => '<tr><td><div class="cell-title"><a href="' + esc(safeUrl(t.url)) + '" target="_blank" rel="noopener">' + esc(t.name) + '</a>' + (t.adopted ? ' ' + pill('현재 채택', 'ok') : '') + '</div><div class="cell-sub">' + esc(t.products.join(', ')) + (t.basis ? ' · 기준일 ' + esc(t.basis) : '') + '</div></td><td>' + esc(Fmt.list(t.trade) || '—') + '</td><td class="right num">' + Fmt.won(t.purchase) + '</td><td class="right num">' + Fmt.won(t.consign) + '</td><td class="right num">' + Fmt.won(t.retail) + '</td><td class="right num">' + Fmt.num(t.moq) + '</td><td>' + pill(t.state) + '</td></tr>').join('') + '</tbody></table></section>' : UI.empty('등록된 공급조건이 없습니다', 'Notion "벤더 동일 상품 조건"에서 이 브랜드를 벤더로 연결하면 표시됩니다.'));
@@ -383,6 +409,58 @@ function issueLinkDialog(brand) {
       if ($('#bBody') && $('#bBody').dataset.tab === 'links') brandTab(brand.code, 'links');
     } catch (err) { Toast.error(err); }
   }));
+}
+
+async function renderBilling(body, code, guard) {
+  const r = await Api.get('brands.billing', { code }, 20000);
+  if (!r.connected) { guard(UI.empty('계산서 · 입금 내역 DB가 연결되지 않았습니다', '설정 → 초기 설정 실행을 누르면 Notion에 DB를 만들어 연결합니다.')); return; }
+  const o = r.options, sm = r.summary;
+  const statusCell = (item, field, wait, done) => {
+    const value = item[field + 'Status'], at = field === 'pay' ? item.paidAt : item.invoicedAt;
+    return pill(value || '—') + (at ? '<div class="cell-sub">' + esc(at) + '</div>' : '') +
+      (value === wait ? '<button class="btn btn-sm" data-bill="' + esc(item.pageId) + '" data-field="' + field + '" data-value="' + esc(done) + '">' + icon('check') + '완료</button>'
+        : value === done ? '<button class="btn btn-sm btn-ghost" data-bill="' + esc(item.pageId) + '" data-field="' + field + '" data-value="' + esc(wait) + '">되돌리기</button>' : '');
+  };
+  if (!guard(
+    '<section class="card card-pad"><dl class="kv">' +
+      '<dt>입금 대기</dt><dd>' + Fmt.num(sm.payWait) + '건 · ' + Fmt.won(sm.payWaitAmount) + '</dd>' +
+      '<dt>계산서 발행 대기</dt><dd>' + Fmt.num(sm.invoiceWait) + '건 · ' + Fmt.won(sm.invoiceWaitAmount) + '</dd>' +
+    '</dl><p class="small muted" style="margin-top:8px">구분이 "' + esc('입점비') + '"인 내역은 브랜드의 입점 입금 · 입점 계산서 상태에도 함께 반영됩니다.</p></section>' +
+    (r.items.length ? '<section class="card"><div class="table-wrap"><table class="table"><thead><tr><th>기준일</th><th>구분</th><th class="right">금액</th><th>입금</th><th>계산서</th><th class="hide-sm">메모</th></tr></thead><tbody>' +
+      r.items.map((i) => '<tr><td class="nowrap"><a href="' + esc(safeUrl(i.url)) + '" target="_blank" rel="noopener">' + esc(i.date || Fmt.date(i.createdAt)) + '</a></td><td>' + esc(i.kind || '—') + (i.direction ? '<div class="cell-sub">' + esc(i.direction) + '</div>' : '') + '</td><td class="right num nowrap">' + Fmt.won(i.amount) + '</td>' +
+        '<td>' + statusCell(i, 'pay', '입금 대기', '입금 완료') + '</td><td>' + statusCell(i, 'invoice', '발행 대기', '발행 완료') + '</td><td class="hide-sm small">' + esc(i.memo || '') + '</td></tr>').join('') +
+      '</tbody></table></div></section>' : '<section class="card">' + UI.empty('아직 내역이 없습니다', '입점비, 상품 매입, 위탁 정산처럼 브랜드와 주고받는 돈을 한 줄씩 남겨 두세요.') + '</section>') +
+    '<section class="card"><div class="card-head"><h3>새 내역 추가</h3></div><div class="card-body"><form id="billForm" class="form-grid">' +
+      UI.field('구분', '<select class="select" id="bKind">' + UI.options(o.kind, o.kind[0]) + '</select>', { for: 'bKind', required: true }) +
+      UI.field('방향', '<select class="select" id="bDir">' + UI.options(o.direction, o.direction[0], '선택 안 함') + '</select>', { for: 'bDir', help: '받을 돈: 브랜드 → 뷰티오라 · 줄 돈: 뷰티오라 → 브랜드' }) +
+      UI.field('금액', '<input class="input" id="bAmount" inputmode="numeric" placeholder="예: 330000">', { for: 'bAmount' }) +
+      UI.field('기준일', '<input class="input" type="date" id="bDate" value="' + Fmt.today() + '">', { for: 'bDate', required: true }) +
+      UI.field('입금 상태', '<select class="select" id="bPay">' + UI.options(o.pay, o.pay[0]) + '</select>', { for: 'bPay' }) +
+      UI.field('계산서 상태', '<select class="select" id="bInvoice">' + UI.options(o.invoice, o.invoice[0]) + '</select>', { for: 'bInvoice' }) +
+      UI.field('메모', '<input class="input" id="bMemo" placeholder="예: 9월 위탁 판매분, 발주서 번호">', { for: 'bMemo', full: true }) +
+    '</form></div><div class="sticky-actions"><button class="btn btn-primary" id="bSave">' + icon('plus') + '내역 추가</button></div></section>')) return;
+  $('#bSave').addEventListener('click', (e) => busy(e.currentTarget, async () => {
+    try {
+      await Api.call('billing.add', { requestId: uid('BIL'), code, kind: $('#bKind').value, direction: $('#bDir').value, amount: $('#bAmount').value, date: $('#bDate').value, payStatus: $('#bPay').value, invoiceStatus: $('#bInvoice').value, memo: $('#bMemo').value });
+      Api.invalidate();
+      Toast.ok('Notion 계산서 · 입금 내역에 추가했습니다.');
+      brandTab(code, 'billing');
+      refreshCounts();
+    } catch (err) { Toast.error(err); }
+  }));
+  body.onclick = (e) => {
+    const b = e.target.closest('[data-bill]');
+    if (!b) return;
+    busy(b, async () => {
+      try {
+        await Api.call('billing.update', { pageId: b.dataset.bill, [b.dataset.field]: b.dataset.value });
+        Api.invalidate();
+        Toast.ok(b.dataset.value + '(으)로 바꿨습니다.');
+        brandTab(code, 'billing');
+        refreshCounts();
+      } catch (err) { Toast.error(err); }
+    });
+  };
 }
 
 async function renderActivities(body, code, guard) {

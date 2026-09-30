@@ -99,6 +99,15 @@ const shot = async (page, name) => { await page.waitForTimeout(900); return page
     await a.click('#aSave');
     await a.waitForSelector('.timeline-item');
     await shot(a, '05-admin-brand-activity');
+    await a.click('[data-tab="billing"]');
+    await a.waitForSelector('#bSave');
+    await a.selectOption('#bKind', '입점비');
+    await a.fill('#bAmount', '330000');
+    await a.click('#bSave');
+    await a.waitForSelector('button[data-bill][data-field="pay"]');
+    await a.click('button[data-bill][data-field="pay"]');
+    await a.waitForSelector('button[data-bill][data-field="pay"][data-value="입금 대기"]');
+    await shot(a, '05b-admin-brand-billing');
     await a.click('[data-tab="links"]');
     await a.waitForSelector('#linkIssue');
     await shot(a, '06-admin-brand-links');

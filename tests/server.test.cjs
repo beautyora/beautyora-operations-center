@@ -35,6 +35,11 @@ test('setup adds missing Notion properties, link DB, and triggers', () => {
   assert.ok(res.report.some((l) => l.includes('검수 메모')));
   assert.ok(res.report.some((l) => l.includes('상품등록 링크')));
   assert.ok(env.props.BO_NOTION_LINK_DATA_SOURCE_ID);
+  assert.ok(res.report.some((l) => l.includes('계산서 · 입금 내역')));
+  assert.ok(env.props.BO_NOTION_BILLING_DATA_SOURCE_ID, 'billing DB created');
+  ['계약서 발송', '입점 입금', '입점 계산서'].forEach((name) => assert.ok(res.report.some((l) => l.includes('"' + name + '"')), name));
+  const brandSource = env.notion.sources[env.props.BO_NOTION_BRAND_DATA_SOURCE_ID];
+  assert.deepEqual(brandSource.properties['계약서 발송'].select.options.map((o) => o.name), ['미발송', '발송 완료', '서명 완료', '해당 없음']);
   assert.ok(env.props.BO_NOTION_TERMS_DATA_SOURCE_ID, 'terms discovered via relation');
   assert.ok(env.props.BO_NOTION_MOVEMENT_DATA_SOURCE_ID, 'movement discovered');
   assert.ok(env.props.BO_NOTION_STORE_DATA_SOURCE_ID, 'store discovered');
@@ -200,8 +205,11 @@ test('intake: form response creates Notion brand once, duplicates become comment
   const list = ok(env.api('intake.list'));
   assert.equal(list.items.length, 3);
   assert.ok(!list.stages.includes('접수·검토'));
-  ok(env.api('intake.decide', { code: 'BO-0003', stage: '통화 예정', note: '다음 주 통화' }));
+  ok(env.api('intake.decide', { code: 'BO-0003', stage: '통화 예정', note: '다음 주 통화', startOnboard: true }));
   assert.equal(textOf(env.notion.pages[data.b3.id], '진행 단계'), '통화 예정');
+  assert.equal(textOf(env.notion.pages[data.b3.id], '계약서 발송'), '미발송', 'onboarding checklist started');
+  assert.equal(textOf(env.notion.pages[data.b3.id], '입점 입금'), '입금 대기');
+  assert.equal(textOf(env.notion.pages[data.b3.id], '입점 계산서'), '발행 대기');
   assert.equal(env.api('intake.decide', { code: 'BO-0003', stage: '확정' }).ok, false, 'already processed');
 });
 
@@ -276,6 +284,57 @@ test('activities: add, list, follow-up on dashboard, complete', () => {
   ok(env.api('activities.done', { pageId: list.activities[0].pageId }));
   env.clearCache();
   assert.equal(ok(env.api('dashboard')).counts.followups, 0);
+});
+
+test('onboarding checklist and billing: brand list, dashboard, 입점비 sync, recurring invoices', () => {
+  const { env, data } = setup();
+  ok(env.api('system.setup'));
+  const before = ok(env.api('brands.list')).brands.find((b) => b.code === 'BO-0001');
+  assert.deepEqual(before.onboardTodo, [], 'blank checklist is 미확인, not todo');
+  ok(env.api('brands.update', { code: 'BO-0001', changes: [{ id: env.notion.sources[data.ids.brandId].properties['계약서 발송'].id, value: '미발송' }] }));
+  env.clearCache();
+  let dash = ok(env.api('dashboard'));
+  assert.equal(dash.counts.onboardTodo, 1);
+  assert.deepEqual(dash.onboardTodo[0].todo, ['계약서']);
+
+  // 입점비: 브랜드의 입점 입금·입점 계산서에도 반영된다.
+  const fee = ok(env.api('billing.add', { requestId: 'BIL-00000001', code: 'BO-0001', kind: '입점비', direction: '받을 돈', amount: '330,000', date: '2026-09-20' }));
+  assert.equal(textOf(env.notion.pages[data.b1.id], '입점 입금'), '입금 대기');
+  assert.equal(textOf(env.notion.pages[data.b1.id], '입점 계산서'), '발행 대기');
+  // 반복 거래: 매입 계산서.
+  ok(env.api('billing.add', { requestId: 'BIL-00000002', code: 'BO-0001', kind: '상품 매입', direction: '줄 돈', amount: 1200000, date: '2026-09-25', payStatus: '입금 완료' }));
+  const dup = ok(env.api('billing.add', { requestId: 'BIL-00000002', code: 'BO-0001', kind: '상품 매입', amount: 1 }));
+  assert.equal(dup.duplicate, true, 'same request id does not create twice');
+  assert.equal(env.api('billing.add', { requestId: 'BIL-00000003', code: 'BO-0001', kind: '모름' }).ok, false, 'unknown kind rejected');
+
+  let list = ok(env.api('brands.billing', { code: 'BO-0001' }));
+  assert.equal(list.items.length, 2);
+  assert.equal(list.summary.payWait, 1);
+  assert.equal(list.summary.payWaitAmount, 330000);
+  assert.equal(list.summary.invoiceWait, 2);
+  const purchase = list.items.find((i) => i.kind === '상품 매입');
+  assert.equal(purchase.paidAt, '2026-09-25');
+  assert.equal(purchase.registrar, 'admin@beautyora.test');
+  env.clearCache();
+  dash = ok(env.api('dashboard'));
+  assert.equal(dash.counts.billingOpen, 2);
+  assert.equal(dash.counts.onboardTodo, 1, 'still 계약서·입금·계산서 pending on BO-0001');
+  assert.deepEqual(dash.onboardTodo[0].todo, ['계약서', '입금', '계산서']);
+  assert.equal(ok(env.api('brands.list')).brands.find((b) => b.code === 'BO-0001').openBilling, 2);
+
+  const updated = ok(env.api('billing.update', { pageId: fee.pageId, pay: '입금 완료', invoice: '발행 완료', date: '2026-09-29' }));
+  assert.equal(updated.item.paidAt, '2026-09-29');
+  assert.equal(updated.item.invoicedAt, '2026-09-29');
+  assert.equal(textOf(env.notion.pages[data.b1.id], '입점 입금'), '입금 완료');
+  assert.equal(textOf(env.notion.pages[data.b1.id], '입점 계산서'), '발행 완료');
+  const back = ok(env.api('billing.update', { pageId: purchase.pageId, pay: '입금 대기' }));
+  assert.equal(back.item.paidAt, '', 'reverting clears the date');
+  assert.equal(env.api('billing.update', { pageId: purchase.pageId, pay: '아무거나' }).ok, false);
+  assert.equal(env.api('billing.update', { pageId: data.b2.id, pay: '입금 완료' }).ok, false, 'brand page is not a billing row');
+  env.clearCache();
+  dash = ok(env.api('dashboard'));
+  assert.equal(dash.counts.billingOpen, 1);
+  assert.deepEqual(dash.onboardTodo[0].todo, ['계약서']);
 });
 
 test('document upload → admin approval writes Drive link to Notion brand', () => {
