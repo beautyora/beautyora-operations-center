@@ -241,9 +241,11 @@ function mapImportRows_(values, fields) {
   const numbered = values.map(function (row, index) { return { row: row, number: index + 1 }; }).slice(headerRow + 1)
     .filter(function (item) { return item.row.some(function (cell) { return String(cell).trim(); }); }).slice(0, 300);
   const rows = numbered.map(function (item) { return item.row; });
+  const idCol = headers.findIndex(function (h) { return h === '상품 ID' || h === '운영센터 상품 ID'; });
   return {
     columns: Object.keys(columns),
     rowNumbers: numbered.map(function (item) { return item.number; }),
+    productIds: rows.map(function (row) { return idCol >= 0 ? String(row[idCol] || '').trim() : ''; }),
     rows: rows.map(function (row) {
       const data = {};
       Object.keys(columns).forEach(function (id) {

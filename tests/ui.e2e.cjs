@@ -163,7 +163,7 @@ const shot = async (page, name) => { await page.waitForTimeout(900); return page
     const p = await open(browser, base + '/partner', { width: 1280, height: 900 });
     await p.waitForSelector('#plist');
     await shot(p, '15-partner-products');
-    await p.click('#newProduct');
+    await p.click('#pNew');
     await p.waitForSelector('#dForm');
     await p.fill('[data-field="product_name"]', '데일리 수분 토너');
     await p.fill('[data-field="barcode"]', '8800000000123');
@@ -179,8 +179,7 @@ const shot = async (page, name) => { await page.waitForTimeout(900); return page
     await p.click('#dSubmitOne');
     await p.fill('#sName', '김담당');
     await p.click('#sGo');
-    await p.waitForSelector('text=검수 결과', { state: 'visible' });
-    await p.waitForSelector('td:has-text("데일리 수분 토너")');
+    await p.waitForSelector('#plist .pm-row:has-text("데일리 수분 토너")');
     await shot(p, '17-partner-status');
     const created = Object.values(env.notion.pages).find((pg) => pg.properties['상품명'] && pg.properties['상품명'].title.map((t) => t.plain_text).join('') === '데일리 수분 토너');
     assert.ok(created, 'submitted product exists in Notion');
@@ -224,6 +223,41 @@ const shot = async (page, name) => { await page.waitForTimeout(900); return page
     assert.ok(p1Files[0].appProperties.boHash, 'content hash stored');
     assert.equal(Object.values(env.drive.items).filter((f) => f.appProperties && f.appProperties.boKind === 'asset').length - afterFiles, 1, 'duplicate skipped');
     await p.waitForSelector('text=시카 리페어 앰플');
+
+    // 상품 관리: 거르기·검색, 수정 패널(바뀐 칸 표시), 표로 한꺼번에 수정
+    await p.click('[data-ptab="products"]');
+    await p.waitForSelector('.pm-rail');
+    await p.fill('#pq', '8800000000028');
+    await p.waitForFunction(() => document.querySelectorAll('#plist .pm-row:not(.pm-head)').length === 1);
+    await p.fill('#pq', '');
+    await p.waitForFunction(() => document.querySelectorAll('#plist .pm-row:not(.pm-head)').length > 1);
+    await shot(p, '17b-partner-manage');
+    await p.click('#plist .pm-row:has-text("수분 크림") [data-act]');
+    await p.waitForSelector('#drawer #dForm');
+    await p.fill('#drawer [data-field="retail_price"]', '19900');
+    await p.waitForSelector('#drawer [data-diff="retail_price"].changed');
+    await p.waitForSelector('#drawer .pd-foot:has-text("바뀐 항목 1개")');
+    await shot(p, '17c-partner-drawer');
+    await p.click('#pdReset');
+    await p.waitForSelector('#drawer .pd-foot:has-text("아직 바뀐 내용이 없습니다")');
+    await p.click('#drawer [data-drawer-close]');
+    await p.waitForFunction(() => !document.querySelector('#drawer'));
+    const boxes = await p.$$('#plist [data-sel]');
+    await boxes[0].check();
+    await boxes[1].check();
+    await p.waitForSelector('.pm-selbar:has-text("2개 선택됨")');
+    await p.click('[data-bulk="all"]');
+    await p.waitForSelector('#bkBody tr');
+    await p.selectOption('#bkField', 'retail_price');
+    await p.fill('#bkVal', '10');
+    await p.click('#bkApply');
+    await p.waitForSelector('.bk-cell.changed');
+    await p.waitForSelector('#bkSubmit:not([disabled])');
+    await shot(p, '17d-partner-bulk-edit');
+    await p.click('#bkReset');
+    await p.waitForSelector('#bkSubmit[disabled]');
+    await p.click('#bBack');
+    await p.waitForSelector('.pm-rail');
 
     const pm = await open(browser, base + '/partner', { width: 390, height: 844 });
     await pm.waitForSelector('#plist');

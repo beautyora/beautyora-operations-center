@@ -14,67 +14,407 @@ function renderPartnerShell() {
   const b = P.boot.brand;
   $('#root').innerHTML =
     '<div class="p-shell"><header class="p-top"><div class="p-top-inner">' +
-      '<div class="row between wrap"><div><div class="logo" style="padding:0">' + LOGO_SVG + '<span>상품등록센터</span></div></div><div class="row"><span class="pill pill-brand">' + esc(b.name) + '</span><span class="small muted hide-sm">' + esc(b.company) + '</span></div></div>' +
-      '<nav class="tabs" role="tablist" id="ptabs"></nav>' +
+      '<div class="row between wrap"><div><div class="logo" style="padding:0">' + LOGO_SVG + '<span>상품등록센터</span></div></div><div class="row"><span class="small muted hide-sm" id="pLinkInfo"></span><span class="pill pill-brand">' + esc(b.name) + '</span><span class="small muted hide-sm">' + esc(b.company) + '</span></div></div>' +
+      '<div class="row between" style="gap:12px"><nav class="tabs grow" role="tablist" id="ptabs"></nav><button class="btn btn-sm btn-primary" id="pNew" aria-label="새 상품 등록">' + icon('plus') + '<span class="hide-sm">새 상품 등록</span></button></div>' +
     '</div></header><main class="p-main" id="pview"></main></div>';
   $('#ptabs').addEventListener('click', (e) => { const t = e.target.closest('[data-ptab]'); if (t) go(t.dataset.ptab); });
+  $('#pNew').addEventListener('click', () => { newDraft(); go('drafts'); });
   renderTabs();
 }
 
 function renderTabs() {
-  const counts = { drafts: P.drafts.length, status: P.boot.products.filter((p) => p.review === '보완 필요' || p.change === '보완 필요').length };
-  const tabs = [['products', '상품 목록'], ['drafts', '작성·제출'], ['status', '검수 결과'], ['docs', '브랜드 서류']];
-  $('#ptabs').innerHTML = tabs.map((t) => '<button class="tab" role="tab" data-ptab="' + t[0] + '" aria-selected="' + (P.tab === t[0]) + '">' + esc(t[1]) + (counts[t[0]] ? ' <span class="count' + (t[0] === 'status' ? '' : ' quiet') + '">' + counts[t[0]] + '</span>' : '') + '</button>').join('');
+  const counts = { products: P.boot.products.filter((p) => statusKey(p) === 'revision').length, drafts: P.drafts.length };
+  const tabs = [['products', '상품 관리'], ['drafts', '요청함 · 작성 중'], ['docs', '브랜드 서류']];
+  const active = P.tab === 'bulk' ? 'products' : P.tab;
+  $('#ptabs').innerHTML = tabs.map((t) => '<button class="tab" role="tab" data-ptab="' + t[0] + '" aria-selected="' + (active === t[0]) + '">' + esc(t[1]) + (counts[t[0]] ? ' <span class="count' + (t[0] === 'products' ? '' : ' quiet') + '">' + counts[t[0]] + '</span>' : '') + '</button>').join('');
 }
 
 function go(tab) {
   // 이전 탭에 예약된 목록 다시 그리기를 취소한다(사라진 요소를 그리지 않게).
   clearTimeout(P.listTimer);
   P.paintDraftList = null;
+  if (P.tab === 'bulk' && tab !== 'bulk') cleanupAutoDrafts();
   P.tab = tab;
   renderTabs();
   const old = $('#pview');
   const view = old.cloneNode(false);
   old.replaceWith(view);
-  ({ products: viewProducts, drafts: viewDrafts, status: viewStatus, docs: viewDocs })[tab](view);
+  view.classList.toggle('p-wide', tab === 'products' || tab === 'bulk');
+  ({ products: viewProducts, drafts: viewDrafts, docs: viewDocs, bulk: viewBulk })[tab](view);
   window.scrollTo(0, 0);
 }
 
-/* ---------- 상품 목록 ---------- */
-function productActions(p) {
-  if (P.drafts.some((d) => d.id === p.productId)) return '<button class="btn btn-sm" data-open-draft="' + esc(p.productId) + '">작성 중인 내용 보기</button>';
-  if (p.review === '보완 필요' || p.review === '반려') return '<button class="btn btn-sm btn-primary" data-edit="' + esc(p.productId) + '">보완해서 다시 제출</button>';
-  if (p.change === '검수 대기') return '<span class="small muted">변경 검수 중</span>';
-  if (p.review === '검수 대기') return '<button class="btn btn-sm" data-edit="' + esc(p.productId) + '">내용 고치기</button>';
-  return '<button class="btn btn-sm" data-edit="' + esc(p.productId) + '">수정 요청</button>';
+/* ---------- 상품 상태 ---------- */
+/** 목록 상태: revision(보완 필요) · pending(검수 중) · change(수정 요청 검토 중) · done(등록 완료) */
+function statusKey(p) {
+  if (p.review === '보완 필요' || p.review === '반려' || p.change === '보완 필요' || p.change === '반려') return 'revision';
+  if (p.change === '검수 대기') return 'change';
+  if (p.review === '검수 대기') return 'pending';
+  return 'done';
+}
+const STATUS_LABEL = { revision: '보완 필요', pending: '검수 중', change: '수정 요청 검토 중', done: '등록 완료' };
+const P_TONE = { revision: 'bad', pending: 'warn', change: 'info', done: 'ok' };
+function statusLabel(p) {
+  const k = statusKey(p);
+  if (k === 'revision' && (p.change === '보완 필요' || p.change === '반려')) return '수정 ' + p.change;
+  if (k === 'revision' && p.review === '반려') return '반려';
+  return STATUS_LABEL[k];
+}
+const hasMainImage = (p) => !!(p.mainFileId || (p.linked && p.linked.main));
+const productCategories = (p) => { const v = (p.values || {}).category; return Array.isArray(v) ? v : v ? String(v).split(',').map((x) => x.trim()).filter(Boolean) : []; };
+const fmtWon = (v) => (v == null || v === '' ? '—' : isFinite(Number(String(v).replace(/[,\s원]/g, ''))) ? Number(String(v).replace(/[,\s원]/g, '')).toLocaleString('ko-KR') + '원' : esc(v));
+const supplyOf = (p) => { const v = p.values || {}; return v.consignment_price != null && v.consignment_price !== '' ? v.consignment_price : v.purchase_price; };
+
+/* ---------- 상품 관리 ---------- */
+const PAGE_SIZE = 50;
+P.filter = { status: 'all', category: '', flag: '', q: '', sort: 'edited', page: 1 };
+P.sel = new Set();
+
+function filteredProducts() {
+  const f = P.filter;
+  const q = f.q.trim().toLowerCase();
+  const digits = q.replace(/\D/g, '');
+  const list = P.boot.products.filter((p) =>
+    (f.status === 'all' || statusKey(p) === f.status) &&
+    (!f.category || productCategories(p).indexOf(f.category) >= 0) &&
+    (!f.flag || (f.flag === 'noMain' ? !hasMainImage(p) : !p.barcode)) &&
+    (!q || [p.name, p.option, p.barcode].join(' ').toLowerCase().includes(q) || (digits.length >= 4 && String(p.barcode || '').replace(/\D/g, '').includes(digits))));
+  const by = { edited: (a, b) => String(b.edited).localeCompare(String(a.edited)), name: (a, b) => String(a.name).localeCompare(String(b.name), 'ko'), submitted: (a, b) => String(b.submittedAt || '').localeCompare(String(a.submittedAt || '')) }[f.sort];
+  return list.slice().sort(by);
+}
+
+function rowAction(p) {
+  if (P.drafts.some((d) => d.id === p.productId && !d.auto)) return { label: '작성 중 보기', primary: false };
+  const k = statusKey(p);
+  if (k === 'change') return { label: '검토 중', disabled: true };
+  if (k === 'revision') return { label: '보완하기', primary: true };
+  if (k === 'pending') return { label: '내용 고치기' };
+  return { label: '수정' };
 }
 
 function viewProducts(view) {
-  const list = P.boot.products;
+  const all = P.boot.products;
+  const counts = { all: all.length, revision: 0, pending: 0, change: 0, done: 0 };
+  all.forEach((p) => { counts[statusKey(p)]++; });
+  const cats = {};
+  all.forEach((p) => productCategories(p).forEach((c) => { cats[c] = (cats[c] || 0) + 1; }));
+  const noMain = all.filter((p) => !hasMainImage(p)).length;
+  const noBarcode = all.filter((p) => !p.barcode).length;
+  const railBtn = (group, value, label, n, tone) => '<button class="rail-item' + (P.filter[group] === value ? ' on' : '') + (tone ? ' tone-' + tone : '') + '" data-rail="' + group + '" data-value="' + esc(value) + '" aria-pressed="' + (P.filter[group] === value) + '"><span>' + esc(label) + '</span><span class="rail-n">' + Fmt.num(n) + '</span></button>';
   view.innerHTML =
-    '<section class="card card-pad stack"><div class="row between wrap"><div><h2 style="font-size:18px">상품 등록 방법</h2><div class="steps" style="margin-top:6px"><span><b>1</b>상품 정보 작성</span><span><b>2</b>대표 이미지·상세페이지 올리기</span><span><b>3</b>선택해서 제출</span><span><b>4</b>뷰티오라 검수 후 등록</span></div></div>' +
-      '<div class="row wrap"><button class="btn" id="csvTemplate">' + icon('file') + '엑셀 양식</button><label class="btn" for="importFile">' + icon('upload') + '엑셀·CSV로 여러 개</label><input type="file" id="importFile" accept=".csv,.xlsx" class="sr-only"><button class="btn btn-primary" id="newProduct">' + icon('plus') + '새 상품 등록</button></div></div>' +
-      '<p class="small muted">작성 중인 내용은 이 브라우저에만 임시 저장됩니다. 제출해야 뷰티오라에 전달됩니다.</p>' +
-      '<p class="small muted">여러 상품의 사진은 파일 이름을 <b>바코드_대표.jpg</b>, <b>바코드_상세_1.jpg</b>, <b>바코드_추가_1.jpg</b>처럼 붙여 "작성·제출" 탭의 <b>사진 한꺼번에</b>로 한 번에 올릴 수 있습니다.</p></section>' +
-    '<div class="toolbar"><input class="input search" id="pq" type="search" placeholder="상품명·바코드 검색" aria-label="검색"><span class="grow"></span><span class="small muted">' + list.length + '개</span></div>' +
-    '<section class="card" id="plist"></section>';
+    '<div class="pm">' +
+    '<aside class="pm-rail" aria-label="상품 거르기">' +
+      '<div class="rail-group"><span class="rail-title">상태</span>' + railBtn('status', 'all', '전체', counts.all) + railBtn('status', 'revision', '보완 필요', counts.revision, counts.revision ? 'bad' : '') + railBtn('status', 'pending', '검수 중', counts.pending) + railBtn('status', 'change', '수정 요청 검토 중', counts.change) + railBtn('status', 'done', '등록 완료', counts.done) + '</div>' +
+      (Object.keys(cats).length ? '<div class="rail-group"><span class="rail-title">카테고리</span>' + railBtn('category', '', '전체', all.length) + Object.keys(cats).sort((a, b) => cats[b] - cats[a]).map((c) => railBtn('category', c, c, cats[c])).join('') + '</div>' : '') +
+      '<div class="rail-group"><span class="rail-title">확인이 필요한 상품</span>' + railBtn('flag', 'noMain', '대표 이미지 없음', noMain, noMain ? 'warn' : '') + railBtn('flag', 'noBarcode', '바코드 없음', noBarcode, noBarcode ? 'warn' : '') + (P.filter.flag ? railBtn('flag', '', '거르기 해제', all.length) : '') + '</div>' +
+    '</aside>' +
+    '<div class="pm-main">' +
+      (counts.revision ? '<div class="notice warn pm-banner">' + icon('alert') + '<div class="grow"><strong>보완이 필요한 상품 ' + counts.revision + '개</strong>가 있습니다. 검수 메모를 확인하고 고쳐 주세요.</div>' + (P.filter.status !== 'revision' ? '<button class="btn btn-sm btn-primary" data-rail="status" data-value="revision">보완 필요만 보기</button>' : '') + '</div>' : '') +
+      '<div class="pm-tools">' +
+        '<label class="pm-search">' + icon('search') + '<input id="pq" type="search" placeholder="상품명, 바코드, 옵션으로 찾기" aria-label="상품 검색" value="' + esc(P.filter.q) + '"><kbd class="hide-sm">/</kbd></label>' +
+        '<select class="select" id="psort" aria-label="정렬">' + UI.options([{ value: 'edited', label: '최근 수정순' }, { value: 'name', label: '상품명순' }, { value: 'submitted', label: '최근 제출순' }], P.filter.sort) + '</select>' +
+        '<button class="btn" id="pExport">' + icon('file') + '<span class="hide-sm">엑셀로 내려받기</span></button>' +
+        '<label class="btn" for="importFile">' + icon('upload') + '<span class="hide-sm">엑셀 올리기</span></label><input type="file" id="importFile" accept=".csv,.xlsx" class="sr-only">' +
+      '</div>' +
+      '<div id="pselbar"></div>' +
+      '<section class="card pm-list" id="plist"></section>' +
+      '<p class="small muted">엑셀로 내려받아 고친 뒤 다시 올리면 바뀐 상품만 수정 요청으로 담깁니다. 새 상품은 <a href="#" id="csvTemplate">엑셀 양식</a>으로 여러 개를 한 번에 등록할 수 있습니다. 사진은 <b>바코드_대표.jpg</b>처럼 이름을 붙여 요청함의 <b>사진 한꺼번에</b>로 올립니다.</p>' +
+    '</div></div>' +
+    (counts.revision ? '<button class="pm-fab" data-rail="status" data-value="revision"><span>보완 필요 ' + counts.revision + '개부터 고치기</span><span class="pm-fab-go">시작</span></button>' : '');
+
   const paint = () => {
-    const q = $('#pq').value.trim().toLowerCase();
-    const rows = list.filter((p) => !q || [p.name, p.barcode, p.option].join(' ').toLowerCase().includes(q));
-    $('#plist').innerHTML = rows.length ? '<div class="list">' + rows.map((p) => '<div class="list-item">' + '<span class="thumb" data-thumb="' + esc(p.mainFileId) + '">' + (P.thumbs[p.mainFileId] ? '<img src="' + esc(P.thumbs[p.mainFileId]) + '" alt="" onerror="this.remove()">' : icon('box')) + '</span>' + '<div class="grow"><div class="cell-title ellipsis">' + esc(p.name) + '</div><div class="cell-sub">' + esc([p.option, p.barcode].filter(Boolean).join(' · ') || '—') + '</div>' + (p.reviewNote ? '<div class="small" style="color:var(--bad)">' + esc(p.reviewNote) + '</div>' : '') + '</div>' + pill(REVIEW_TEXT[p.review] || '등록됨', p.review === '승인 완료' || !p.review ? 'ok' : p.review === '검수 대기' ? 'warn' : 'bad') + (p.change === '검수 대기' ? pill('변경 검수 중', 'warn') : p.change === '보완 필요' || p.change === '반려' ? pill('변경 ' + p.change, 'bad') : '') + productActions(p) + '</div>').join('') + '</div>' : UI.empty(list.length ? '검색 결과가 없습니다' : '아직 등록한 상품이 없습니다', list.length ? '' : '"새 상품 등록"을 눌러 시작해 주세요.');
+    const list = filteredProducts();
+    P.visible = list.map((p) => p.productId);
+    const pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+    if (P.filter.page > pages) P.filter.page = pages;
+    const start = (P.filter.page - 1) * PAGE_SIZE;
+    const rows = list.slice(start, start + PAGE_SIZE);
+    const selectable = (p) => statusKey(p) !== 'change';
+    const pageIds = rows.filter(selectable).map((p) => p.productId);
+    const allOn = pageIds.length && pageIds.every((id) => P.sel.has(id));
+    $('#plist').innerHTML = rows.length ?
+      '<div class="pm-row pm-head"><input type="checkbox" id="pAll" aria-label="이 페이지 모두 선택"' + (allOn ? ' checked' : '') + '><span>상품</span><span class="pm-c-bar">바코드</span><span class="pm-c-num">소비자가</span><span class="pm-c-num pm-c-sup">공급가</span><span>상태</span><span class="pm-c-ed">최근 수정</span><span></span></div>' +
+      rows.map((p) => {
+        const act = rowAction(p);
+        const on = P.sel.has(p.productId);
+        return '<div class="pm-row' + (on ? ' on' : '') + '" data-open="' + esc(p.productId) + '">' +
+          (selectable(p) ? '<input type="checkbox" data-sel="' + esc(p.productId) + '"' + (on ? ' checked' : '') + ' aria-label="' + esc(p.name) + ' 선택">' : '<span></span>') +
+          '<div class="pm-prod"><span class="thumb' + (hasMainImage(p) ? '' : ' thumb-missing') + '" data-thumb="' + esc(p.mainFileId) + '">' + (P.thumbs[p.mainFileId] ? '<img src="' + esc(P.thumbs[p.mainFileId]) + '" alt="" onerror="this.remove()">' : icon('box')) + '</span>' +
+            '<div class="grow"><div class="cell-title ellipsis">' + esc(p.name) + '</div><div class="cell-sub ellipsis">' + esc([p.option, productCategories(p).join(', ')].filter(Boolean).join(' · ') || '—') + '<span class="pm-m-only"> · ' + fmtWon((p.values || {}).retail_price) + '</span></div>' +
+            (p.reviewNote && statusKey(p) === 'revision' ? '<div class="small pm-memo">검수 메모: ' + esc(p.reviewNote) + '</div>' : '') + '</div></div>' +
+          '<span class="pm-c-bar mono">' + esc(p.barcode || '—') + '</span>' +
+          '<span class="pm-c-num num">' + fmtWon((p.values || {}).retail_price) + '</span>' +
+          '<span class="pm-c-num pm-c-sup num">' + fmtWon(supplyOf(p)) + '</span>' +
+          '<span class="pm-c-st">' + pill(statusLabel(p), P_TONE[statusKey(p)]) + '</span>' +
+          '<span class="pm-c-ed small muted">' + esc(Fmt.ago(p.edited)) + '</span>' +
+          '<button class="btn btn-sm' + (act.primary ? ' btn-primary' : '') + '" data-act="' + esc(p.productId) + '"' + (act.disabled ? ' disabled' : '') + '>' + esc(act.label) + '</button>' +
+        '</div>';
+      }).join('') +
+      '<div class="pm-foot"><span class="grow">' + Fmt.num(all.length) + '개 중 ' + (list.length !== all.length ? '조건에 맞는 ' + Fmt.num(list.length) + '개 · ' : '') + (start + 1) + '–' + (start + rows.length) + '</span>' + pager(P.filter.page, pages) + '</div>'
+      : UI.empty(all.length ? '조건에 맞는 상품이 없습니다' : '아직 등록한 상품이 없습니다', all.length ? '거르기를 바꾸거나 검색어를 지워 보세요.' : '"새 상품 등록"이나 엑셀 양식으로 시작해 주세요.');
+    paintSelBar();
     loadThumbs(rows.map((p) => p.mainFileId));
   };
-  $('#pq').addEventListener('input', paint);
-  $('#plist').addEventListener('click', (e) => {
-    const edit = e.target.closest('[data-edit]');
-    if (edit) { editExisting(edit.dataset.edit); return; }
-    const open = e.target.closest('[data-open-draft]');
-    if (open) { P.current = open.dataset.openDraft; go('drafts'); }
+  const paintSelBar = () => {
+    const n = P.sel.size;
+    $('#pselbar').innerHTML = n ? '<div class="pm-selbar"><strong>' + n + '개 선택됨</strong><span class="hide-sm pm-selbar-sub">선택한 상품만 한 번에 고칠 수 있어요</span><span class="grow"></span><button class="btn btn-sm btn-accent" data-bulk="all">표로 한꺼번에 수정</button><button class="btn btn-sm pm-ghost" data-bulk="price">가격만 바꾸기</button><button class="btn btn-sm btn-ghost pm-clear" id="pClear">선택 해제</button></div>' : '';
+  };
+  P.repaintProducts = paint;
+  view.addEventListener('click', (e) => {
+    const r = e.target.closest('[data-rail]');
+    if (r) { P.filter[r.dataset.rail] = r.dataset.value; P.filter.page = 1; go('products'); return; }
+    const pg = e.target.closest('[data-page]');
+    if (pg) { P.filter.page = Number(pg.dataset.page); paint(); window.scrollTo(0, 0); return; }
+    const bulk = e.target.closest('[data-bulk]');
+    if (bulk) { openBulk(Array.from(P.sel), bulk.dataset.bulk === 'price'); return; }
+    if (e.target.closest('#pClear')) { P.sel.clear(); paint(); return; }
+    if (e.target.closest('#csvTemplate')) { e.preventDefault(); downloadTemplate(); return; }
+    if (e.target.closest('input[type="checkbox"]')) return;
+    const act = e.target.closest('[data-act]');
+    const row = e.target.closest('[data-open]');
+    const id = act ? act.dataset.act : row ? row.dataset.open : '';
+    if (!id) return;
+    const d = P.drafts.find((x) => x.id === id && !x.auto);
+    if (act && d && act.textContent === '작성 중 보기') { P.current = id; go('drafts'); return; }
+    const p = P.boot.products.find((x) => x.productId === id);
+    if (p && statusKey(p) !== 'change') openProductDrawer(id);
+    else if (p) Toast.show('수정 요청을 검토하고 있습니다. 검토가 끝난 뒤 다시 고칠 수 있어요.');
   });
-  $('#newProduct').addEventListener('click', () => { newDraft(); go('drafts'); });
-  $('#csvTemplate').addEventListener('click', downloadTemplate);
+  view.addEventListener('change', (e) => {
+    const sel = e.target.closest('[data-sel]');
+    if (sel) {
+      if (sel.checked && P.sel.size >= P.boot.limits.maxProducts) { sel.checked = false; Toast.error('한 번에 ' + P.boot.limits.maxProducts + '개까지 고를 수 있습니다.'); return; }
+      if (sel.checked) P.sel.add(sel.dataset.sel); else P.sel.delete(sel.dataset.sel);
+      sel.closest('.pm-row').classList.toggle('on', sel.checked);
+      paintSelBar();
+      return;
+    }
+    if (e.target.id === 'pAll') {
+      const boxes = $$('[data-sel]', $('#plist'));
+      boxes.forEach((b) => { if (e.target.checked && !P.sel.has(b.dataset.sel) && P.sel.size >= P.boot.limits.maxProducts) return; if (e.target.checked) P.sel.add(b.dataset.sel); else P.sel.delete(b.dataset.sel); });
+      paint();
+      return;
+    }
+    if (e.target.id === 'psort') { P.filter.sort = e.target.value; P.filter.page = 1; paint(); }
+  });
+  let t = null;
+  $('#pq').addEventListener('input', (e) => { clearTimeout(t); t = setTimeout(() => { P.filter.q = e.target.value; P.filter.page = 1; paint(); }, 150); });
+  $('#pExport').addEventListener('click', exportProducts);
   $('#importFile').addEventListener('change', (e) => importFile(e.target));
   paint();
+}
+
+function pager(page, pages) {
+  if (pages <= 1) return '';
+  const btn = (n, label, aria) => '<button class="btn btn-sm' + (n === page && !aria ? ' btn-primary' : ' btn-ghost') + '" data-page="' + n + '"' + (aria ? ' aria-label="' + aria + '"' : '') + (n < 1 || n > pages ? ' disabled' : '') + '>' + label + '</button>';
+  const nums = [];
+  for (let n = 1; n <= pages; n++) if (n === 1 || n === pages || Math.abs(n - page) <= 1) nums.push(n); else if (nums[nums.length - 1] !== '…') nums.push('…');
+  return '<div class="row" style="gap:4px">' + btn(page - 1, '‹', '이전 페이지') + nums.map((n) => n === '…' ? '<span class="muted">…</span>' : btn(n, n)).join('') + btn(page + 1, '›', '다음 페이지') + '</div>';
+}
+
+document.addEventListener('keydown', (e) => {
+  if (!P.boot || e.target.closest && e.target.closest('input, textarea, select')) return;
+  if (e.key === '/' && P.tab === 'products' && !$('#drawer') && $('#pq')) { e.preventDefault(); $('#pq').focus(); }
+  if ($('#drawer') && P.drawerId && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { e.preventDefault(); stepDrawer(e.key === 'ArrowLeft' ? -1 : 1); }
+});
+
+/* ---------- 수정 패널(목록 위에서 고치기) ---------- */
+/** 자동으로 만든 초안 중 아무것도 바꾸지 않은 것은 요청함에서 뺀다. */
+function cleanupAutoDrafts(keepId) {
+  const before = P.drafts.length;
+  P.drafts = P.drafts.filter((d) => !d.auto || d.id === keepId || draftChanged(d));
+  P.drafts.forEach((d) => { if (d.auto && draftChanged(d)) delete d.auto; });
+  if (P.drafts.length !== before) saveDrafts();
+}
+
+function sameValue(f, a, b) {
+  const norm = (v) => Array.isArray(v) ? v.slice().sort().join('|') : v == null ? '' : f && f.notionType === 'number' ? String(v).replace(/[,\s원]/g, '') : f && f.notionType === 'checkbox' ? String(!!v) : String(v).trim();
+  return norm(a) === norm(b);
+}
+const describe = (v) => (v == null || v === '' || (Array.isArray(v) && !v.length)) ? '(비어 있음)' : Array.isArray(v) ? v.join(', ') : v === true ? '예' : v === false ? '아니오' : String(v);
+function changedFields(d) { return d.base ? fields().filter((f) => !sameValue(f, d.data[f.id], d.base[f.id])) : []; }
+function draftChanged(d) { return !d.base || changedFields(d).length > 0 || d.uploads.some((u) => u.fileId || u.state === 'uploading'); }
+
+function openProductDrawer(productId) {
+  const p = P.boot.products.find((x) => x.productId === productId);
+  if (!p) return;
+  if (P.drawerId && P.drawerId !== productId) cleanupAutoDrafts(productId);
+  let d = P.drafts.find((x) => x.id === productId);
+  if (!d) { d = draftForProduct(p); d.auto = true; }
+  P.current = d.id;
+  P.drawerId = productId;
+  P.inDrawer = true;
+  const list = P.visible || [];
+  const idx = list.indexOf(productId);
+  const panel = Drawer.open(
+    '<div class="drawer-head pd-head"><div class="grow stack" style="gap:12px">' +
+      '<div class="row wrap" style="gap:8px"><button class="btn btn-sm" data-step="-1"' + (idx <= 0 ? ' disabled' : '') + '>‹ 이전</button><button class="btn btn-sm" data-step="1"' + (idx < 0 || idx >= list.length - 1 ? ' disabled' : '') + '>다음 ›</button>' + (idx >= 0 ? '<span class="small muted">' + (idx + 1) + ' / ' + list.length + '<span class="hide-sm"> · 키보드 ← → 로도 넘길 수 있어요</span></span>' : '') + '</div>' +
+      '<div class="row" style="align-items:center;gap:14px"><span class="thumb thumb-lg" data-thumb="' + esc(p.mainFileId) + '">' + (P.thumbs[p.mainFileId] ? '<img src="' + esc(P.thumbs[p.mainFileId]) + '" alt="">' : icon('box')) + '</span><div class="grow"><h2>' + esc(p.name) + '</h2><div class="row wrap" style="margin-top:6px">' + pill(statusLabel(p), P_TONE[statusKey(p)]) + '<span class="small muted">' + esc([p.barcode, productCategories(p).join(', ')].filter(Boolean).join(' · ')) + '</span></div></div></div>' +
+      (d.mode === 'change' ? '<div class="notice info">' + icon('alert') + '<div>등록된 상품이라 바로 바뀌지 않고, 뷰티오라가 확인한 뒤 반영됩니다.</div></div>' : d.reviewNote ? '' : '<div class="notice warn">' + icon('alert') + '<div>검수 중인 상품입니다. 고쳐서 제출하면 바로 다시 검수합니다.</div></div>') +
+    '</div><button class="btn btn-ghost btn-icon" data-drawer-close aria-label="닫기">' + icon('x') + '</button></div>' +
+    '<div class="drawer-body pd-body"><section id="dEditor"></section></div>',
+    () => { P.inDrawer = false; P.drawerId = ''; cleanupAutoDrafts(); renderTabs(); if (P.tab === 'products' && P.repaintProducts) P.repaintProducts(); });
+  panel.classList.add('pd');
+  panel.addEventListener('click', (e) => { const s = e.target.closest('[data-step]'); if (s) stepDrawer(Number(s.dataset.step)); });
+  paintEditor();
+}
+
+function stepDrawer(delta) {
+  const list = P.visible || [];
+  const i = list.indexOf(P.drawerId);
+  let j = i + delta;
+  while (j >= 0 && j < list.length) {
+    const p = P.boot.products.find((x) => x.productId === list[j]);
+    if (p && statusKey(p) !== 'change') { openProductDrawer(list[j]); return; }
+    j += delta;
+  }
+  Toast.show(delta > 0 ? '마지막 상품입니다.' : '첫 상품입니다.');
+}
+
+/** 수정 패널 아래쪽 버튼. */
+function drawerFooter(d) {
+  const changed = changedFields(d);
+  const files = d.uploads.filter((u) => u.fileId).length;
+  const n = changed.length + (files ? 1 : 0);
+  return '<div class="sticky-actions pd-foot"><div class="grow small">' + (n ? '<strong>바뀐 항목 ' + changed.length + '개' + (files ? ' · 새 파일 ' + files + '개' : '') + '</strong><div class="muted ellipsis">' + esc(changed.map((f) => f.label).join(', ')) + '</div>' : '<span class="muted">아직 바뀐 내용이 없습니다</span>') + '</div>' +
+    '<button class="btn btn-ghost" id="pdReset"' + (n ? '' : ' disabled') + '>되돌리기</button>' +
+    '<button class="btn" id="pdNext">' + (n ? '요청함에 담고 다음' : '다음 상품') + '</button>' +
+    '<button class="btn btn-primary" id="pdSubmit"' + (n ? '' : ' disabled') + '>' + (d.mode === 'change' ? '바로 수정 요청' : '바로 제출') + '</button></div>';
+}
+
+function bindDrawerFooter(box, d) {
+  const reset = $('#pdReset', box), next = $('#pdNext', box), submit = $('#pdSubmit', box);
+  if (reset) reset.addEventListener('click', () => {
+    const p = P.boot.products.find((x) => x.productId === d.id);
+    d.data = JSON.parse(JSON.stringify(d.base || (p && p.values) || {}));
+    d.uploads = []; d.replace = [];
+    saveDrafts(); paintEditor(); Toast.show('처음 내용으로 되돌렸습니다.');
+  });
+  if (next) next.addEventListener('click', () => {
+    if (draftChanged(d)) { delete d.auto; saveDrafts(); renderTabs(); Toast.ok('요청함에 담았습니다.'); }
+    stepDrawer(1);
+  });
+  if (submit) submit.addEventListener('click', () => { delete d.auto; saveDrafts(); P.selected = new Set([d.id]); submitDialog(); });
+}
+
+/* ---------- 표로 한꺼번에 수정 ---------- */
+function openBulk(ids, priceOnly) {
+  if (!ids.length) return;
+  P.bulk = { ids: ids.slice(0, P.boot.limits.maxProducts), priceOnly };
+  go('bulk');
+}
+
+function bulkFields(priceOnly) {
+  const nums = fields().filter((f) => f.notionType === 'number');
+  const price = nums.filter((f) => /가|price/i.test(f.label + f.id));
+  if (priceOnly) return price.length ? price : nums;
+  return fields().filter((f) => f.id === 'product_name' || f.id === 'option_name').concat(nums);
+}
+
+function viewBulk(view) {
+  const cfg = P.bulk || { ids: [] };
+  const drafts = cfg.ids.map((id) => {
+    const p = P.boot.products.find((x) => x.productId === id);
+    if (!p) return null;
+    let d = P.drafts.find((x) => x.id === id);
+    if (!d) { d = draftForProduct(p); d.auto = true; }
+    return d;
+  }).filter(Boolean);
+  const cols = bulkFields(cfg.priceOnly);
+  const numCols = cols.filter((f) => f.notionType === 'number');
+  view.innerHTML =
+    '<div class="row wrap" style="gap:12px"><button class="btn btn-sm btn-ghost" id="bBack">‹ 상품 관리</button><h2 style="font-size:22px">' + drafts.length + '개 상품 ' + (cfg.priceOnly ? '가격 바꾸기' : '한꺼번에 수정') + '</h2><span class="small muted hide-sm">칸을 눌러 고치고, Tab·Enter로 옆칸·아래칸으로 이동합니다.</span></div>' +
+    (numCols.length ? '<section class="card card-pad row wrap bk-tools"><strong class="small">한 번에 적용</strong><select class="select" id="bkField" aria-label="바꿀 항목">' + UI.options(numCols.map((f) => ({ value: f.id, label: f.label })), numCols[0].id) + '</select><select class="select" id="bkMode" aria-label="방식">' + UI.options([{ value: 'down', label: '% 내리기' }, { value: 'up', label: '% 올리기' }, { value: 'set', label: '같은 값으로' }], 'down') + '</select><input class="input num" id="bkVal" inputmode="decimal" style="width:110px" aria-label="값" placeholder="10"><button class="btn btn-accent" id="bkApply">선택한 ' + drafts.length + '개에 적용</button></section>' : '') +
+    '<section class="card bk-grid-wrap"><div class="table-wrap"><table class="table bk-grid"><thead><tr><th>상품</th>' + cols.map((f) => '<th' + (f.notionType === 'number' ? ' class="right"' : '') + '>' + esc(f.label) + '</th>').join('') + '<th>처리</th></tr></thead><tbody id="bkBody"></tbody></table></div></section>' +
+    '<div class="grid-3" id="bkSum"></div>' +
+    '<div class="sticky-actions bk-foot"><span class="small grow muted">큰 폭으로 바꿀 때는 <b>엑셀로 내려받기</b> → 고친 뒤 <b>엑셀 올리기</b>도 쓸 수 있어요.</span><button class="btn btn-ghost" id="bkReset">모두 되돌리기</button><button class="btn btn-primary" id="bkSubmit">제출</button></div>';
+  const paintBody = () => {
+    $('#bkBody').innerHTML = drafts.map((d) => {
+      const p = P.boot.products.find((x) => x.productId === d.id) || {};
+      return '<tr><td><div class="row"><span class="thumb" data-thumb="' + esc(p.mainFileId) + '">' + (P.thumbs[p.mainFileId] ? '<img src="' + esc(P.thumbs[p.mainFileId]) + '" alt="">' : icon('box')) + '</span><div class="grow"><div class="cell-title ellipsis" style="max-width:220px">' + esc(p.name) + '</div><div class="cell-sub">' + esc(p.barcode || '') + '</div></div></div></td>' +
+        cols.map((f) => {
+          const changed = d.base && !sameValue(f, d.data[f.id], d.base[f.id]);
+          return '<td class="bk-cell' + (changed ? ' changed' : '') + '"><input class="input' + (f.notionType === 'number' ? ' num right' : '') + '" data-cell="' + esc(d.id) + '|' + esc(f.id) + '" value="' + esc(d.data[f.id] == null ? '' : d.data[f.id]) + '" aria-label="' + esc(p.name + ' ' + f.label) + '"' + (f.notionType === 'number' ? ' inputmode="decimal"' : '') + '>' + (changed ? '<s class="bk-old">' + esc(f.notionType === 'number' ? fmtWon(d.base[f.id]) : describe(d.base[f.id])) + '</s>' : '') + '</td>';
+        }).join('') +
+        '<td>' + (draftChanged(d) ? pill(d.mode === 'change' ? '수정 요청으로' : '바로 반영', d.mode === 'change' ? 'info' : 'warn') : '<span class="small muted">변경 없음</span>') + '</td></tr>';
+    }).join('');
+    loadThumbs(drafts.map((d) => (P.boot.products.find((x) => x.productId === d.id) || {}).mainFileId));
+    paintSum();
+  };
+  const paintSum = () => {
+    const changed = drafts.filter(draftChanged);
+    const cells = drafts.reduce((n, d) => n + changedFields(d).filter((f) => cols.indexOf(f) >= 0).length, 0);
+    const direct = changed.filter((d) => d.mode !== 'change').length;
+    $('#bkSum').innerHTML = '<div class="card card-pad"><span class="small muted">바뀐 칸</span><strong style="font-size:22px">' + cells + '칸 · ' + changed.length + '개 상품</strong></div>' +
+      '<div class="card card-pad"><span class="small muted">바로 반영</span><span>검수 중·보완 상품 ' + direct + '개 — 제출하면 바로 고쳐집니다</span></div>' +
+      '<div class="card card-pad"><span class="small muted">수정 요청</span><span>등록 완료 상품 ' + (changed.length - direct) + '개 — 뷰티오라 확인 후 반영됩니다</span></div>';
+    const btn = $('#bkSubmit');
+    btn.disabled = !changed.length;
+    btn.textContent = changed.length ? changed.length + '개 상품 제출' : '바뀐 상품이 없습니다';
+  };
+  view.addEventListener('input', (e) => {
+    const c = e.target.closest('[data-cell]');
+    if (!c) return;
+    const [id, fid] = c.dataset.cell.split('|');
+    const d = drafts.find((x) => x.id === id);
+    const f = cols.find((x) => x.id === fid);
+    d.data[fid] = c.value;
+    const changed = d.base && !sameValue(f, d.data[fid], d.base[fid]);
+    const td = c.closest('td');
+    td.classList.toggle('changed', !!changed);
+    let old = td.querySelector('.bk-old');
+    if (changed && !old) { old = document.createElement('s'); old.className = 'bk-old'; old.textContent = f.notionType === 'number' ? fmtWon(d.base[fid]).replace(/<[^>]*>/g, '') : describe(d.base[fid]); td.appendChild(old); }
+    if (!changed && old) old.remove();
+    const status = td.closest('tr').lastElementChild;
+    status.innerHTML = draftChanged(d) ? pill(d.mode === 'change' ? '수정 요청으로' : '바로 반영', d.mode === 'change' ? 'info' : 'warn') : '<span class="small muted">변경 없음</span>';
+    saveDrafts();
+    paintSum();
+  });
+  view.addEventListener('keydown', (e) => {
+    const c = e.target.closest('[data-cell]');
+    if (!c || e.key !== 'Enter') return;
+    e.preventDefault();
+    const inputs = $$('[data-cell]', view);
+    const i = inputs.indexOf(c);
+    const next = inputs[i + cols.length];
+    if (next) next.focus();
+  });
+  $('#bBack').addEventListener('click', () => go('products'));
+  const apply = $('#bkApply');
+  if (apply) apply.addEventListener('click', () => {
+    const fid = $('#bkField').value, mode = $('#bkMode').value;
+    const v = Number(String($('#bkVal').value).replace(/[,\s원%]/g, ''));
+    if (!isFinite(v) || $('#bkVal').value === '') { Toast.error('값을 숫자로 입력해 주세요.'); return; }
+    drafts.forEach((d) => {
+      const cur = Number(String(d.data[fid] == null ? '' : d.data[fid]).replace(/[,\s원]/g, ''));
+      if (mode === 'set') d.data[fid] = String(v);
+      else if (isFinite(cur) && String(d.data[fid]).trim() !== '') d.data[fid] = String(Math.round(cur * (mode === 'up' ? 1 + v / 100 : 1 - v / 100)));
+    });
+    saveDrafts();
+    paintBody();
+    Toast.ok('적용했습니다. 바뀐 칸은 노란색으로 표시됩니다.');
+  });
+  $('#bkReset').addEventListener('click', () => {
+    drafts.forEach((d) => { if (d.base) cols.forEach((f) => { d.data[f.id] = d.base[f.id]; }); });
+    saveDrafts();
+    paintBody();
+  });
+  $('#bkSubmit').addEventListener('click', async (e) => {
+    const changed = drafts.filter(draftChanged);
+    if (!changed.length) return;
+    // 사진 조건을 확인하려고 기존 파일 목록을 불러온다(Notion에 이미지 링크가 없는 상품만).
+    await busy(e.currentTarget, async () => {
+      const need = changed.filter((d) => !d.existingLoaded && !(d.linked && d.linked.main && d.linked.detail));
+      for (let i = 0; i < need.length; i += 4) {
+        await Promise.all(need.slice(i, i + 4).map((d) => Api.call('partner.assets', { productId: d.id }).then((r) => { d.existing = r.assets; d.existingLoaded = true; }).catch(() => {})));
+      }
+    });
+    changed.forEach((d) => { delete d.auto; });
+    saveDrafts();
+    P.selected = new Set(changed.map((d) => d.id));
+    submitDialog();
+  });
+  paintBody();
 }
 
 function loadThumbs(ids) {
@@ -101,7 +441,7 @@ function newDraft(data) {
 /** 등록된 상품을 고치는 초안(승인·상태 없음 → 수정 요청, 그 외 → 보완 재제출). */
 function draftForProduct(p) {
   const mode = p.review === '승인 완료' || !p.review ? 'change' : 'revision';
-  const draft = { id: p.productId, mode, name: p.name, data: JSON.parse(JSON.stringify(p.values || {})), uploads: [], existing: [], replace: [], linked: p.linked || {}, reviewNote: p.reviewNote, updatedAt: Date.now() };
+  const draft = { id: p.productId, mode, name: p.name, data: JSON.parse(JSON.stringify(p.values || {})), base: JSON.parse(JSON.stringify(p.values || {})), uploads: [], existing: [], replace: [], linked: p.linked || {}, reviewNote: p.reviewNote, updatedAt: Date.now() };
   P.drafts = P.drafts.filter((d) => d.id !== p.productId);
   P.drafts.unshift(draft);
   return draft;
@@ -195,6 +535,13 @@ const ASSET_SLOTS = [
   { code: 'detail', label: '상세페이지', accept: 'image/jpeg,image/png,image/webp,application/pdf', help: '이미지 또는 PDF, 여러 개 가능' }
 ];
 
+/** 등록된 상품을 고칠 때 바뀐 칸을 노란색으로, 원래 값을 아래에 보여 준다. */
+function fieldWithDiff(d, f, html) {
+  if (!d.base) return html;
+  const changed = !sameValue(f, d.data[f.id], d.base[f.id]);
+  return '<div class="diff-wrap' + (changed ? ' changed' : '') + (f.type === 'textarea' || f.notionType === 'multi_select' ? ' full' : '') + '" data-diff="' + esc(f.id) + '">' + html + '<span class="diff-note"><span class="diff-badge">변경됨</span> 지금: ' + esc(f.notionType === 'number' ? fmtWon(d.base[f.id]) : describe(d.base[f.id])) + '</span></div>';
+}
+
 function paintEditor() {
   const d = P.drafts.find((x) => x.id === P.current);
   const previous = $('#dEditor');
@@ -203,11 +550,11 @@ function paintEditor() {
   const box = previous.cloneNode(false);
   previous.replaceWith(box);
   const issues = draftIssues(d);
-  box.innerHTML = '<div class="card">' +
-    '<div class="card-head"><div class="grow"><h2 style="font-size:17px">' + esc(d.data.product_name || d.name || '새 상품') + '</h2><div class="small muted">' + ({ new: '새 상품 등록', revision: '보완해서 다시 제출', change: '등록된 상품 수정 요청 — 검수 후 반영됩니다' })[d.mode] + '</div></div><button class="btn btn-sm btn-danger" id="dDelete">' + icon('trash') + '삭제</button></div>' +
+  box.innerHTML = '<div class="card' + (P.inDrawer ? ' pd-card' : '') + '">' +
+    (P.inDrawer ? '' : '<div class="card-head"><div class="grow"><h2 style="font-size:17px">' + esc(d.data.product_name || d.name || '새 상품') + '</h2><div class="small muted">' + ({ new: '새 상품 등록', revision: '보완해서 다시 제출', change: '등록된 상품 수정 요청 — 검수 후 반영됩니다' })[d.mode] + '</div></div><button class="btn btn-sm btn-danger" id="dDelete">' + icon('trash') + '삭제</button></div>') +
     '<div class="card-body stack-lg">' +
       (d.reviewNote ? '<div class="notice bad">' + icon('alert') + '<div><strong>뷰티오라 검수 메모</strong><div class="pre">' + esc(d.reviewNote) + '</div></div></div>' : '') +
-      '<div><h3 class="section-title">상품 정보</h3><div class="form-grid" id="dForm">' + fields().map((f) => UI.field(f.label, fieldInput(f, d.data[f.id]), { for: 'f-' + f.id, required: f.required, help: f.help, full: f.type === 'textarea' || f.notionType === 'multi_select' })).join('') + '</div></div>' +
+      '<div><h3 class="section-title">상품 정보</h3><div class="form-grid" id="dForm">' + fields().map((f) => fieldWithDiff(d, f, UI.field(f.label, fieldInput(f, d.data[f.id]), { for: 'f-' + f.id, required: f.required, help: f.help, full: f.type === 'textarea' || f.notionType === 'multi_select' }))).join('') + '</div></div>' +
       '<div><h3 class="section-title">이미지·상세페이지</h3><div class="stack">' + ASSET_SLOTS.map((slot) => {
         const f = assetField(slot.code);
         const mine = d.uploads.filter((u) => u.code === slot.code);
@@ -219,7 +566,7 @@ function paintEditor() {
           '<label class="dropzone" data-drop="' + slot.code + '">' + icon('upload') + '<span>눌러서 파일 선택 또는 끌어다 놓기</span><span class="small">JPG·PNG·WEBP' + (slot.code === 'detail' ? '·PDF' : '') + ', 파일당 8MB 이하</span><input type="file" class="sr-only" accept="' + slot.accept + '"' + (slot.code === 'main' ? '' : ' multiple') + ' data-upload="' + slot.code + '"></label></div>';
       }).join('') + '</div></div>' +
     '</div>' +
-    '<div class="sticky-actions">' + (issues.length ? '<span class="small grow" style="color:var(--bad)">남은 항목: ' + esc(issues.slice(0, 5).join(', ')) + (issues.length > 5 ? ' 외 ' + (issues.length - 5) + '개' : '') + '</span>' : '<span class="small grow" style="color:var(--ok)">제출할 수 있습니다</span>') + '<button class="btn btn-primary" id="dSubmitOne"' + (issues.length ? ' disabled' : '') + '>이 상품 제출</button></div>' +
+    (P.inDrawer ? (issues.length ? '<div class="notice warn pd-issues">' + icon('alert') + '<div>제출 전에 채워 주세요: ' + esc(issues.slice(0, 6).join(', ')) + '</div></div>' : '') + drawerFooter(d) : '<div class="sticky-actions">' + (issues.length ? '<span class="small grow" style="color:var(--bad)">남은 항목: ' + esc(issues.slice(0, 5).join(', ')) + (issues.length > 5 ? ' 외 ' + (issues.length - 5) + '개' : '') + '</span>' : '<span class="small grow" style="color:var(--ok)">제출할 수 있습니다</span>') + '<button class="btn btn-primary" id="dSubmitOne"' + (issues.length ? ' disabled' : '') + '>이 상품 제출</button></div>') +
   '</div>';
   const form = $('#dForm', box);
   const onEdit = () => {
@@ -230,6 +577,14 @@ function paintEditor() {
     });
     d.updatedAt = Date.now();
     saveDrafts();
+    if (d.base) fields().forEach((f) => {
+      const wrap = form.querySelector('[data-diff="' + f.id + '"]');
+      if (wrap) wrap.classList.toggle('changed', !sameValue(f, d.data[f.id], d.base[f.id]));
+    });
+    if (P.inDrawer) {
+      clearTimeout(P.footTimer);
+      P.footTimer = setTimeout(() => { const foot = $('.pd-foot', box); if (!foot) return; const tmp = document.createElement('div'); tmp.innerHTML = drawerFooter(d); foot.replaceWith(tmp.firstChild); bindDrawerFooter(box, d); }, 200);
+    }
     clearTimeout(P.listTimer);
     P.listTimer = setTimeout(() => { if (P.paintDraftList) P.paintDraftList(); const issuesNow = draftIssues(d); const btn = $('#dSubmitOne'); if (btn) btn.disabled = !!issuesNow.length; const hint = btn && btn.previousElementSibling; if (hint) { hint.style.color = issuesNow.length ? 'var(--bad)' : 'var(--ok)'; hint.textContent = issuesNow.length ? '남은 항목: ' + issuesNow.slice(0, 5).join(', ') : '제출할 수 있습니다'; } }, 250);
   };
@@ -249,7 +604,9 @@ function paintEditor() {
     const rm = e.target.closest('[data-remove]');
     if (rm) { d.uploads = d.uploads.filter((u) => u.uploadId !== rm.dataset.remove); saveDrafts(); paintEditor(); }
   });
-  $('#dDelete', box).addEventListener('click', async () => {
+  if (P.inDrawer) bindDrawerFooter(box, d);
+  const del = $('#dDelete', box);
+  if (del) del.addEventListener('click', async () => {
     if (!await Modal.confirm('작성 중인 상품 삭제', '이 브라우저에 저장된 작성 내용을 지웁니다. 이미 제출한 상품에는 영향이 없습니다.', '삭제', 'btn-danger')) return;
     P.drafts = P.drafts.filter((x) => x.id !== d.id);
     P.selected.delete(d.id);
@@ -257,7 +614,8 @@ function paintEditor() {
     renderTabs();
     go('drafts');
   });
-  $('#dSubmitOne', box).addEventListener('click', () => { P.selected = new Set([d.id]); submitDialog(); });
+  const one = $('#dSubmitOne', box);
+  if (one) one.addEventListener('click', () => { P.selected = new Set([d.id]); submitDialog(); });
   if ((d.mode === 'change' || d.mode === 'revision') && !d.existingLoaded) {
     d.existingLoaded = true;
     Api.call('partner.assets', { productId: d.id }).then((r) => { d.existing = r.assets; saveDrafts(); if (P.current === d.id) paintEditor(); if (P.paintDraftList) P.paintDraftList(); }).catch(() => { d.existingLoaded = false; });
@@ -467,7 +825,7 @@ function submitDialog() {
     title: picked.length + '개 상품 제출',
     body: '<ul class="small">' + picked.map((d) => '<li>' + esc(d.data.product_name) + ' — ' + ({ new: '새 상품', revision: '보완 재제출', change: '수정 요청' })[d.mode] + '</li>').join('') + '</ul>' +
       '<div class="form-grid">' + UI.field('제출하시는 분', '<input class="input" id="sName" value="' + esc(contact.name) + '" autocomplete="name">', { for: 'sName', required: true }) + UI.field('연락처', '<input class="input" id="sPhone" value="' + esc(contact.phone) + '" autocomplete="tel" inputmode="tel">', { for: 'sPhone' }) + '</div>' +
-      '<p class="small muted">제출 후 뷰티오라가 검수합니다. 결과는 "검수 결과" 탭에서 확인할 수 있습니다.</p>',
+      '<p class="small muted">제출 후 뷰티오라가 검수합니다. 결과는 "상품 관리"의 상태에서 확인할 수 있습니다.</p>',
     foot: '<button class="btn" data-close>취소</button><button class="btn btn-primary" id="sGo">제출</button>'
   });
   const requestId = uid('SUB');
@@ -487,25 +845,14 @@ function submitDialog() {
       P.drafts = P.drafts.filter((d) => !done.has(d.id));
       P.selected.clear();
       saveDrafts();
-      Toast.ok(r.results.length + '개 상품을 제출했습니다. 검수 결과는 "검수 결과" 탭에서 확인해 주세요.');
+      Toast.ok(r.results.length + '개 상품을 제출했습니다. 검수 결과는 "상품 관리"에서 확인해 주세요.');
+      done.forEach((id) => P.sel.delete(id));
+      Drawer.close(true); P.inDrawer = false; P.drawerId = '';
       await refreshBoot();
-      go('status');
+      P.filter.status = 'all'; P.filter.sort = 'edited'; P.filter.page = 1;
+      go('products');
     } catch (err) { Toast.error(err); }
   }));
-}
-
-/* ---------- 검수 결과 ---------- */
-function viewStatus(view) {
-  const list = P.boot.products.filter((p) => p.submittedAt).sort((a, b) => String(b.submittedAt).localeCompare(String(a.submittedAt)));
-  view.innerHTML = '<section class="card"><div class="card-head"><h2>검수 결과</h2><button class="btn btn-sm" id="sRefresh">' + icon('refresh') + '새로 고침</button></div>' +
-    (list.length ? '<div class="table-wrap"><table class="table"><thead><tr><th>상품</th><th>상태</th><th class="hide-sm">제출일</th><th>메모</th><th></th></tr></thead><tbody>' + list.map((p) => {
-      const change = p.change && p.change !== '반영 완료';
-      const status = change ? '변경 ' + p.change : REVIEW_TEXT[p.review] || p.review || '등록됨';
-      const bad = /보완|반려/.test(status);
-      return '<tr><td><div class="cell-title">' + esc(p.name) + '</div><div class="cell-sub">' + esc(p.barcode || '') + '</div></td><td>' + pill(status, bad ? 'bad' : /검수|대기/.test(status) ? 'warn' : 'ok') + '</td><td class="hide-sm small muted nowrap">' + esc(Fmt.date(p.submittedAt)) + '</td><td class="small pre">' + esc(p.reviewNote || '') + '</td><td>' + (bad ? '<button class="btn btn-sm btn-primary" data-edit="' + esc(p.productId) + '">고치기</button>' : '') + '</td></tr>';
-    }).join('') + '</tbody></table></div>' : UI.empty('아직 제출한 상품이 없습니다')) + '</section>';
-  view.addEventListener('click', (e) => { const b = e.target.closest('[data-edit]'); if (b) editExisting(b.dataset.edit); });
-  $('#sRefresh').addEventListener('click', (e) => busy(e.currentTarget, async () => { await refreshBoot(); go('status'); }));
 }
 
 /* ---------- 브랜드 서류 ---------- */
@@ -552,6 +899,22 @@ function downloadTemplate() {
   Toast.show('두 번째 줄의 예시는 지우고 작성해 주세요. 사진은 파일 이름을 "바코드_대표.jpg"처럼 붙여 한꺼번에 올릴 수 있습니다.');
 }
 
+/** 지금 보고 있는 상품 목록을 엑셀(CSV)로 내려받는다. '상품 ID' 열이 있어 고친 뒤 다시 올리면 같은 상품을 찾아간다. */
+function exportProducts() {
+  const cols = fields();
+  const list = filteredProducts();
+  if (!list.length) { Toast.error('내려받을 상품이 없습니다.'); return; }
+  const cell = (f, v) => Array.isArray(v) ? v.join(', ') : v === true ? '예' : v === false ? '' : v == null ? '' : String(v);
+  const rows = [['상품 ID'].concat(cols.map((f) => f.label + (f.required ? ' *' : '')))].concat(list.map((p) => [p.productId].concat(cols.map((f) => cell(f, (p.values || {})[f.id])))));
+  const csv = '\ufeff' + rows.map((row) => row.map((c) => '"' + String(c).replace(/"/g, '""') + '"').join(',')).join('\r\n');
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url; a.download = P.boot.brand.name + '_상품목록_' + Fmt.today() + '.csv';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  Toast.show(list.length + '개 상품을 내려받았습니다. 고친 뒤 "엑셀 올리기"로 올리면 바뀐 상품만 수정 요청으로 담깁니다. "상품 ID" 열은 지우지 마세요.');
+}
+
 function parseCsv(text) {
   const rows = []; let row = []; let cell = ''; let quoted = false;
   text = text.replace(/^﻿/, '');
@@ -574,6 +937,7 @@ function mapRows(values) {
   if (headerRow < 0) throw new Error('"상품명" 머리글을 찾지 못했습니다. 양식을 내려받아 사용해 주세요.');
   const headers = values[headerRow].map(norm);
   const index = {};
+  const idCol = headers.findIndex((h) => h === '상품 ID' || h === '운영센터 상품 ID');
   cols.forEach((f) => { const short = f.label.replace(/\s*\([^)]*\)\s*$/, ''); const i = headers.findIndex((h) => h === f.label || h === f.id || h === short); if (i >= 0) index[f.id] = i; });
   return values.map((r, i) => ({ r, row: i + 1 })).slice(headerRow + 1).filter((x) => x.r.some((c) => String(c).trim())).map(({ r, row }) => {
     const data = {};
@@ -582,7 +946,7 @@ function mapRows(values) {
       const v = String(r[index[id]] == null ? '' : r[index[id]]).trim();
       data[id] = f.notionType === 'multi_select' ? v.split(',').map((x) => x.trim()).filter(Boolean) : f.notionType === 'checkbox' ? /^(y|yes|true|예|o|1)$/i.test(v) : v;
     });
-    return { data, row };
+    return { data, row, productId: idCol >= 0 ? String(r[idCol] || '').trim() : '' };
   });
 }
 
@@ -596,14 +960,28 @@ async function importFile(input) {
     else if (/\.xlsx$/i.test(file.name)) {
       Toast.show('엑셀 파일을 읽는 중입니다…');
       const r = await Api.call('partner.importWorkbook', { fileName: file.name, base64: await fileToBase64(file) });
-      rows = r.rows.map((data, i) => ({ data, row: (r.rowNumbers || [])[i] || 0 }));
+      rows = r.rows.map((data, i) => ({ data, row: (r.rowNumbers || [])[i] || 0, productId: (r.productIds || [])[i] || '' }));
     } else throw new Error('CSV 또는 xlsx 파일을 골라 주세요.');
-    rows = rows.filter((r) => r.data.product_name);
+    rows = rows.filter((r) => r.data.product_name || r.productId);
     if (!rows.length) throw new Error('상품명이 있는 행이 없습니다.');
-    rows.slice(0, 300).reverse().forEach((r) => { newDraft(r.data).row = r.row; });
+    // 상품 ID(없으면 바코드)가 등록 상품과 맞으면 그 상품의 수정 요청으로, 아니면 새 상품으로 담는다.
+    const byId = {}, byBarcode = {};
+    P.boot.products.forEach((p) => { byId[p.productId] = p; if (p.barcode) byBarcode[String(p.barcode).replace(/\D/g, '')] = p; });
+    let created = 0, changed = 0, same = 0, blocked = 0;
+    rows.slice(0, 300).reverse().forEach((r) => {
+      const p = byId[r.productId] || (r.data.barcode ? byBarcode[String(r.data.barcode).replace(/\D/g, '')] : null);
+      if (!p) { if (r.data.product_name) { newDraft(r.data).row = r.row; created++; } return; }
+      if (statusKey(p) === 'change') { blocked++; return; }
+      const existing = P.drafts.find((d) => d.id === p.productId);
+      const d = existing || draftForProduct(p);
+      d.data = Object.assign({}, d.data, r.data);
+      d.row = r.row;
+      if (draftChanged(d)) { delete d.auto; changed++; }
+      else { same++; if (!existing) P.drafts = P.drafts.filter((x) => x !== d); }
+    });
     saveDrafts();
-    Toast.ok(rows.length + '개 상품을 불러왔습니다. "사진 한꺼번에 올리기"로 이미지를 올린 뒤 제출해 주세요.');
-    go('drafts');
+    Toast.ok([created ? '새 상품 ' + created + '개' : '', changed ? '수정 요청 ' + changed + '개' : '', same ? '변경 없음 ' + same + '개' : '', blocked ? '검토 중이라 건너뜀 ' + blocked + '개' : ''].filter(Boolean).join(' · ') + (created || changed ? ' — 요청함에서 확인한 뒤 제출해 주세요.' : ''));
+    go(created || changed ? 'drafts' : 'products');
   } catch (e) { Toast.error(e); }
 }
 
@@ -625,7 +1003,7 @@ async function bootPartner() {
     P.drafts.forEach((d) => { d.uploads = (d.uploads || []).filter((u) => u.state === 'done').map((u) => Object.assign(u, { preview: '' })); });
     document.title = P.boot.brand.name + ' · 뷰티오라 상품등록센터';
     renderPartnerShell();
-    go(P.drafts.length ? 'drafts' : 'products');
+    go('products');
   } catch (e) {
     $('#root').innerHTML = '<div class="boot"><strong style="color:var(--ink);font-size:17px">상품등록센터를 열 수 없습니다</strong><p>' + esc(e.message) + '</p><button class="btn" onclick="location.reload()">다시 시도</button></div>';
   }
