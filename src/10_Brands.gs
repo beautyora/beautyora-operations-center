@@ -13,8 +13,16 @@ function brandSummary_(row) {
     owners: (row.owner || []).map(function (p) { return p.name; }).filter(Boolean),
     formSubmitted: !!row.formSubmitted, issue: row.issue || '', drive: row.drive || '', bizNo: row.bizNo || '',
     formResponseId: row.formResponseId || '',
-    docs: { business: row.docBusiness || '', bank: row.docBank || '', intro: row.docIntro || '', contract: row.docContract || '', other: row.docOther || '' }
+    docs: { business: row.docBusiness || '', bank: row.docBank || '', intro: row.docIntro || '', contract: row.docContract || '', other: row.docOther || '' },
+    onboard: { contract: row.contractSent || '', pay: row.onboardPay || '', invoice: row.onboardInvoice || '' }
   };
+}
+
+/** 입점 체크리스트 중 아직 처리 안 된 항목 이름(빈 값 = 미확인은 제외). */
+function onboardTodo_(brand) {
+  const onboard = brand.onboard || {};
+  return Object.keys(BO.ONBOARD).filter(function (item) { return onboard[item] === BO.ONBOARD[item].todo; })
+    .map(function (item) { return BO.ONBOARD[item].short; });
 }
 
 /** 전체 브랜드(5분 캐시). fresh=true면 Notion에서 다시 읽는다. */
@@ -85,6 +93,10 @@ function apiBrandsList_() {
       if (product.review === BO.REVIEW.PENDING || product.change === BO.CHANGE.PENDING) item.pending++;
     });
   });
+  const openBilling = {};
+  openBillingItems_().forEach(function (item) {
+    (item.brandIds || []).forEach(function (id) { const key = String(id).replace(/-/g, ''); openBilling[key] = (openBilling[key] || 0) + 1; });
+  });
   const activeLink = {};
   links.forEach(function (link) {
     if (link.active) (link.brandIds || []).forEach(function (id) { activeLink[String(id).replace(/-/g, '')] = link; });
@@ -96,6 +108,8 @@ function apiBrandsList_() {
       return Object.assign({}, brand, {
         productCount: stats[key] ? stats[key].products : 0,
         pendingCount: stats[key] ? stats[key].pending : 0,
+        onboardTodo: onboardTodo_(brand),
+        openBilling: openBilling[key] || 0,
         link: link ? { expiry: link.expiry, lastAccess: link.lastAccess } : null
       });
     }),
@@ -109,7 +123,7 @@ function brandFilterOptions_() {
     const definition = schema.defs[key];
     return definition && definition[definition.type] && definition[definition.type].options ? definition[definition.type].options.map(function (o) { return o.name; }) : [];
   };
-  return { stage: pick('stage'), priority: pick('priority'), reClass: pick('reClass'), category: pick('category') };
+  return { stage: pick('stage'), priority: pick('priority'), reClass: pick('reClass'), category: pick('category'), onboardReady: !!(schema.ids.contractSent || schema.ids.onboardPay || schema.ids.onboardInvoice) };
 }
 
 function apiBrandDetail_(payload) {

@@ -68,20 +68,26 @@ function ensureSchemaAdditions_(report) {
   });
 }
 
-/** 상품등록 링크 DB가 없으면 브랜드 DB와 같은 페이지 아래에 만든다. */
-function ensureLinkDatabase_(report) {
-  if (prop_(BO_SCHEMAS.link.prop)) return;
-  const brandSourceId = notionSourceId_('brand');
+/** 운영센터가 만드는 DB를 둘 Notion 페이지: 설정값이 없으면 브랜드 DB가 있는 페이지. */
+function notionParentPageId_(label) {
   let parentPageId = prop_(BO.PROPS.PARENT_PAGE_ID);
   if (!parentPageId) {
-    const source = notionSource_(brandSourceId);
+    const source = notionSource_(notionSourceId_('brand'));
     const databaseId = source.parent && source.parent.database_id;
     if (databaseId) {
       const database = notionRequest_('get', '/databases/' + encodeURIComponent(databaseId));
       if (database.parent && database.parent.type === 'page_id') parentPageId = database.parent.page_id;
     }
   }
-  if (!parentPageId) throw userError_('상품등록 링크 DB를 만들 Notion 페이지를 찾지 못했습니다. 스크립트 속성 BO_NOTION_PARENT_PAGE_ID를 설정해 주세요.');
+  if (!parentPageId) throw userError_(label + ' DB를 만들 Notion 페이지를 찾지 못했습니다. 스크립트 속성 BO_NOTION_PARENT_PAGE_ID를 설정해 주세요.');
+  return parentPageId;
+}
+
+/** 상품등록 링크 DB가 없으면 브랜드 DB와 같은 페이지 아래에 만든다. */
+function ensureLinkDatabase_(report) {
+  if (prop_(BO_SCHEMAS.link.prop)) return;
+  const brandSourceId = notionSourceId_('brand');
+  const parentPageId = notionParentPageId_('상품등록 링크');
   const database = notionRequest_('post', '/databases', {
     parent: { type: 'page_id', page_id: parentPageId },
     title: [{ type: 'text', text: { content: '상품등록 링크' } }],
@@ -103,6 +109,40 @@ function ensureLinkDatabase_(report) {
   if (!sourceId) throw userError_('상품등록 링크 DB를 만들었지만 데이터 소스 ID를 확인하지 못했습니다. Notion에서 확인해 주세요.');
   props_().setProperty(BO_SCHEMAS.link.prop, sourceId);
   report.push('생성: Notion "상품등록 링크" DB');
+}
+
+/** 계산서 · 입금 내역 DB가 없으면 브랜드 DB와 같은 페이지 아래에 만든다. */
+function ensureBillingDatabase_(report) {
+  if (prop_(BO_SCHEMAS.billing.prop)) return;
+  const brandSourceId = notionSourceId_('brand');
+  const parentPageId = notionParentPageId_('계산서 · 입금 내역');
+  const options = function (list, colors) { return { options: list.map(function (name, i) { return { name: name, color: colors[i] || 'default' }; }) }; };
+  const B = BO.BILLING;
+  const database = notionRequest_('post', '/databases', {
+    parent: { type: 'page_id', page_id: parentPageId },
+    title: [{ type: 'text', text: { content: BO_SCHEMAS.billing.label } }],
+    initial_data_source: {
+      properties: {
+        '내역명': { title: {} },
+        '브랜드': { relation: { data_source_id: brandSourceId, type: 'single_property', single_property: {} } },
+        '구분': { select: options(B.KINDS, ['purple', 'blue', 'green', 'gray']) },
+        '방향': { select: options(B.DIRECTIONS, ['green', 'orange']) },
+        '금액': { number: { format: 'won' } },
+        '기준일': { date: {} },
+        '입금 상태': { select: options([B.PAY.WAIT, B.PAY.DONE, B.PAY.NONE], ['yellow', 'green', 'default']) },
+        '입금일': { date: {} },
+        '계산서 상태': { select: options([B.INVOICE.WAIT, B.INVOICE.DONE, B.INVOICE.NONE], ['yellow', 'green', 'default']) },
+        '계산서 발행일': { date: {} },
+        '메모': { rich_text: {} },
+        '등록자': { rich_text: {} },
+        '등록일': { created_time: {} }
+      }
+    }
+  });
+  const sourceId = database.data_sources && database.data_sources[0] && database.data_sources[0].id;
+  if (!sourceId) throw userError_('계산서 · 입금 내역 DB를 만들었지만 데이터 소스 ID를 확인하지 못했습니다. Notion에서 확인해 주세요.');
+  props_().setProperty(BO_SCHEMAS.billing.prop, sourceId);
+  report.push('생성: Notion "계산서 · 입금 내역" DB');
 }
 
 function installTriggers_(report) {
@@ -145,6 +185,7 @@ function setupSystem_() {
   step('관련 DB 자동 연결', discoverSources_);
   step('Notion 속성 추가', ensureSchemaAdditions_);
   step('상품등록 링크 DB 만들기', ensureLinkDatabase_);
+  step('계산서 · 입금 내역 DB 만들기', ensureBillingDatabase_);
   clearSchemaMemo_();
   step('트리거 설치', installTriggers_);
   const health = healthCheck_();
@@ -172,7 +213,7 @@ function healthCheck_() {
       const required = kind === 'brand' || kind === 'product' || kind === 'link';
       try {
         const schema = notionSchema_(kind, true);
-        if (!schema) { add(spec.label, required ? '오류' : '주의', spec.prop + ' 미설정' + (kind === 'link' ? ' — 초기 설정이 만듭니다. ' + BO_CONNECT_HINT : required ? '' : ' (관련 화면이 비활성화됩니다)')); return; }
+        if (!schema) { add(spec.label, required ? '오류' : '주의', spec.prop + ' 미설정' + (kind === 'link' || kind === 'billing' ? ' — 초기 설정이 만듭니다. ' + BO_CONNECT_HINT : required ? '' : ' (관련 화면이 비활성화됩니다)')); return; }
         const missingOptional = Object.keys(spec.fields).filter(function (key) { return !schema.ids[key]; }).map(function (key) { return spec.fields[key][1][0]; });
         add(spec.label, missingOptional.length && (kind === 'product' || kind === 'brand') ? '주의' : '정상',
           missingOptional.length ? '없는 선택 속성: ' + missingOptional.slice(0, 6).join(', ') : '연결됨');

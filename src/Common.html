@@ -65,7 +65,8 @@ const Fmt = {
 const STATUS_TONE = {
   '승인 완료': 'ok', '반영 완료': 'ok', '사용 중': 'ok', '정상': 'ok', '확정': 'ok', '입점 완료': 'ok', '운영 중': 'ok', '완료': 'ok', '수령 완료': 'info',
   '검수 대기': 'warn', '변경 요청': 'warn', '주의': 'warn', '접수·검토': 'info', '입점 예정': 'info', '회신 대기': 'info',
-  '보완 필요': 'bad', '반려': 'bad', '오류': 'bad', '중지': '', '보류': '', '판매 중단': 'bad', '만료': 'bad'
+  '보완 필요': 'bad', '반려': 'bad', '오류': 'bad', '중지': '', '보류': '', '판매 중단': 'bad', '만료': 'bad',
+  '미발송': 'warn', '발송 완료': 'info', '서명 완료': 'ok', '입금 대기': 'warn', '입금 완료': 'ok', '발행 대기': 'warn', '발행 완료': 'ok', '해당 없음': ''
 };
 function pill(text, tone) {
   if (!text) return '<span class="muted">—</span>';
