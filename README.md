@@ -25,7 +25,7 @@
 - **운영센터(직원)**: 웹앱 주소. `BO_ADMIN_EMAILS`에 있는 Google 계정만 사용 가능.
   홈 · 입점 신청 · 브랜드 · 상품 · 검수 · 재고 · 설정
 - **상품등록센터(브랜드)**: `?token=` 링크. 로그인 없이 자기 브랜드 상품만 등록·수정 요청·서류 제출.
-  `https://partner.beautyora.kr`(Netlify)에서 같은 화면을 열 수 있습니다. 설정: `docs/PARTNER_DOMAIN_GUIDE.md`
+  `https://partner.beautyora.kr`(Cloudflare Pages)에서 같은 화면을 열 수 있습니다. 설정: `docs/PARTNER_DOMAIN_GUIDE.md`
 
 ## 디렉터리
 
@@ -51,7 +51,7 @@ src/
   90_Main.gs        doGet, 단일 API 진입점 api(), 브랜드 주소용 doPost(브랜드 작업만)
   Index.html / Styles.html / Common.html / Admin.html / Partner.html
 scripts/
-  build-partner-web.cjs  상품등록센터 화면을 Netlify용 정적 페이지로 묶음 (netlify.toml)
+  build-partner-web.cjs  상품등록센터 화면을 정적 페이지로 묶음 (Cloudflare Pages·Netlify 공통)
 tests/
   harness.cjs       가짜 Notion·Drive·Apps Script 환경
   server.test.cjs   서버 흐름·보안 테스트 (node --test)

@@ -1,17 +1,7 @@
-# 브랜드 상품등록센터(partner.beautyora.kr) 정적 페이지.
+# 브랜드 상품등록센터(partner.beautyora.kr) 정적 페이지. Cloudflare Pages도 같은 빌드 명령과 폴더를 쓴다.
 # 화면은 src/의 Apps Script 화면을 그대로 묶고, 서버 호출은 브랜드용 웹앱(doPost)으로 보낸다.
-# 브랜드용 웹앱 주소를 바꾸려면 Netlify 환경 변수 BO_PARTNER_API_URL을 설정한다.
+# 보안 헤더는 빌드가 만드는 dist/partner/_headers에 있다(두 호스팅 공통).
+# 브랜드용 웹앱 주소를 바꾸려면 환경 변수 BO_PARTNER_API_URL을 설정한다.
 [build]
   command = "node scripts/build-partner-web.cjs dist/partner"
   publish = "dist/partner"
-
-[[headers]]
-  for = "/*"
-  [headers.values]
-    # 주소창의 링크 토큰이 다른 사이트로 새지 않게 한다.
-    Referrer-Policy = "no-referrer"
-    X-Frame-Options = "DENY"
-    X-Content-Type-Options = "nosniff"
-    X-Robots-Tag = "noindex, nofollow"
-    Permissions-Policy = "camera=(), microphone=(), geolocation=()"
-    Cache-Control = "no-cache"

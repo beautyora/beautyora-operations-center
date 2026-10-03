@@ -1,6 +1,6 @@
 'use strict';
 /**
- * 브랜드 상품등록센터를 Netlify(partner.beautyora.kr)에 올릴 정적 페이지로 만든다.
+ * 브랜드 상품등록센터를 partner.beautyora.kr(Cloudflare Pages 또는 Netlify)에 올릴 정적 페이지로 만든다.
  * Apps Script와 같은 화면(src/Index.html + Common + Partner)을 그대로 쓰고,
  * 서버 호출만 google.script.run 대신 브랜드용 웹앱(doPost)으로 보낸다.
  *
@@ -62,4 +62,15 @@ fs.mkdirSync(OUT, { recursive: true });
 fs.writeFileSync(path.join(OUT, 'index.html'), html);
 fs.writeFileSync(path.join(OUT, 'favicon.svg'), '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#111"/><text x="32" y="43" font-family="Arial,Helvetica,sans-serif" font-size="30" font-weight="700" text-anchor="middle" fill="#fff">B</text></svg>');
 fs.writeFileSync(path.join(OUT, 'robots.txt'), 'User-agent: *\nDisallow: /\n');
+// Netlify와 Cloudflare Pages가 똑같이 읽는 헤더 파일. 주소창의 링크 토큰이 다른 사이트로 새지 않게 한다.
+fs.writeFileSync(path.join(OUT, '_headers'), [
+  '/*',
+  '  Referrer-Policy: no-referrer',
+  '  X-Frame-Options: DENY',
+  '  X-Content-Type-Options: nosniff',
+  '  X-Robots-Tag: noindex, nofollow',
+  '  Permissions-Policy: camera=(), microphone=(), geolocation=()',
+  '  Cache-Control: no-cache',
+  ''
+].join('\n'));
 console.log('상품등록센터 페이지를 만들었습니다: ' + path.relative(ROOT, OUT) + ' (API ' + API_URL + ')');
