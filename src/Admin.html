@@ -46,7 +46,7 @@ function renderShell() {
       '<aside class="sidebar" id="sidebar" aria-label="메뉴">' +
         '<div class="logo">' + LOGO_SVG + '<span>운영센터</span></div>' +
         '<nav class="nav" id="nav"></nav>' +
-        '<div class="sidebar-foot"><span class="ellipsis" title="' + esc(Admin.user.email) + '">' + esc(Admin.user.email) + '</span><span>v' + esc(App.version) + ' · 데이터 원본: Notion</span></div>' +
+        '<div class="sidebar-foot"><span class="ellipsis" title="' + esc(Admin.user.email) + '">' + esc(Admin.user.email) + '</span><span>v' + esc(App.version) + ' · 데이터 원본: Notion</span>' + (Auth.enabled() ? '<button class="btn btn-ghost btn-sm" id="signOut" type="button">로그아웃</button>' : '') + '</div>' +
       '</aside>' +
       '<div class="main">' +
         '<header class="topbar"><button class="btn btn-ghost btn-icon menu-toggle" id="menuToggle" aria-label="메뉴 열기">' + icon('menu') + '</button>' +
@@ -57,6 +57,7 @@ function renderShell() {
       '</div>' +
     '</div>';
   $('#menuToggle').addEventListener('click', () => $('#sidebar').classList.toggle('open'));
+  if ($('#signOut')) $('#signOut').addEventListener('click', () => Auth.signOut());
   $('#refreshBtn').addEventListener('click', (e) => busy(e.currentTarget, async () => {
     await Api.call('system.refresh');
     Api.invalidate();

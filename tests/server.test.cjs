@@ -525,7 +525,7 @@ test('only the audited entry points are callable from google.script.run', () => 
   assert.throws(() => env.call('runHealthCheck'), /계정/);
 });
 
-test('doPost (brand domain) serves partner actions with a token and never admin actions', () => {
+test('doPost (brand domain) serves partner actions with a token and admin actions only with a Google sign-in', () => {
   const { env } = setup();
   ok(env.api('system.setup'));
   const token = issueToken(env);
@@ -535,14 +535,54 @@ test('doPost (brand domain) serves partner actions with a token and never admin 
   const noToken = env.post({ action: 'partner.bootstrap', payload: {} });
   assert.equal(noToken.ok, false);
   assert.equal(noToken.code, 'BAD_TOKEN');
-  // The request runs as the owner, so even a signed-in admin must not reach admin actions this way.
+  // The request runs as the owner, so a brand token or the browser's admin session must not reach admin actions.
   env.setUser('admin@beautyora.test');
   ['brands.list', 'links.issue', 'system.setup', 'dashboard'].forEach((action) => {
     const res = env.post({ action, payload: { code: 'BO-0001', days: 30 }, token });
     assert.equal(res.ok, false, action);
-    assert.equal(res.code, 'BAD_REQUEST', action);
+    assert.equal(res.code, 'NEED_LOGIN', action);
   });
+  assert.equal(env.post({ action: 'nope', payload: {}, token }).code, 'BAD_REQUEST');
   ['', 'not json', '[]', 'null', '{"action":"__proto__"}'].forEach((body) => assert.equal(env.post(body).ok, false, body));
+});
+
+test('doPost admin actions require a verified Google sign-in, never the browser session', () => {
+  const { env } = setup();
+  ok(env.api('system.setup'));
+  // The browser's Google session (cookies) is an admin, but that must not be enough on the public endpoint.
+  env.setUser('admin@beautyora.test');
+  const noToken = env.post({ action: 'brands.list', payload: {} });
+  assert.equal(noToken.ok, false);
+  assert.equal(noToken.code, 'NEED_LOGIN');
+
+  const boot = env.post({ action: 'admin.bootstrap', payload: {}, idToken: env.idToken('Second@Beautyora.test') });
+  assert.equal(boot.ok, true, boot.message);
+  assert.equal(boot.data.user.email, 'second@beautyora.test', 'the signed-in account, not the session');
+  const link = env.post({ action: 'links.issue', payload: { code: 'BO-0001', days: 30 }, idToken: env.idToken('second@beautyora.test') });
+  assert.equal(link.ok, true, link.message);
+  assert.equal(env.call('activeEmail_'), 'admin@beautyora.test', 'signed-in email is cleared after the request');
+
+  const stranger = env.post({ action: 'brands.list', payload: {}, idToken: env.idToken('stranger@gmail.com') });
+  assert.equal(stranger.code, 'NOT_ADMIN');
+  const rejected = [
+    env.idToken('admin@beautyora.test', { aud: 'other-app.apps.googleusercontent.com' }),
+    env.idToken('admin@beautyora.test', { iss: 'https://evil.example' }),
+    env.idToken('admin@beautyora.test', { email_verified: 'false' }),
+    env.idToken('admin@beautyora.test', { exp: String(Math.floor(Date.now() / 1000) - 10) }),
+    env.idToken('admin@beautyora.test', { sig: 'bad' }),
+    'not-a-token', ''
+  ];
+  rejected.forEach((idToken, i) => assert.equal(env.post({ action: 'brands.list', payload: {}, idToken }).code, 'NEED_LOGIN', 'case ' + i));
+
+  // A verified token is cached, so Google is asked once per token.
+  const token = env.idToken('admin@beautyora.test');
+  const before = env.tokenChecks.length;
+  ok(env.post({ action: 'dashboard', payload: {}, idToken: token }));
+  ok(env.post({ action: 'dashboard', payload: {}, idToken: token }));
+  assert.equal(env.tokenChecks.length - before, 1);
+
+  delete env.props.BO_GOOGLE_CLIENT_ID;
+  assert.equal(env.post({ action: 'brands.list', payload: {}, idToken: env.idToken('admin@beautyora.test') }).code, 'NO_CLIENT_ID');
 });
 
 test('no Google Sheets dependency remains outside the one-time migration', () => {

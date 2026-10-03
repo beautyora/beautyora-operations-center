@@ -391,6 +391,7 @@ function createEnv(options) {
   const cache = new Map();
   const triggers = [];
   const mail = [];
+  const tokenChecks = [];
   const user = { active: options.user || 'admin@beautyora.test', effective: 'owner@beautyora.test' };
   let form = null;
   const legacyBooks = {};
@@ -436,6 +437,13 @@ function createEnv(options) {
           throw e;
         }
       }
+      if (url.indexOf('https://oauth2.googleapis.com/tokeninfo?id_token=') === 0) {
+        // Fake Google tokeninfo: "<header>.<base64url claims>.<sig>"; sig "bad" means Google rejects it.
+        tokenChecks.push(url);
+        const parts = decodeURIComponent(url.split('id_token=')[1]).split('.');
+        if (parts[2] === 'bad') return response(400, { error: 'invalid_token' });
+        return response(200, JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')));
+      }
       if (url.indexOf('https://thumb.test/') === 0) return { getResponseCode: () => 200, getBlob: () => blob(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'), 'image/png'), getHeaders: () => ({}) };
       throw new Error('Unexpected fetch ' + url);
     } },
@@ -480,6 +488,9 @@ function createEnv(options) {
     context, notion, drive, props, cache, triggers, mail, user,
     call: (name, ...args) => context.__run(name, args),
     api: (action, payload, token) => context.__run('api', [{ action, payload: payload || {}, token }]),
+    tokenChecks,
+    /** A Google ID token as the fake tokeninfo understands it. */
+    idToken: (email, claims) => ['eyJhbGciOiJSUzI1NiJ9', Buffer.from(JSON.stringify(Object.assign({ iss: 'https://accounts.google.com', aud: props.BO_GOOGLE_CLIENT_ID, email, email_verified: 'true', exp: String(Math.floor(Date.now() / 1000) + 3600) }, claims || {}))).toString('base64url'), (claims && claims.sig) || 'sig'].join('.'),
     post: (body) => JSON.parse(context.__run('doPost', [{ parameter: {}, postData: { type: 'text/plain', contents: typeof body === 'string' ? body : JSON.stringify(body) } }]).getContent()),
     setUser: (email) => { user.active = email; },
     clearCache: () => cache.clear(),
@@ -553,6 +564,7 @@ function seed(env, opts) {
   n.sources[brandId].properties['공급조건'] = { id: 'rel1', name: '공급조건', type: 'relation', relation: { data_source_id: termsId } };
 
   Object.assign(env.props, {
+    BO_GOOGLE_CLIENT_ID: '1234567890-testclient.apps.googleusercontent.com',
     BO_NOTION_TOKEN: 'secret-test-token', BO_ADMIN_EMAILS: 'admin@beautyora.test, second@beautyora.test',
     BO_NOTION_BRAND_DATA_SOURCE_ID: brandId, BO_NOTION_PRODUCT_DATA_SOURCE_ID: productId,
     BO_NOTION_ACTIVITY_DATA_SOURCE_ID: activityId, BO_ROOT_FOLDER_ID: env.drive.root,

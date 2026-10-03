@@ -6,8 +6,10 @@ const App = {
   // 브랜드 전용 주소(Netlify)에서는 토큰이 주소창에만 있다.
   token: document.body.dataset.token || String(new URLSearchParams(location.search).get('token') || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 64),
   version: document.body.dataset.version || '',
-  // 비어 있으면 google.script.run, 있으면 이 웹앱 주소로 fetch(브랜드 전용 주소).
-  apiUrl: document.body.dataset.api || ''
+  // 비어 있으면 google.script.run, 있으면 이 웹앱 주소로 fetch(뷰티오라 주소의 정적 페이지).
+  apiUrl: document.body.dataset.api || '',
+  // 운영센터 전용 주소(ops.beautyora.kr)의 Google 로그인 클라이언트 ID.
+  clientId: document.body.dataset.clientId || ''
 };
 const $ = (s, root) => (root || document).querySelector(s);
 const $$ = (s, root) => Array.from((root || document).querySelectorAll(s));
@@ -20,7 +22,7 @@ const Api = {
   cache: new Map(),
   call(action, payload, options) {
     options = options || {};
-    const run = () => (App.apiUrl ? Api.post(action, payload) : new Promise((resolve, reject) => {
+    const run = () => (App.apiUrl ? Api.signedPost(action, payload) : new Promise((resolve, reject) => {
       if (!window.google || !google.script || !google.script.run) { reject(new Error('Google Apps Script 환경에서만 동작합니다.')); return; }
       google.script.run
         .withSuccessHandler((res) => {
@@ -33,13 +35,24 @@ const Api = {
     // 네트워크 오류만 한 번 다시 시도한다(쓰기 요청은 요청 ID로 중복 저장을 막는다).
     return run().catch((e) => (e.network && !options.noRetry ? new Promise((r) => setTimeout(r, 800)).then(run) : Promise.reject(e)));
   },
-  /** 브랜드 전용 주소에서 Apps Script 웹앱(doPost)을 부른다. text/plain이라 사전 확인 요청이 없다. */
+  /** 운영센터 주소에서는 Google 로그인을 먼저 확인하고, 만료되었다고 하면 다시 로그인한 뒤 한 번 더 보낸다. */
+  async signedPost(action, payload) {
+    if (!Auth.enabled()) return Api.post(action, payload);
+    await Auth.ensure();
+    return Api.post(action, payload).catch(async (e) => {
+      if (e.code !== 'NEED_LOGIN') throw e;
+      Auth.clear();
+      await Auth.ensure();
+      return Api.post(action, payload);
+    });
+  },
+  /** 뷰티오라 주소에서 Apps Script 웹앱(doPost)을 부른다. text/plain이라 사전 확인 요청이 없다. */
   post(action, payload) {
     const network = (m) => { const e = new Error(m); e.network = true; return e; };
     return fetch(App.apiUrl, {
       method: 'POST', redirect: 'follow', credentials: 'omit',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action, payload: payload || {}, token: App.token })
+      body: JSON.stringify({ action, payload: payload || {}, token: App.token, idToken: Auth.token || undefined })
     }).catch(() => Promise.reject(network('인터넷 연결이 불안정합니다. 잠시 후 다시 시도해 주세요.')))
       .then((r) => r.json().catch(() => Promise.reject(network('서버 응답을 읽지 못했습니다. 잠시 후 다시 시도해 주세요.'))))
       .then((res) => {
@@ -280,6 +293,64 @@ function fallbackCopy(text) {
 }
 
 /** 저장소 접근이 막힌 브라우저에서도 동작하도록 감싼다. */
+/* ---------- 운영센터 주소의 Google 로그인 (Google Identity Services) ----------
+ * 로그인하면 Google이 서명한 ID 토큰(약 1시간 유효)을 받아 요청마다 함께 보낸다.
+ * 서버(doPost)는 이 토큰을 Google에 확인한 뒤 BO_ADMIN_EMAILS와 비교한다. */
+const Auth = {
+  token: '',
+  key: 'bo.idToken',
+  pending: null,
+  enabled() { return App.view === 'admin' && !!App.apiUrl && !!App.clientId; },
+  expiresAt(token) {
+    try { return JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).exp * 1000; } catch (e) { return 0; }
+  },
+  valid() { return !!Auth.token && Auth.expiresAt(Auth.token) > Date.now() + 60000; },
+  clear() { Auth.token = ''; try { sessionStorage.removeItem(Auth.key); } catch (e) { /* 무시 */ } },
+  /** 유효한 로그인이 있을 때까지 기다린다. 없으면 로그인 창을 띄운다. */
+  ensure() {
+    if (!Auth.token) { try { Auth.token = sessionStorage.getItem(Auth.key) || ''; } catch (e) { /* 무시 */ } }
+    if (Auth.valid()) return Promise.resolve(Auth.token);
+    Auth.token = '';
+    if (!Auth.pending) Auth.pending = Auth.signIn().finally(() => { Auth.pending = null; });
+    return Auth.pending;
+  },
+  loadScript() {
+    if (window.google && google.accounts && google.accounts.id) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://accounts.google.com/gsi/client'; s.async = true;
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error('Google 로그인을 불러오지 못했습니다. 인터넷 연결을 확인해 주세요.'));
+      document.head.appendChild(s);
+    });
+  },
+  signIn() {
+    return Auth.loadScript().then(() => new Promise((resolve) => {
+      const box = document.createElement('div');
+      box.className = 'auth-overlay';
+      box.innerHTML = '<div class="auth-card" role="dialog" aria-modal="true" aria-labelledby="authTitle">' + LOGO_SVG +
+        '<strong id="authTitle">운영센터 로그인</strong><p>뷰티오라 관리자로 등록된 Google 계정으로 로그인해 주세요.</p><div id="authButton"></div></div>';
+      document.body.appendChild(box);
+      google.accounts.id.initialize({
+        client_id: App.clientId, auto_select: true, cancel_on_tap_outside: false, use_fedcm_for_prompt: true,
+        callback: (res) => {
+          Auth.token = String((res && res.credential) || '');
+          try { sessionStorage.setItem(Auth.key, Auth.token); } catch (e) { /* 무시 */ }
+          box.remove();
+          resolve(Auth.token);
+        }
+      });
+      google.accounts.id.renderButton($('#authButton', box), { theme: 'outline', size: 'large', text: 'signin_with', locale: 'ko' });
+      google.accounts.id.prompt();
+    }));
+  },
+  signOut() {
+    Auth.clear();
+    try { google.accounts.id.disableAutoSelect(); } catch (e) { /* 무시 */ }
+    location.reload();
+  }
+};
+
 const Store = {
   get(key, fallback) { try { const v = window.localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch (e) { return fallback; } },
   set(key, value) { try { window.localStorage.setItem(key, JSON.stringify(value)); return true; } catch (e) { return false; } },
