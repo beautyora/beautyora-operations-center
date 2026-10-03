@@ -27,11 +27,59 @@ function doPost(e) {
   let request = null;
   try { request = JSON.parse(String(e && e.postData && e.postData.contents || '')); } catch (ignored) { request = null; }
   const action = request && typeof request === 'object' ? String(request.action || '') : '';
-  let result;
-  if (hasOwn_(partnerActions_(), action)) result = api(request);
-  else if (hasOwn_(adminActions_(), action)) result = signedInApi_(request);
+  let result, owner = '';
+  if (action === 'response.part') result = responsePart_(request);
+  else if (hasOwn_(partnerActions_(), action)) { result = api(request); owner = 'p'; }
+  else if (hasOwn_(adminActions_(), action)) { result = signedInApi_(request); owner = 'a'; }
   else result = { ok: false, message: '지원하지 않는 요청입니다.', code: 'BAD_REQUEST' };
-  return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
+  let text = JSON.stringify(result);
+  if (owner && result.ok && text.length > BO_POST_PART_CHARS_) {
+    try { text = JSON.stringify(packResponse_(text, responseOwner_(owner, request))); } catch (error) { logError_('doPost:pack', error); }
+  }
+  return ContentService.createTextOutput(text).setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * doPost 응답은 Google이 script.googleusercontent.com 주소로 넘겨 주는데, 응답이 크면(브랜드·상품·재고 전체 목록)
+ * 그 주소가 404 "현재 파일을 열 수 없습니다"를 돌려준다. 실행 기록에는 '완료됨'으로 남아 서버 오류로 보이지 않는다.
+ * 그래서 큰 응답은 gzip으로 줄여 조각으로 나누고, 첫 조각만 바로 보낸다. 나머지 조각은 'response.part'로 받아 간다.
+ * (51KB 응답은 정상으로 확인되어 조각은 그보다 작게 둔다.)
+ */
+var BO_POST_PART_CHARS_ = 40000;
+
+function packResponse_(text, owner) {
+  if (!owner) throw new Error('응답을 받을 사용자를 확인하지 못했습니다.');
+  const encoded = Utilities.base64Encode(Utilities.gzip(Utilities.newBlob(text, 'application/json')).getBytes());
+  const size = BO_POST_PART_CHARS_;
+  const count = Math.ceil(encoded.length / size);
+  const id = uuid_('P');
+  if (count > 1) {
+    const parts = {};
+    for (let i = 1; i < count; i++) parts[cacheKey_('part:' + id + ':' + i)] = encoded.slice(i * size, (i + 1) * size);
+    cache_().putAll(parts, 600);
+    cache_().put(cacheKey_('part:' + id), JSON.stringify({ owner: owner, count: count }), 600);
+  }
+  return { ok: true, packed: { id: id, count: count }, part: encoded.slice(0, size) };
+}
+
+/** 나머지 조각. 처음 요청과 같은 브랜드 링크 또는 같은 Google 계정만 받을 수 있다. */
+function responsePart_(request) {
+  const payload = request.payload && typeof request.payload === 'object' ? request.payload : {};
+  const id = String(payload.id || '');
+  const index = Number(payload.index);
+  const expired = { ok: false, message: '목록을 받는 중에 연결이 끊겼습니다. 새로 고친 뒤 다시 시도해 주세요.', code: 'PART_EXPIRED' };
+  if (!/^P[0-9A-F]{20}$/.test(id) || !(index >= 1) || index !== Math.floor(index)) return expired;
+  let meta = null;
+  try { meta = JSON.parse(cache_().get(cacheKey_('part:' + id)) || 'null'); } catch (ignored) { meta = null; }
+  if (!meta || !meta.owner || index >= meta.count) return expired;
+  if (responseOwner_(meta.owner.charAt(0), request) !== meta.owner) return expired;
+  const part = cache_().get(cacheKey_('part:' + id + ':' + index));
+  return part == null ? expired : { ok: true, part: part };
+}
+
+function responseOwner_(kind, request) {
+  if (kind === 'p') return request.token ? 'p:' + sha256_(String(request.token)) : '';
+  try { return 'a:' + verifyGoogleIdToken_(request.idToken); } catch (ignored) { return ''; }
 }
 
 /** Google 로그인을 확인한 뒤 그 이메일로 관리자 작업을 처리한다. */

@@ -585,6 +585,51 @@ test('doPost admin actions require a verified Google sign-in, never the browser 
   assert.equal(env.post({ action: 'brands.list', payload: {}, idToken: env.idToken('admin@beautyora.test') }).code, 'NO_CLIENT_ID');
 });
 
+test('doPost splits large responses into gzip parts that only the same sign-in or link can fetch', () => {
+  const zlib = require('zlib');
+  const { env } = setup();
+  ok(env.api('system.setup'));
+  const idToken = env.idToken('admin@beautyora.test');
+  const plain = env.post({ action: 'brands.list', payload: {}, idToken });
+  assert.equal(plain.ok, true, plain.message);
+  assert.equal(plain.packed, undefined, 'small responses are sent as they are');
+
+  env.context.BO_POST_PART_CHARS_ = 200;
+  const first = env.post({ action: 'brands.list', payload: {}, idToken });
+  assert.equal(first.ok, true, first.message);
+  assert.ok(first.packed.count > 1, 'split into several parts');
+  assert.equal(first.data, undefined);
+  const rest = [];
+  for (let index = 1; index < first.packed.count; index++) {
+    const part = env.post({ action: 'response.part', payload: { id: first.packed.id, index }, idToken });
+    assert.equal(part.ok, true, part.message);
+    assert.ok(part.part.length <= 200);
+    rest.push(part.part);
+  }
+  const joined = JSON.parse(zlib.gunzipSync(Buffer.from([first.part].concat(rest).join(''), 'base64')).toString('utf8'));
+  assert.deepEqual(joined, plain);
+
+  // Another account, no sign-in, a brand link, or a made-up part cannot read it.
+  const part1 = { id: first.packed.id, index: 1 };
+  assert.equal(env.post({ action: 'response.part', payload: part1, idToken: env.idToken('second@beautyora.test') }).code, 'PART_EXPIRED');
+  assert.equal(env.post({ action: 'response.part', payload: part1 }).code, 'PART_EXPIRED');
+  assert.equal(env.post({ action: 'response.part', payload: part1, token: issueToken(env) }).code, 'PART_EXPIRED');
+  [{ id: first.packed.id, index: first.packed.count }, { id: first.packed.id, index: 0 }, { id: 'P' + '0'.repeat(20), index: 1 }, { id: '../x', index: 1 }, {}]
+    .forEach((payload) => assert.equal(env.post({ action: 'response.part', payload, idToken }).code, 'PART_EXPIRED', JSON.stringify(payload)));
+
+  // Brand responses are split the same way and tied to the link token.
+  const token = issueToken(env);
+  const boot = env.post({ action: 'partner.bootstrap', payload: {}, token });
+  assert.ok(boot.packed && boot.packed.count > 1);
+  assert.equal(env.post({ action: 'response.part', payload: { id: boot.packed.id, index: 1 }, token }).ok, true);
+  assert.equal(env.post({ action: 'response.part', payload: { id: boot.packed.id, index: 1 }, token: 'f'.repeat(48) }).code, 'PART_EXPIRED');
+  assert.equal(env.post({ action: 'response.part', payload: { id: boot.packed.id, index: 1 }, idToken }).code, 'PART_EXPIRED');
+
+  // Errors stay small and readable.
+  const denied = env.post({ action: 'brands.list', payload: {}, idToken: env.idToken('stranger@gmail.com') });
+  assert.equal(denied.code, 'NOT_ADMIN');
+});
+
 test('no Google Sheets dependency remains outside the one-time migration', () => {
   const fs = require('fs');
   const path = require('path');

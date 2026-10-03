@@ -321,6 +321,18 @@ const shot = async (page, name) => { await page.waitForTimeout(900); return page
     assert.match(await ops.textContent('.sidebar-foot'), /admin@beautyora\.test/);
     assert.ok(opsBodies.every((b) => b.idToken), 'every admin request carries the Google sign-in');
     await shot(ops, '22-ops-home');
+    // Large lists come back as gzip parts (Google's doPost relay drops big responses); the screen joins them.
+    env.context.BO_POST_PART_CHARS_ = 1500;
+    const partsBefore = opsBodies.filter((b) => b.action === 'response.part').length;
+    for (const [path, selector] of [['brands', '#btable tr[data-code]'], ['products', '#ptable tr[data-page]'], ['inventory', '#itable']]) {
+      await ops.click('a[data-path="' + path + '"]');
+      await ops.waitForSelector(selector);
+    }
+    assert.ok(opsBodies.filter((b) => b.action === 'response.part').length > partsBefore, 'large lists were fetched in parts');
+    assert.equal(await ops.locator('text=불러오지 못했습니다').count(), 0);
+    env.context.BO_POST_PART_CHARS_ = 40000;
+    await ops.click('a[data-path="home"]');
+    await ops.waitForSelector('.stats .stat');
     await ops.reload();
     await ops.waitForSelector('.stats .stat');
     assert.equal(await ops.locator('.auth-overlay').count(), 0, 'sign-in survives a reload in the same tab');

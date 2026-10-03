@@ -425,6 +425,7 @@ function createEnv(options) {
       base64Encode: (bytes) => Buffer.from(bytes.map((b) => b & 255)).toString('base64'),
       base64EncodeWebSafe: (s) => Buffer.from(String(s)).toString('base64').replace(/\+/g, '-').replace(/\//g, '_'),
       newBlob: (bytes, type, name) => blob(Array.isArray(bytes) ? Buffer.from(bytes.map((b) => b & 255)) : Buffer.from(String(bytes || '')), type, name),
+      gzip: (b) => blob(require('zlib').gzipSync(Buffer.from(b.getBytes().map((x) => x & 255))), 'application/x-gzip'),
       sleep: () => {}
     },
     UrlFetchApp: { fetch: (url, opts) => {
