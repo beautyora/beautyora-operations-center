@@ -48,17 +48,32 @@ const Api = {
   },
   /** 뷰티오라 주소에서 Apps Script 웹앱(doPost)을 부른다. text/plain이라 사전 확인 요청이 없다. */
   post(action, payload) {
+    return Api.send(action, payload)
+      .then((res) => (res && res.ok && res.packed ? Api.unpack(res) : res))
+      .then((res) => {
+        if (res && res.ok) return res.data;
+        const e = new Error((res && res.message) || '응답을 받지 못했습니다.'); e.code = res && res.code; throw e;
+      });
+  },
+  send(action, payload) {
     const network = (m) => { const e = new Error(m); e.network = true; return e; };
     return fetch(App.apiUrl, {
       method: 'POST', redirect: 'follow', credentials: 'omit',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ action, payload: payload || {}, token: App.token, idToken: Auth.token || undefined })
     }).catch(() => Promise.reject(network('인터넷 연결이 불안정합니다. 잠시 후 다시 시도해 주세요.')))
-      .then((r) => r.json().catch(() => Promise.reject(network('서버 응답을 읽지 못했습니다. 잠시 후 다시 시도해 주세요.'))))
-      .then((res) => {
-        if (res && res.ok) return res.data;
-        const e = new Error((res && res.message) || '응답을 받지 못했습니다.'); e.code = res && res.code; throw e;
-      });
+      .then((r) => r.json().catch(() => Promise.reject(network('서버 응답을 읽지 못했습니다. 잠시 후 다시 시도해 주세요.'))));
+  },
+  /** 큰 응답(전체 목록)은 서버가 gzip 조각으로 나눠 보낸다. 나머지 조각을 받아 합친 뒤 원래 응답으로 되돌린다. */
+  async unpack(res) {
+    const indexes = Array.from({ length: res.packed.count - 1 }, (_, i) => i + 1);
+    const parts = await Promise.all(indexes.map((index) => Api.send('response.part', { id: res.packed.id, index })));
+    const failed = parts.find((p) => !p || !p.ok);
+    if (failed) return failed;
+    const binary = atob([res.part].concat(parts.map((p) => p.part)).join(''));
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).json();
   },
   friendly(err) {
     const m = String((err && err.message) || err || '');
