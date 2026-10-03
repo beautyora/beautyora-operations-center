@@ -1,7 +1,14 @@
 <script>
 /* 공용: 서버 호출, 이스케이프, 서식, 알림, 모달, 서랍, 아이콘. */
 'use strict';
-const App = { view: document.body.dataset.view, token: document.body.dataset.token || '', version: document.body.dataset.version || '' };
+const App = {
+  view: document.body.dataset.view,
+  // 브랜드 전용 주소(Netlify)에서는 토큰이 주소창에만 있다.
+  token: document.body.dataset.token || String(new URLSearchParams(location.search).get('token') || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 64),
+  version: document.body.dataset.version || '',
+  // 비어 있으면 google.script.run, 있으면 이 웹앱 주소로 fetch(브랜드 전용 주소).
+  apiUrl: document.body.dataset.api || ''
+};
 const $ = (s, root) => (root || document).querySelector(s);
 const $$ = (s, root) => Array.from((root || document).querySelectorAll(s));
 const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -13,7 +20,7 @@ const Api = {
   cache: new Map(),
   call(action, payload, options) {
     options = options || {};
-    const run = () => new Promise((resolve, reject) => {
+    const run = () => (App.apiUrl ? Api.post(action, payload) : new Promise((resolve, reject) => {
       if (!window.google || !google.script || !google.script.run) { reject(new Error('Google Apps Script 환경에서만 동작합니다.')); return; }
       google.script.run
         .withSuccessHandler((res) => {
@@ -22,9 +29,23 @@ const Api = {
         })
         .withFailureHandler((err) => { const e = new Error(Api.friendly(err)); e.network = true; reject(e); })
         .api({ action, payload: payload || {}, token: App.token });
-    });
+    }));
     // 네트워크 오류만 한 번 다시 시도한다(쓰기 요청은 요청 ID로 중복 저장을 막는다).
     return run().catch((e) => (e.network && !options.noRetry ? new Promise((r) => setTimeout(r, 800)).then(run) : Promise.reject(e)));
+  },
+  /** 브랜드 전용 주소에서 Apps Script 웹앱(doPost)을 부른다. text/plain이라 사전 확인 요청이 없다. */
+  post(action, payload) {
+    const network = (m) => { const e = new Error(m); e.network = true; return e; };
+    return fetch(App.apiUrl, {
+      method: 'POST', redirect: 'follow', credentials: 'omit',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action, payload: payload || {}, token: App.token })
+    }).catch(() => Promise.reject(network('인터넷 연결이 불안정합니다. 잠시 후 다시 시도해 주세요.')))
+      .then((r) => r.json().catch(() => Promise.reject(network('서버 응답을 읽지 못했습니다. 잠시 후 다시 시도해 주세요.'))))
+      .then((res) => {
+        if (res && res.ok) return res.data;
+        const e = new Error((res && res.message) || '응답을 받지 못했습니다.'); e.code = res && res.code; throw e;
+      });
   },
   friendly(err) {
     const m = String((err && err.message) || err || '');

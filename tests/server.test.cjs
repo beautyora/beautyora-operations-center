@@ -519,10 +519,30 @@ test('only the audited entry points are callable from google.script.run', () => 
     for (const m of src.matchAll(/^function ([A-Za-z0-9_$]+)\s*\(/gm)) if (!m[1].endsWith('_')) publicFns.push(m[1]);
   });
   // Each of these checks admin/owner, a partner token, or an installed trigger before doing anything.
-  assert.deepEqual(publicFns.sort(), ['api', 'doGet', 'migrateLegacySheets', 'onBrandFormSubmit', 'runHealthCheck', 'scheduledHealthCheck', 'setupBeautyora'].sort());
+  assert.deepEqual(publicFns.sort(), ['api', 'doGet', 'doPost', 'migrateLegacySheets', 'onBrandFormSubmit', 'runHealthCheck', 'scheduledHealthCheck', 'setupBeautyora'].sort());
   const { env } = setup();
   env.setUser('');
   assert.throws(() => env.call('runHealthCheck'), /계정/);
+});
+
+test('doPost (brand domain) serves partner actions with a token and never admin actions', () => {
+  const { env } = setup();
+  ok(env.api('system.setup'));
+  const token = issueToken(env);
+  const boot = env.post({ action: 'partner.bootstrap', payload: {}, token });
+  assert.equal(boot.ok, true, boot.message);
+  assert.equal(boot.data.brand.code, 'BO-0001');
+  const noToken = env.post({ action: 'partner.bootstrap', payload: {} });
+  assert.equal(noToken.ok, false);
+  assert.equal(noToken.code, 'BAD_TOKEN');
+  // The request runs as the owner, so even a signed-in admin must not reach admin actions this way.
+  env.setUser('admin@beautyora.test');
+  ['brands.list', 'links.issue', 'system.setup', 'dashboard'].forEach((action) => {
+    const res = env.post({ action, payload: { code: 'BO-0001', days: 30 }, token });
+    assert.equal(res.ok, false, action);
+    assert.equal(res.code, 'BAD_REQUEST', action);
+  });
+  ['', 'not json', '[]', 'null', '{"action":"__proto__"}'].forEach((body) => assert.equal(env.post(body).ok, false, body));
 });
 
 test('no Google Sheets dependency remains outside the one-time migration', () => {

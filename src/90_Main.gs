@@ -17,6 +17,21 @@ function doGet(e) {
   return output;
 }
 
+/**
+ * 브랜드 전용 주소(Netlify의 partner.beautyora.kr)에서 오는 요청.
+ * 익명 요청이므로 브랜드 작업(링크 토큰 확인)만 받고 관리자 작업은 언제나 거절한다.
+ * 본문은 text/plain으로 보낸 JSON이다(브라우저의 사전 확인 요청 없이 보내기 위해).
+ */
+function doPost(e) {
+  let request = null;
+  try { request = JSON.parse(String(e && e.postData && e.postData.contents || '')); } catch (ignored) { request = null; }
+  const action = request && typeof request === 'object' ? String(request.action || '') : '';
+  const result = hasOwn_(partnerActions_(), action)
+    ? api(request)
+    : { ok: false, message: '지원하지 않는 요청입니다.', code: 'BAD_REQUEST' };
+  return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
+}
+
 /** HTML 템플릿에서만 쓰는 포함 함수(_로 끝나 화면에서 직접 부를 수 없음). */
 function include_(name) {
   return HtmlService.createHtmlOutputFromFile(name).getContent();

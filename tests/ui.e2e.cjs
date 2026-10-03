@@ -32,7 +32,13 @@ env.api('partner.upload', { kind: 'doc', category: '사업자등록증', uploadI
 env.notion.createPage(data.ids.brandId, { '브랜드명': { title: [{ text: { content: '<img src=x onerror="window.__xss=1">' } }] }, '브랜드 ID': { rich_text: [{ text: { content: 'BO-0099' } }] }, '진행 단계': { select: { name: '접수·검토' } } });
 env.api('system.refresh');
 
+// Brand domain build (Netlify): same screens, server calls go to the brand web app via fetch.
+const API_URL = 'https://script.google.com/macros/s/E2E_PARTNER/exec';
+const BRAND_DIR = path.join(OUT, '.brand-web');
+require('child_process').execFileSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'build-partner-web.cjs'), BRAND_DIR], { env: Object.assign({}, process.env, { BO_PARTNER_API_URL: API_URL }), stdio: 'ignore' });
+
 const pages = {
+  '/brand': () => fs.readFileSync(path.join(BRAND_DIR, 'index.html'), 'utf8'),
   '/admin': () => env.call('doGet', { parameter: {} }).getContent(),
   '/partner': () => env.call('doGet', { parameter: { token } }).getContent()
 };
@@ -264,6 +270,26 @@ const shot = async (page, name) => { await page.waitForTimeout(900); return page
     await shot(pm, '19-partner-mobile');
     const pOverflow = await pm.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     assert.ok(pOverflow <= 1, 'no horizontal scroll on partner mobile, got ' + pOverflow);
+
+    /* ----- Brand domain (Netlify build, fetch → doPost) ----- */
+    const bd = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    bd.on('pageerror', (e) => errors.push('brand: ' + e.message));
+    const posted = [];
+    await bd.route(API_URL, (route) => {
+      const req = route.request();
+      posted.push(req.headers()['content-type']);
+      route.fulfill({ status: 200, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify(env.post(req.postData())) });
+    });
+    assert.equal(await (await bd.goto(base + '/brand?token=' + token)).status(), 200);
+    await bd.waitForSelector('#plist');
+    assert.equal(await bd.evaluate(() => typeof window.google), 'undefined', 'no Apps Script bridge on the brand domain');
+    assert.ok(posted.length && posted.every((t) => /^text\/plain/.test(t)), 'simple CORS requests only: ' + posted.join(','));
+    await shot(bd, '20-brand-domain');
+    await bd.goto(base + '/brand');
+    await bd.waitForSelector('text=상품등록 링크가 필요합니다');
+    await bd.goto(base + '/brand?token=' + 'f'.repeat(48));
+    await bd.waitForSelector('text=상품등록센터를 열 수 없습니다');
+    await bd.close();
 
     /* ----- Bad token ----- */
     const bad = await open(browser, base + '/partner'.replace('/partner', '/partner'), { width: 800, height: 600 });

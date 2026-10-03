@@ -459,6 +459,10 @@ function createEnv(options) {
       if (file && file.converted) return { getSheets: () => [{ getDataRange: () => ({ getDisplayValues: () => options.workbookValues || [] }) }] };
       throw new Error('spreadsheet not found ' + id);
     } },
+    ContentService: {
+      MimeType: { JSON: 'application/json' },
+      createTextOutput: (text) => { const out = { text: String(text), mime: '', setMimeType(m) { out.mime = m; return out; }, getContent: () => out.text }; return out; }
+    },
     HtmlService: {
       createHtmlOutputFromFile: (name) => ({ getContent: () => fs.readFileSync(path.join(SRC, name + '.html'), 'utf8') }),
       createTemplateFromFile: (name) => template(name, context),
@@ -476,6 +480,7 @@ function createEnv(options) {
     context, notion, drive, props, cache, triggers, mail, user,
     call: (name, ...args) => context.__run(name, args),
     api: (action, payload, token) => context.__run('api', [{ action, payload: payload || {}, token }]),
+    post: (body) => JSON.parse(context.__run('doPost', [{ parameter: {}, postData: { type: 'text/plain', contents: typeof body === 'string' ? body : JSON.stringify(body) } }]).getContent()),
     setUser: (email) => { user.active = email; },
     clearCache: () => cache.clear(),
     setForm: (f) => { form = f; },
