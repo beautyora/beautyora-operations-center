@@ -36,8 +36,17 @@ env.api('system.refresh');
 const API_URL = 'https://script.google.com/macros/s/E2E_PARTNER/exec';
 const BRAND_DIR = path.join(OUT, '.brand-web');
 require('child_process').execFileSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'build-partner-web.cjs'), BRAND_DIR], { env: Object.assign({}, process.env, { BO_PARTNER_API_URL: API_URL }), stdio: 'ignore' });
+// Ops domain build: admin screens behind Google sign-in (Google Identity Services is faked below).
+const OPS_DIR = path.join(OUT, '.ops-web');
+require('child_process').execFileSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'build-web.cjs'), 'admin', OPS_DIR], { env: Object.assign({}, process.env, { BO_API_URL: API_URL, BO_GOOGLE_CLIENT_ID: env.props.BO_GOOGLE_CLIENT_ID }), stdio: 'ignore' });
+const FAKE_GSI = `window.google = window.google || {}; google.accounts = { id: {
+  initialize(o) { this.o = o; },
+  renderButton(el) { el.innerHTML = '<button id="fakeGsi" type="button">Google 계정으로 로그인</button>'; el.firstChild.onclick = () => this.o.callback({ credential: window.__ID_TOKEN }); },
+  prompt() {}, disableAutoSelect() { window.__signedOut = true; }
+} };`;
 
 const pages = {
+  '/ops': () => fs.readFileSync(path.join(OPS_DIR, 'index.html'), 'utf8'),
   '/brand': () => fs.readFileSync(path.join(BRAND_DIR, 'index.html'), 'utf8'),
   '/admin': () => env.call('doGet', { parameter: {} }).getContent(),
   '/partner': () => env.call('doGet', { parameter: { token } }).getContent()
@@ -290,6 +299,39 @@ const shot = async (page, name) => { await page.waitForTimeout(900); return page
     await bd.goto(base + '/brand?token=' + 'f'.repeat(48));
     await bd.waitForSelector('text=상품등록센터를 열 수 없습니다');
     await bd.close();
+
+    /* ----- Ops domain (Google sign-in → doPost admin actions) ----- */
+    const ops = await browser.newPage({ viewport: { width: 1366, height: 900 } });
+    ops.on('pageerror', (e) => errors.push('ops: ' + e.message));
+    const opsBodies = [];
+    await ops.route('https://accounts.google.com/gsi/client', (route) => route.fulfill({ status: 200, contentType: 'text/javascript', body: FAKE_GSI }));
+    await ops.route(API_URL, (route) => {
+      const body = route.request().postData();
+      opsBodies.push(JSON.parse(body));
+      route.fulfill({ status: 200, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify(env.post(body)) });
+    });
+    await ops.addInitScript((t) => { window.__ID_TOKEN = t; }, env.idToken('admin@beautyora.test'));
+    await ops.goto(base + '/ops');
+    await ops.waitForSelector('.auth-card #fakeGsi');
+    assert.equal(opsBodies.length, 0, 'nothing is sent before sign-in');
+    await shot(ops, '21-ops-sign-in');
+    await ops.click('#fakeGsi');
+    await ops.waitForSelector('.stats .stat');
+    assert.equal(await ops.locator('.auth-overlay').count(), 0);
+    assert.match(await ops.textContent('.sidebar-foot'), /admin@beautyora\.test/);
+    assert.ok(opsBodies.every((b) => b.idToken), 'every admin request carries the Google sign-in');
+    await shot(ops, '22-ops-home');
+    await ops.reload();
+    await ops.waitForSelector('.stats .stat');
+    assert.equal(await ops.locator('.auth-overlay').count(), 0, 'sign-in survives a reload in the same tab');
+    await ops.click('#signOut');
+    await ops.waitForSelector('.auth-card #fakeGsi');
+    // A Google account that is not in BO_ADMIN_EMAILS signs in: the server refuses it.
+    await ops.evaluate((t) => { window.__ID_TOKEN = t; }, env.idToken('stranger@gmail.com'));
+    await ops.click('#fakeGsi');
+    await ops.waitForSelector('text=운영센터를 열 수 없습니다');
+    assert.match(await ops.textContent('#root'), /관리자로 등록되어 있지 않습니다/);
+    await ops.close();
 
     /* ----- Bad token ----- */
     const bad = await open(browser, base + '/partner'.replace('/partner', '/partner'), { width: 800, height: 600 });

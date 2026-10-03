@@ -253,6 +253,7 @@ function healthCheck_() {
   else if (handlers.indexOf('scheduledHealthCheck') < 0) add('트리거', '주의', '정기 연결 점검 트리거가 없습니다. 초기 설정을 실행해 주세요.');
   else add('트리거', '정상', handlers.length + '개 설치됨');
   add('브랜드용 주소', prop_(BO.PROPS.PARTNER_WEBAPP_URL) ? '정상' : '주의', prop_(BO.PROPS.PARTNER_WEBAPP_URL) || 'BO_PARTNER_WEBAPP_URL 미설정 (현재 웹앱 주소로 링크를 만듭니다)');
+  add('운영센터 주소 로그인', prop_(BO.PROPS.GOOGLE_CLIENT_ID) ? '정상' : '주의', prop_(BO.PROPS.GOOGLE_CLIENT_ID) ? 'Google 로그인 클라이언트 ID 설정됨' : 'BO_GOOGLE_CLIENT_ID 미설정 (ops.beautyora.kr에서 로그인할 수 없습니다)');
   return { checkedAt: now_(), results: results, ok: !results.some(function (r) { return r.status === '오류'; }) };
 }
 

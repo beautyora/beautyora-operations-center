@@ -18,18 +18,31 @@ function doGet(e) {
 }
 
 /**
- * 브랜드 전용 주소(Netlify의 partner.beautyora.kr)에서 오는 요청.
- * 익명 요청이므로 브랜드 작업(링크 토큰 확인)만 받고 관리자 작업은 언제나 거절한다.
+ * 뷰티오라 주소(partner·ops.beautyora.kr, Cloudflare Pages)에서 오는 요청. 소유자 권한으로 실행된다.
+ * - 브랜드 작업: 링크 토큰을 확인한다(api()와 같음).
+ * - 관리자 작업: 반드시 Google 로그인(ID 토큰)을 확인한다. 브라우저 쿠키의 Google 계정은 절대 믿지 않는다.
  * 본문은 text/plain으로 보낸 JSON이다(브라우저의 사전 확인 요청 없이 보내기 위해).
  */
 function doPost(e) {
   let request = null;
   try { request = JSON.parse(String(e && e.postData && e.postData.contents || '')); } catch (ignored) { request = null; }
   const action = request && typeof request === 'object' ? String(request.action || '') : '';
-  const result = hasOwn_(partnerActions_(), action)
-    ? api(request)
-    : { ok: false, message: '지원하지 않는 요청입니다.', code: 'BAD_REQUEST' };
+  let result;
+  if (hasOwn_(partnerActions_(), action)) result = api(request);
+  else if (hasOwn_(adminActions_(), action)) result = signedInApi_(request);
+  else result = { ok: false, message: '지원하지 않는 요청입니다.', code: 'BAD_REQUEST' };
   return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
+}
+
+/** Google 로그인을 확인한 뒤 그 이메일로 관리자 작업을 처리한다. */
+function signedInApi_(request) {
+  try {
+    BO_SIGNED_IN_EMAIL_ = verifyGoogleIdToken_(request.idToken);
+  } catch (error) {
+    if (!error.userFacing) logError_('auth:idToken', error);
+    return { ok: false, message: error.userFacing ? errorMessage_(error) : 'Google 로그인을 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.', code: error.code || 'NEED_LOGIN' };
+  }
+  try { return api(request); } finally { BO_SIGNED_IN_EMAIL_ = ''; }
 }
 
 /** HTML 템플릿에서만 쓰는 포함 함수(_로 끝나 화면에서 직접 부를 수 없음). */

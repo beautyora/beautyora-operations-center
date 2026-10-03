@@ -23,6 +23,7 @@
 화면은 두 가지입니다.
 
 - **운영센터(직원)**: 웹앱 주소. `BO_ADMIN_EMAILS`에 있는 Google 계정만 사용 가능.
+  `https://ops.beautyora.kr`(Cloudflare Pages)에서 "Google로 로그인"으로 같은 화면을 열 수 있습니다. 설정: `docs/OPS_DOMAIN_GUIDE.md`
   홈 · 입점 신청 · 브랜드 · 상품 · 검수 · 재고 · 설정
 - **상품등록센터(브랜드)**: `?token=` 링크. 로그인 없이 자기 브랜드 상품만 등록·수정 요청·서류 제출.
   `https://partner.beautyora.kr`(Cloudflare Pages)에서 같은 화면을 열 수 있습니다. 설정: `docs/PARTNER_DOMAIN_GUIDE.md`
@@ -51,7 +52,8 @@ src/
   90_Main.gs        doGet, 단일 API 진입점 api(), 브랜드 주소용 doPost(브랜드 작업만)
   Index.html / Styles.html / Common.html / Admin.html / Partner.html
 scripts/
-  build-partner-web.cjs  상품등록센터 화면을 정적 페이지로 묶음 (Cloudflare Pages·Netlify 공통)
+  build-web.cjs          화면을 정적 페이지로 묶음: partner(상품등록센터)·admin(운영센터) (Cloudflare Pages·Netlify 공통)
+  build-partner-web.cjs  build-web.cjs partner (예전 이름, Cloudflare 빌드 명령이 사용)
 tests/
   harness.cjs       가짜 Notion·Drive·Apps Script 환경
   server.test.cjs   서버 흐름·보안 테스트 (node --test)
@@ -81,6 +83,7 @@ tests/
 ## 보안 원칙
 
 - 화면에서 부를 수 있는 서버 함수는 `api()` 하나입니다. 요청마다 관리자 이메일 또는 링크 토큰을 확인합니다.
+- 뷰티오라 주소에서 오는 `doPost`는 브랜드 작업은 링크 토큰으로, 관리자 작업은 **Google 로그인(ID 토큰)으로만** 확인합니다. 브라우저의 Google 세션(쿠키)은 믿지 않습니다.
 - 편집기·트리거 전용 함수(`setupBeautyora`, `runHealthCheck`, `migrateLegacySheets`, `onBrandFormSubmit`, `scheduledHealthCheck`)는 소유자 실행이나 설치된 트리거에서만 동작합니다.
 - 테스트(`only the audited entry points…`)가 새 공개 함수가 생기면 실패하도록 막습니다.
 - 브랜드 화면에는 내부 오류 내용을 보여 주지 않고 문의 코드만 보여 줍니다.
@@ -96,6 +99,7 @@ tests/
 | `BO_NOTION_PRODUCT_DATA_SOURCE_ID` | ✅ | 상품 · SKU 데이터 소스 ID |
 | `BO_ROOT_FOLDER_ID` | ✅ | 브랜드 자료 루트 Drive 폴더 |
 | `BO_PARTNER_WEBAPP_URL` | 권장 | 상품등록 링크의 기본 주소. 예: `https://partner.beautyora.kr` 또는 브랜드용 웹앱 주소 |
+| `BO_GOOGLE_CLIENT_ID` | ops 주소 | 운영센터 주소(ops.beautyora.kr)의 Google 로그인 클라이언트 ID |
 | `BO_GOOGLE_FORM_ID` | 권장 | 입점 신청 Google Form ID |
 | `BO_NOTION_ACTIVITY_DATA_SOURCE_ID` | 권장 | 연락 · 진행 이력 (자동으로 찾을 수 없음) |
 | `BO_NOTION_LINK_DATA_SOURCE_ID` | 자동 | 초기 설정이 만들고 채움 |
