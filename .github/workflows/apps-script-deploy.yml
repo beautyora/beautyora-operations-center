@@ -68,6 +68,8 @@ jobs:
           PROD_SCRIPT_ID: ${{ secrets.PROD_SCRIPT_ID }}
           PROD_DEPLOYMENT_ID: ${{ secrets.PROD_DEPLOYMENT_ID }}
         run: |
+          # 인증 파일 생성 및 clasp push 전에 일치 여부만 검사한다.
+          node scripts/verify-deploy-target.cjs
           if [ "$TARGET" = "production" ]; then
             SCRIPT_ID="$PROD_SCRIPT_ID"
             DEPLOYMENT_ID="$PROD_DEPLOYMENT_ID"

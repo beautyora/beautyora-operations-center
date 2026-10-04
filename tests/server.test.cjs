@@ -499,3 +499,27 @@ test('baseline: property capacity exhaustion fails closed before activation', ()
   assert.ok(ok(env.api('brands.foldersSync')).skipped);
   assert.equal(env.props.UNRELATED_CONFIGURATION_0.length, 7000);
 });
+
+test('deployment: production target guard fails closed without exposing configured IDs', () => {
+  const { spawnSync } = require('child_process');
+  const script = path.join(__dirname, '..', 'scripts', 'verify-deploy-target.cjs');
+  const { EXPECTED_PRODUCTION_SCRIPT_ID } = require(script);
+  const run = env => spawnSync(process.execPath, [script], { env, encoding: 'utf8' });
+  const correct = run({ TARGET: 'production', PROD_SCRIPT_ID: EXPECTED_PRODUCTION_SCRIPT_ID });
+  assert.equal(correct.status, 0);
+  assert.match(correct.stdout, /운영 프로젝트 확인: 일치/);
+  assert.ok(!correct.stdout.includes(EXPECTED_PRODUCTION_SCRIPT_ID));
+  for (const value of ['', 'unused-project-sentinel', EXPECTED_PRODUCTION_SCRIPT_ID + ' ']) {
+    const wrong = run({ TARGET: 'production', PROD_SCRIPT_ID: value });
+    assert.equal(wrong.status, 1);
+    assert.match(wrong.stderr, /운영 프로젝트 불일치 또는 미설정/);
+    if (value) assert.ok(!(wrong.stdout + wrong.stderr).includes(value));
+  }
+  assert.equal(run({ TARGET: 'test', PROD_SCRIPT_ID: 'unused-project-sentinel' }).status, 0);
+  assert.equal(run({ TARGET: 'unknown' }).status, 1);
+  const workflow = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'apps-script-deploy.yml'), 'utf8');
+  const guard = workflow.indexOf('node scripts/verify-deploy-target.cjs');
+  assert.ok(guard > 0 && guard < workflow.indexOf('> .clasp.json'));
+  assert.ok(guard < workflow.indexOf('- name: Google 인증 준비'));
+  assert.ok(guard < workflow.indexOf('clasp@3 push'));
+});

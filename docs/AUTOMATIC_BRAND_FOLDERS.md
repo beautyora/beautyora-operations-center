@@ -22,6 +22,10 @@
 
 전역 잠금으로 버튼/트리거를 직렬화한다. 하위 폴더와 선택 양식 복사 전에 `BO_BRAND_FOLDER_PENDING_<page ID>`에 폴더 ID를 저장한다. 준비 후 마지막에 Notion URL을 기록하고 pending을 지운다. 실패하면 다음 실행에서 재사용/보완한다. 이미 URL이 있는 브랜드는 자동 처리하지 않으며 개별 API로 누락 하위 폴더를 보완할 수 있다. 폴더와 상품 데이터 삭제는 없다.
 
+## 운영 배포 대상 보호
+
+배포 workflow는 `scripts/verify-deploy-target.cjs`로 `PROD_SCRIPT_ID`와 확인된 실제 운영 프로젝트 ID의 동일 여부를 검사한다. `.clasp.json`/Google 인증 파일 생성 및 코드 업로드 전에 실행하며 불일치·미설정이면 중단한다. Secret 값은 출력하거나 변경하지 않고 성공 시 `운영 프로젝트 확인: 일치`만 기록한다. 대상은 `1npgGPeWwkUxCijrHFvDdG3RMTyUvz2kdv6tLoS1qDi4UntXgLSNfnVTS`이며, '(미사용)' 옛 단가표 프로젝트로 배포하지 않는다. 이 검사는 workflow 실행 시 적용되므로 코드 검토/모의 테스트만으로 현재 Secret의 실제 일치를 확인했다고 주장하지 않는다.
+
 ## 정확한 배포 순서 (이번 작업에서 실행하지 않음)
 
 1. PR 코드/모의 테스트 검토. 테스트 Notion/Drive와 운영 설정의 분리를 확인한다.
