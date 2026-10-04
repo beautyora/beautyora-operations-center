@@ -182,13 +182,13 @@ test('main product list: one tab with brand and vendor columns, thumbnails kept,
   xlsx.sheetValues = [['리스트', '담당자 이름', '홍길동'], ['', '브랜드명', '옵션명', '소비자가', '참고링크'], ['1', '벨라앤베카', 'Velra&Becca Active Daily Serum 50ml', '27000', 'https://velra.example/serum']];
 
   // Integrated list ("벤더별 운영본") tab.
-  const header = ['브랜드', '이미지', '상품명', '구성', '카테고리', '바코드', '공유 매입용 공급가', '공유 위탁용 공급가', '권장판매가', '매입MOQ\n단위 : EA', '핵심포인트', '제품설명', '거래유형', '실제 공급사', '계산모드', '원본행 ID', '운영 출처시트'];
-  const row = (brand, name, barcode, supplier, sourceSheet, price) => [brand, '', name, '20mL', '스킨케어', barcode, price, '', 5000, 20, '포인트', '설명', '매입', supplier, '자동', 'r-' + name.length, sourceSheet];
+  const header = ['브랜드', '이미지', '상품명', '구성', '카테고리', '바코드', '공유 매입용 공급가', '공유 위탁용 공급가', '권장판매가', '매입MOQ\n단위 : EA', '핵심포인트', '제품설명', '거래유형', '실제 공급사', '계산모드', '원본행 ID', '위탁 가격상태', '운영 출처시트'];
+  const row = (brand, name, barcode, supplier, sourceSheet, price, consignState) => [brand, '', name, '20mL', '스킨케어', barcode, price, '', 5000, 20, '포인트', '설명', '매입', supplier, '자동', '400000013:119', consignState || '', sourceSheet];
   const values = [header,
     row('[EYENLIP]', '아이앤립 비비 크림 20ml', 8809555252672, '시온', '시온', 2409),
-    row('루엠', '루엠 시카 리페어 앰플 30ml', '', '주식회사 픽오라(뷰티오라)', '픽오라(매입) / 픽오라(위탁)', 9000),
+    row('루엠', '루엠 시카 리페어 앰플 30ml', '', '주식회사 픽오라(뷰티오라)', '픽오라(매입) / 픽오라(위탁)', 9000, '위탁 기준가 + 10% (임의 5% 가산)'),
     ['', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
-    row('벨라앤베카', 'Velra&Becca Active Daily Serum 50ml', '', '주식회사 픽오라(뷰티오라)', '픽오라(매입) / 픽오라(위탁)', 14100),
+    row('벨라앤베카', 'Velra&Becca Active Daily Serum 50ml', '', '주식회사 픽오라(뷰티오라)', '픽오라(매입) / 픽오라(위탁)', 14100, '원본 위탁가 + 10%'),
     row('하이패브릭', '하이패브릭 섬유향수', '', '(주)한국무진유통', '무진', 3000)];
   const srcId = 'src0000000000000000000000000';
   env.drive.items[srcId] = { id: srcId, name: '뷰티오라 통합 상품리스트 · 벤더별 운영본', mimeType: 'application/vnd.google-apps.spreadsheet', parents: [], trashed: false };
@@ -203,11 +203,12 @@ test('main product list: one tab with brand and vendor columns, thumbnails kept,
 
   const bookId = /\/d\/([^/]+)/.exec(r.url)[1];
   const book = env.sheets.books[bookId];
-  assert.deepEqual(book.sheets.map((s) => s.name), ['상품', '가격 근거']);
+  assert.deepEqual(book.sheets.map((s) => s.name), ['상품'], 'no price-basis tab');
   assert.equal(env.sheets.books[srcId].sheets.length, 2, 'source still has its tabs');
   const main = book.sheets[0];
   const col = (name) => main.cells[0].indexOf(name);
-  assert.deepEqual(main.cells[0], ['상품 ID', '브랜드', '벤더', '이미지', '상품명', '구성', '카테고리', '바코드', '거래유형', '매입 공급가', '위탁 공급가', '권장판매가', '매입 MOQ', '핵심포인트', '제품설명', '제품 링크', '링크 출처', '원본행 ID']);
+  assert.deepEqual(main.cells[0], ['상품 ID', '브랜드', '벤더', '이미지', '상품명', '구성', '카테고리', '바코드', '거래유형', '매입 공급가', '위탁 공급가', '위탁가 비고', '권장판매가', '매입 MOQ', '핵심포인트', '제품설명', '제품 링크', '링크 출처']);
+  assert.deepEqual(main.cells.slice(1).map((x) => x[col('위탁가 비고')]), ['', '임의 5% 가산', '', ''], 'only the arbitrary 5% markup is carried over');
   const rows = main.cells.slice(1);
   assert.deepEqual(rows.map((x) => x[col('상품 ID')]), ['BP-00001', 'BP-00002', 'BP-00003', 'BP-00004']);
   assert.deepEqual(rows.map((x) => x[col('벤더')]), ['시온', '', '', '(주)한국무진유통'], 'vendor only for vendor products');
@@ -221,12 +222,8 @@ test('main product list: one tab with brand and vendor columns, thumbnails kept,
   assert.equal(rows[3][col('제품 링크')], '');
   assert.equal(rows[0][col('매입 MOQ')], 20);
   // Text columns stay text (no time/number conversion).
-  assert.equal(main.formats[col('원본행 ID') + 1], '@');
   assert.equal(main.formats[col('바코드') + 1], '@');
   assert.equal(rows[0][col('바코드')], '8809555252672');
-  const basis = book.sheets[1];
-  assert.deepEqual(basis.cells[0], ['상품 ID', '상품명', '실제 공급사', '계산모드', '운영 출처시트']);
-  assert.deepEqual(basis.cells[1], ['BP-00001', '아이앤립 비비 크림 20ml', '시온', '자동', '시온']);
 
   assert.equal(env.drive.items[bookId].parents[0], env.drive.root, 'kept in the brand material root folder');
   assert.equal(env.props.BO_MAIN_PRODUCT_SHEET_ID, bookId);
@@ -239,8 +236,8 @@ test('main product list: one tab with brand and vendor columns, thumbnails kept,
 
 test('thumbnails: image files from the catalog sheet are copied into our folder and written as IMAGE formulas', () => {
   const { env } = setup();
-  const header = ['브랜드', '이미지', '상품명', '구성', '카테고리', '바코드', '공유 매입용 공급가', '공유 위탁용 공급가', '권장판매가', '매입MOQ', '핵심포인트', '제품설명', '거래유형', '실제 공급사', '원본행 ID', '운영 출처시트'];
-  const row = (brand, name, barcode) => [brand, '', name, '', '', barcode, 1000, '', 2000, 1, '', '', '매입', '시온', 'r1', '시온'];
+  const header = ['브랜드', '이미지', '상품명', '구성', '카테고리', '바코드', '공유 매입용 공급가', '공유 위탁용 공급가', '권장판매가', '매입MOQ', '핵심포인트', '제품설명', '거래유형', '실제 공급사', '운영 출처시트'];
+  const row = (brand, name, barcode) => [brand, '', name, '', '', barcode, 1000, '', 2000, 1, '', '', '매입', '시온', '시온'];
   const srcId = 'src1111111111111111111111111';
   env.drive.items[srcId] = { id: srcId, name: '통합', mimeType: 'application/vnd.google-apps.spreadsheet', parents: [], trashed: false };
   env.sheets.addBook(srcId, '통합', { '뷰티오라': [header, row('광동제약', '활력 밀크씨슬 750mg × 30캡슐', ''), row('다온', '세라 크림 50ml', '8801111111111'), row('없는브랜드', '사진 없는 상품', ''), row('A', '같은 이름', ''), row('B', '같은 이름', '')] });
