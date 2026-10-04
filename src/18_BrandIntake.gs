@@ -327,11 +327,11 @@ function intakeRecoverySource_(response) {
   return { source: source, sourceHash: sha256_(JSON.stringify(source)), currentMapping: formAnswers_(response) };
 }
 
-function intakeRecoveryFind_(config) {
+function intakeRecoveryFind_(config, previewOnly) {
   const responses = intakeForm_().getResponses();
   const selected = config.targets.map(function (target) {
     const matches = responses.filter(function (r) {
-      if (r.getTimestamp().getTime() !== Date.parse(target.timestamp)) return false;
+      if (Math.abs(r.getTimestamp().getTime() - Date.parse(target.timestamp)) > (previewOnly ? 1000 : 0)) return false;
       const answers = formAnswers_(r);
       return answers.brand === target.brand && answers.company === target.company;
     });
@@ -347,7 +347,7 @@ function previewBrandIntakeRecovery(config) {
   assertAdmin_();
   return withLock_(function () {
     config = intakeRecoveryConfig_(config);
-    return { responses: intakeRecoveryFind_(config).map(intakeRecoverySource_),
+    return { responses: intakeRecoveryFind_(config, true).map(intakeRecoverySource_),
       warning: '현재 Form에서 삭제된 질문은 누락될 수 있습니다. Sheet 원본 대조 후 fields를 명시하세요. currentMapping은 승인된 매핑이 아닙니다.' };
   }, 20000);
 }
@@ -394,7 +394,7 @@ function inspectBrandIntakeRecovery() {
     warning: preview.warning,
     responses: preview.responses.map(function (p) {
       return {
-        expectedMatch: true, responseId: p.source.responseId, sourceHash: p.sourceHash,
+        expectedMatch: true, responseId: p.source.responseId, timestamp: p.source.timestamp, sourceHash: p.sourceHash,
         questions: p.source.questions.map(function (q) {
           return { id: q.id, title: q.title, type: q.type, answerHash: sha256_(JSON.stringify(q.answer)) };
         })

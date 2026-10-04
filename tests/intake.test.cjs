@@ -432,3 +432,21 @@ test('recovery: editor inspector logs only approved metadata and never raw answe
   assert.throws(() => s.env.call('inspectBrandIntakeRecovery'));
   assert.equal(logs.length, 1);
 });
+
+test('recovery: preview tolerates only one second and unique identity; replay requires exact Form timestamp', () => {
+  const s = recoverySetup();
+  const original = s.config.targets[0].timestamp;
+  s.config.targets[0].timestamp = new Date(Date.parse(original) + 1).toISOString();
+  const preview = s.env.call('previewBrandIntakeRecovery', s.config);
+  assert.equal(preview.responses[0].source.timestamp, original);
+  s.env.props.BO_INTAKE_RECOVERY_TWO_V1 = JSON.stringify(s.config);
+  const before = JSON.stringify(s.env.notion.pages);
+  assert.throws(() => s.env.call('replayBrandIntakeRecovery'));
+  assert.equal(JSON.stringify(s.env.notion.pages), before);
+  s.config.targets[0].timestamp = new Date(Date.parse(original) + 1001).toISOString();
+  assert.throws(() => s.env.call('previewBrandIntakeRecovery', s.config));
+  s.config.targets[0].timestamp = original;
+  const duplicate = s.submit(s.config.targets[0].brand);
+  duplicate.timestamp = new Date(Date.parse(original) + 500);
+  assert.throws(() => s.env.call('previewBrandIntakeRecovery', s.config), /하나로/);
+});

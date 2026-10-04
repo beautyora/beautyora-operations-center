@@ -4,7 +4,7 @@
 
 ## 1. 읽기 전용 preview
 
-**지원되는 편집기 경로:** Script Property `BO_INTAKE_RECOVERY_TWO_V1`에 아래 두 대상 설정을 저장한 뒤 편집기 함수 목록에서 `inspectBrandIntakeRecovery`를 선택하고 Run 합니다. 관리자 확인 후 읽기 전용 preview를 호출하고 실행 로그에 실제 응답 ID, source hash, expectedMatch, 질문 ID/제목/유형/답변 hash만 기록합니다. 회사명·브랜드명·전화·이메일·답변 원문은 로그하지 않습니다. 원문은 이미 확보한 Sheet와 별도 대조합니다. 로그 메타데이터도 공개 PR에 복사하지 마세요.
+**지원되는 편집기 경로:** Script Property `BO_INTAKE_RECOVERY_TWO_V1`에 아래 두 대상 설정을 저장한 뒤 편집기 함수 목록에서 `inspectBrandIntakeRecovery`를 선택하고 Run 합니다. 관리자 확인 후 읽기 전용 preview를 호출하고 실행 로그에 실제 응답 ID, 실제 Form timestamp, source hash, expectedMatch, 질문 ID/제목/유형/답변 hash만 기록합니다. 회사명·브랜드명·전화·이메일·답변 원문은 로그하지 않습니다. 원문은 이미 확보한 Sheet와 별도 대조합니다. 로그 메타데이터도 공개 PR에 복사하지 마세요.
 
 `previewBrandIntakeRecovery(config)`는 원문을 반환하는 내부 검토용 관리자 진입점입니다. 인자를 생략하면 동일 Script Property를 읽습니다. 편집기에서는 반환값이 자동 표시되지 않으므로 위 inspector를 사용합니다. 임의 브라우저 런타임 코드 주입은 필요하지 않습니다.
 
@@ -15,7 +15,7 @@
 ]}
 ```
 
-정확히 두 건, 각 브랜드/회사/접수시각 일치 응답이 하나씩이어야 합니다. timestamp는 실제 접수 시각과 밀리초까지 일치해야 하며 시트 표시 정밀도 때문에 불일치하면 추측하거나 범위를 넓히지 말고 원본 시각부터 확인합니다. 응답 순번이나 UI `ACYDB...` ID를 실제 FormResponse ID로 사용하지 않습니다.
+정확히 두 건, 각 브랜드/회사 일치 및 입력 접수시각 ±1초 안의 응답이 하나씩이어야 합니다. preview만 Sheet 숫자 변환/표시 반올림 오차를 허용합니다. 복수 일치하면 중단하며 가장 가까운 응답을 임의 선택하지 않습니다. 승인 설정의 timestamp는 inspector가 반환한 실제 Form timestamp로 교체해야 합니다. replay는 밀리초까지 정확히 일치해야 합니다. 응답 순번이나 UI `ACYDB...` ID를 실제 FormResponse ID로 사용하지 않습니다.
 
 반환: `responses[].source`(실제 응답 ID, timestamp, 질문 ID/제목/유형/원문 답변), `sourceHash`, `currentMapping`. currentMapping은 참고용이며 승인된 필드가 아닙니다. 현재 Form에서 삭제된 과거 질문은 반환되지 않을 수 있으므로 원본 Sheet와 별도 대조합니다. 과거 채널/거래 방식 필드를 현 제목만 보고 추측하지 않습니다.
 
