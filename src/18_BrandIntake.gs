@@ -113,7 +113,9 @@ function intakeBaseline_() {
 
 /** 별도 명시적 활성화. 배포/기존 setupBeautyora만으로 과거 응답을 가져오지 않는다. */
 function setupBrandIntake() {
-  assertOwnerOrAdmin_();
+  // USER_ACCESSING 웹앱에서는 active === effective가 소유자 증명이 아니다.
+  // 편집기 실행도 기존 BO_ADMIN_EMAILS 허용 목록에 있는 계정만 활성화한다.
+  assertAdmin_();
   const result = withLock_(function () {
     const form = intakeForm_(), schema = intakeSchema_();
     if (!brandFolderBaseline_()) throw userError_('신규 브랜드 Drive 폴더 초기 설정을 먼저 확인해 주세요.');

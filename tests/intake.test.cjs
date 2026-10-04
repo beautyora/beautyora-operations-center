@@ -294,6 +294,31 @@ test('intake: corrupted committed snapshot and unapproved response edits fail cl
 test('intake: setup and manual sync enforce caller authorization', () => {
   const { env } = setup();
   env.setUser('stranger@example.com');
-  assert.throws(() => env.call('setupBrandIntake'), /소유자 또는 관리자/);
+  assert.throws(() => env.call('setupBrandIntake'), error => error.code === 'NOT_ADMIN');
   assert.equal(env.api('intake.sync').ok, false);
+});
+
+
+test('intake: USER_ACCESSING non-admin cannot activate even when active and effective users match', () => {
+  const { env } = setup();
+  env.user.active = env.user.effective = 'stranger@example.com';
+  const beforeProperties = JSON.stringify(env.props), beforeTriggers = env.triggers.slice();
+  let formReads = 0;
+  env.context.FormApp.openById = () => { formReads++; throw new Error('must not access Form'); };
+  assert.throws(() => env.call('setupBrandIntake'), error => error.code === 'NOT_ADMIN');
+  assert.equal(formReads, 0);
+  assert.equal(JSON.stringify(env.props), beforeProperties);
+  assert.deepEqual(env.triggers, beforeTriggers);
+  assert.equal(env.api('intake.sync').ok, false);
+});
+
+test('intake: allowlisted admin can activate in editor or USER_ACCESSING context without role expansion', () => {
+  const { env } = setup();
+  env.user.active = env.user.effective = 'admin@beautyora.test';
+  const admins = env.props.BO_ADMIN_EMAILS;
+  assert.doesNotThrow(() => env.call('setupBrandIntake'));
+  assert.equal(env.props.BO_ADMIN_EMAILS, admins);
+  assert.equal(env.triggers.filter(t => t.getHandlerFunction() === 'scheduledBrandIntake').length, 1);
+  env.user.active = env.user.effective = '';
+  assert.throws(() => env.call('setupBrandIntake'), error => error.code === 'NO_EMAIL');
 });

@@ -10,7 +10,7 @@
 
 ## 동작·안전 경계
 
-- `setupBrandIntake`를 소유자/관리자가 명시적으로 실행해야 활성화된다. 배포 또는 `setupBeautyora`만으로 활성화하지 않는다. `BO_GOOGLE_FORM_ID`, `BO_INTAKE_RESPONSE_SHEET_ID`, 기존 Notion 브랜드 연결 및 Drive 기준점이 필요하다.
+- `setupBrandIntake`를 기존 `BO_ADMIN_EMAILS` 허용 목록의 관리자가 명시적으로 실행해야 활성화된다. 배포 또는 `setupBeautyora`만으로 활성화하지 않는다. `BO_GOOGLE_FORM_ID`, `BO_INTAKE_RESPONSE_SHEET_ID`, 기존 Notion 브랜드 연결 및 Drive 기준점이 필요하다.
 - 최초 Form 응답 ID를 해시해 80개씩 `BO_INTAKE_EXCLUDED_V1_*`에 저장한다. 완료 manifest인 `BO_INTAKE_BASELINE_V1`을 마지막에 기록한다. 재실행은 기준점을 유지한다. 실패한 최초 설정은 미활성 상태이며 재시도에서 그 시점까지의 응답을 기준으로 다시 초기화한다. 확정 스냅샷 손상은 자동 재작성하지 않는다.
 - 최초 읽기 시작 분보다 1분 앞선 시각부터 폴링하되 기존 ID는 제외한다. 같은 타임스탬프·자정·설정 저장 중 등록도 처리한다. 초기 조회에 포함된 응답은 기존으로 분류되므로 테스트는 성공한 활성화 이후에 제출한다. 활성화 중 실제 신규 건이 있었다면 별도로 대조한다.
 - 과거 은휘플로우/노아카 2건, 재신청9건, 과거19건 일괄 생성 흔적과 legacy 응답 ID는 일괄 재처리/삭제하지 않는다. 기존132브랜드/기존Drive기준점 및 제외 대상은 유지한다.
@@ -33,7 +33,7 @@
 2. 부모 browserworker가 배포 직전 현재 원본 Form 응답수·시트 실제 행수·Notion132개·Drive연결130개(자사2개 제외)·영업 단계와 기타 필드·현재7개 트리거를 읽기 대조한다. Form117/Sheet112 차이는 별도로 기록하며 삭제/정리하지 않는다.
 3. 운영 Script Properties에서 기존 `BO_GOOGLE_FORM_ID`가 원본 Form `1j-c_1ouJu4nZP7o6NWFQyjp6U9Nltk3kc6JDitFUAWo`인지 확인한다. `BO_INTAKE_RESPONSE_SHEET_ID`에는 연결 시트 `1W_nwOtM7nylhN-ry-aXV_2XA6b1cBEunTIIKja8PaYE`를 설정한다. `폼 응답 ID` 속성 존재/형식, 기존 Drive baseline132 ID를 확인한다. 토큰은 출력/변경하지 않는다.
 4. Actions `main`, `target=production`, `mode=existing`, 추가 배포 ID 빈칸으로 배포. `운영 프로젝트 확인: 일치` 로그 및 새 배포 버전/커밋을 확인한다. 새로운 OAuth 동의가 나타나면 범위를 정확히 보고하고 부모와 조율한다. Form 읽기는 FormApp 권한이 필요하며 임의 새 인증값을 발급하지 않는다.
-5. 동일 운영 계정에서 **`setupBrandIntake`를 한 번만 실행**한다. `setupBeautyora`/폴더 기준점 초기화를 반복할 필요 없다. 반환된 `activatedAt`, `excludedResponses`, 새 `scheduledBrandIntake` 1분 트리거를 기록한다. 예상 총트리거는 기존7개 보존+신규1개지만 실제 계정별 가시성 차이를 확인한다. 초기 제외 건수는 시트112가 아니라 실행 시 Form 응답수다.
+5. 기존 `BO_ADMIN_EMAILS`에 등록된 동일 운영 계정에서 **`setupBrandIntake`를 한 번만 실행**한다. 편집기에서도 명시적 관리자 검사에 통과해야 하며 `active===effective`만으로 허용하지 않는다. thanks929292 운영 계정의 기존 관리자 등록 여부를 읽기로 확인하고, 자동으로 허용 목록을 확대하지 않는다. `setupBeautyora`/폴더 기준점 초기화를 반복할 필요 없다. 반환된 `activatedAt`, `excludedResponses`, 새 `scheduledBrandIntake` 1분 트리거를 기록한다. 예상 총트리거는 기존7개 보존+신규1개지만 실제 계정별 가시성 차이를 확인한다. 초기 제외 건수는 시트112가 아니라 실행 시 Form 응답수다.
 6. 성공 후에만 부모의 승인된 TEST 1건을 `https://beautyora.kr/apply/?from=partner`에서 제출한다. `TEST_뷰티오라_연동확인`, 000-00-00000, 000-0000-0000, beautyora-e2e-test@example.com, https://example.com/beautyora-test 표식을 사용한다. 외부 실연락처를 쓰지 않는다. 한 번만 전송하고 성공 화면/시각을 기록한다. 실패/타임아웃이면 재전송 전에 Form/시트부터 확인한다.
 7. 원본 Form+1, 응답 시트+1, Notion 해당 TEST 이름1개·고유BO ID·폼 응답 ID·신규 초기 단계·입력필드, Drive 폴더1개·3하위폴더·Notion URL을 확인한다. 기존132개 영업값과 legacy응답ID 무변경, 은휘플로우/노아카 소급 생성 없음, 자사2개 Drive 제외 유지 확인.
 8. 다음 두 번의 폴링 및 기존 폴더 트리거 실행 후 TEST Notion/Drive 중복0을 확인한다. 오류 실행/관리자 오류메일 유무도 기록한다. 실제 데이터 삭제는 승인되지 않았으므로 TEST 기록도 표식 그대로 남기고 정리는 별도 조율한다.
