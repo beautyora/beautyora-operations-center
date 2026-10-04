@@ -191,7 +191,9 @@ test('main product list: one tab with brand and vendor columns, thumbnails kept,
     row('벨라앤베카', 'Velra&Becca Active Daily Serum 50ml', '', '주식회사 픽오라(뷰티오라)', '픽오라(매입) / 픽오라(위탁)', 14100),
     row('하이패브릭', '하이패브릭 섬유향수', '', '(주)한국무진유통', '무진', 3000)];
   const srcId = 'src0000000000000000000000000';
+  env.drive.items[srcId] = { id: srcId, name: '뷰티오라 통합 상품리스트 · 벤더별 운영본', mimeType: 'application/vnd.google-apps.spreadsheet', parents: [], trashed: false };
   env.sheets.addBook(srcId, '뷰티오라 통합 상품리스트 · 벤더별 운영본', { '뷰티오라': { values, images: { '2,2': 'img:bb', '3,2': 'img:ample', '5,2': 'img:serum', '6,2': 'img:perfume' } }, '무진': [['x']] });
+  env.sheets.books[srcId].sheets[0].filter = true;
   const before = JSON.stringify(env.sheets.books[srcId]);
 
   const r = ok(env.api('products.mainBuild', { sourceUrl: 'https://docs.google.com/spreadsheets/d/' + srcId + '/edit?gid=1', sheetName: '뷰티오라', legacyFolderUrl: 'https://drive.google.com/drive/folders/' + legacyRoot }));
@@ -201,7 +203,9 @@ test('main product list: one tab with brand and vendor columns, thumbnails kept,
 
   const bookId = /\/d\/([^/]+)/.exec(r.url)[1];
   const book = env.sheets.books[bookId];
-  assert.deepEqual(book.sheets.map((s) => s.name), ['상품', '가격 근거'], 'temporary copy removed');
+  assert.deepEqual(book.sheets.map((s) => s.name), ['상품', '가격 근거'], 'other tabs of the copied file are removed');
+  assert.equal(book.sheets[0].filter, false, 'old filter removed');
+  assert.equal(env.sheets.books[srcId].sheets.length, 2, 'source still has its tabs');
   const main = book.sheets[0];
   const col = (name) => main.cells[0].indexOf(name);
   assert.deepEqual(main.cells[0], ['상품 ID', '브랜드', '벤더', '이미지', '상품명', '구성', '카테고리', '바코드', '거래유형', '매입 공급가', '위탁 공급가', '권장판매가', '매입 MOQ', '핵심포인트', '제품설명', '제품 링크', '링크 출처', '원본행 ID']);
@@ -217,7 +221,7 @@ test('main product list: one tab with brand and vendor columns, thumbnails kept,
   assert.equal(rows[2][col('링크 출처')], '기존 엑셀');
   assert.equal(rows[3][col('제품 링크')], '');
   assert.equal(rows[0][col('매입 MOQ')], 20);
-  // Thumbnails follow their product even across the skipped blank row.
+  // Thumbnails stay with their product: the image cells are only moved, never rewritten.
   const imageCol = col('이미지') + 1;
   assert.deepEqual([2, 3, 4, 5, 6].map((rr) => main.images[rr + ',' + imageCol] || null), ['img:bb', 'img:ample', 'img:serum', 'img:perfume', null]);
   const basis = book.sheets[1];

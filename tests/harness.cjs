@@ -395,7 +395,7 @@ class FakeSheets {
         getDisplayValues: () => r.getValues().map((line) => line.map((v) => String(v))),
         setValues: (vals) => {
           if (vals.length !== nr || vals.some((line) => line.length !== nc)) throw new Error('setValues: size mismatch');
-          vals.forEach((line, i) => { sh.cells[row - 1 + i] = sh.cells[row - 1 + i] || []; line.forEach((v, j) => { sh.cells[row - 1 + i][col - 1 + j] = v; }); });
+          vals.forEach((line, i) => { sh.cells[row - 1 + i] = sh.cells[row - 1 + i] || []; line.forEach((v, j) => { sh.cells[row - 1 + i][col - 1 + j] = v; delete sh.images[(row + i) + ',' + (col + j)]; }); });
           return r;
         },
         copyTo: (dest) => {
@@ -419,6 +419,32 @@ class FakeSheets {
       getDataRange: () => rangeApi(book, sh, 1, 1, sh.cells.length, Math.max(0, ...sh.cells.map((r) => r.length))),
       copyTo: (dest) => { const target = self.books[dest.getId()]; const c = self.sheet('Copy of ' + sh.name, sh.cells, sh.images); target.sheets.push(c); return sheetApi(target, c); },
       setFrozenRows: (n) => { sh.frozenRows = n; }, setFrozenColumns: () => {}, setRowHeights: () => {}, setColumnWidth: () => {},
+      getFilter: () => (sh.filter ? { remove: () => { sh.filter = false; } } : null),
+      deleteColumn: (c) => {
+        sh.cells.forEach((r) => r.splice(c - 1, 1));
+        const images = {};
+        Object.keys(sh.images).forEach((k) => { const [r, cc] = k.split(',').map(Number); if (cc < c) images[k] = sh.images[k]; else if (cc > c) images[r + ',' + (cc - 1)] = sh.images[k]; });
+        sh.images = images;
+      },
+      deleteRow: (r0) => {
+        sh.cells.splice(r0 - 1, 1);
+        const images = {};
+        Object.keys(sh.images).forEach((k) => { const [r, c] = k.split(',').map(Number); if (r < r0) images[k] = sh.images[k]; else if (r > r0) images[(r - 1) + ',' + c] = sh.images[k]; });
+        sh.images = images;
+      },
+      /** Moves one column (range.__col) so it lands at destination (1-based, counted before the move). */
+      moveColumns: (range, dest) => {
+        const from = range.__col;
+        const width = Math.max(0, ...sh.cells.map((r) => r.length));
+        const order = Array.from({ length: width }, (_, i) => i + 1);
+        order.splice(from - 1, 1);
+        order.splice(dest > from ? dest - 2 : dest - 1, 0, from);
+        sh.cells = sh.cells.map((r) => order.map((c) => r[c - 1]));
+        const newPos = {}; order.forEach((c, i) => { newPos[c] = i + 1; });
+        const images = {};
+        Object.keys(sh.images).forEach((k) => { const [r, c] = k.split(',').map(Number); images[r + ',' + newPos[c]] = sh.images[k]; });
+        sh.images = images;
+      },
       __sheet: sh
     });
     const bookApi = (book) => ({
@@ -506,7 +532,19 @@ function createEnv(options) {
     } },
     DriveApp: {
       getFolderById: (id) => drive.folderApi(id),
-      getFileById: (id) => { const f = drive.items[id]; if (!f) throw new Error('File not found: ' + id); return { getId: () => id, moveTo: (folder) => { f.parents = [folder.getId()]; }, setTrashed: (t) => { f.trashed = !!t; } }; }
+      getFileById: (id) => {
+        const f = drive.items[id]; if (!f) throw new Error('File not found: ' + id);
+        return {
+          getId: () => id, moveTo: (folder) => { f.parents = [folder.getId()]; }, setTrashed: (t) => { f.trashed = !!t; },
+          makeCopy: (name, folder) => {
+            const copyId = drive.nextId('sheet');
+            drive.items[copyId] = Object.assign({}, f, { id: copyId, name, parents: [folder.getId()] });
+            const src = sheets.books[id];
+            if (src) sheets.books[copyId] = { id: copyId, name, sheets: src.sheets.map((sh) => Object.assign(sheets.sheet(sh.name, sh.cells, sh.images), { filter: sh.filter })) };
+            return { getId: () => copyId };
+          }
+        };
+      }
     },
     SpreadsheetApp: sheets.api(),
     Drive: drive.api(),

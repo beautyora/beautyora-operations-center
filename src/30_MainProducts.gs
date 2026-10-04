@@ -159,6 +159,8 @@ function matchLink_(product, candidates) {
 
 /**
  * 통합 상품리스트 → 새 메인 상품목록. 원본은 바꾸지 않는다. 다시 실행하면 새 파일을 만든다(이전 파일은 그대로).
+ * 셀 이미지는 파일 사이에 복사하면 사라지므로, 파일을 통째로 복사한 뒤 그 안에서 열을 지우고·더하고·옮겨 모양을 만든다.
+ * 이미지가 든 셀은 옮기기만 하고 값을 다시 쓰지 않는다.
  * payload: { sourceUrl, sheetName = '뷰티오라', legacyFolderUrl? }
  */
 function buildMainProductList_(payload) {
@@ -173,14 +175,14 @@ function buildMainProductList_(payload) {
   const values = sheet.getRange(1, 1, lastRow, lastCol).getValues();
   const header = values[0];
   const index = headerIndex_(header);
-  const need = ['브랜드', '상품명', '이미지', '운영출처시트', '실제공급사'];
-  const missing = need.filter(function (key) { return !hasOwn_(index, key); });
+  const need = ['운영 출처시트', '실제 공급사'].concat(BO_MAIN.COLUMNS.filter(function (c) { return c[1]; }).map(function (c) { return c[1]; }));
+  const missing = need.filter(function (name) { return !hasOwn_(index, headerKey_(name)); });
   if (missing.length) throw userError_('통합 상품리스트 머리글을 찾지 못했습니다: ' + missing.join(', '));
 
-  const at = function (row, name) { const key = headerKey_(name); return hasOwn_(index, key) ? row[index[key]] : ''; };
-  const rows = values.slice(1);
+  const at = function (row, name) { return row[index[headerKey_(name)]]; };
   const used = {};
   BO_MAIN.COLUMNS.forEach(function (c) { if (c[1]) used[index[headerKey_(c[1])]] = true; });
+  const extraNames = BO_MAIN.COLUMNS.filter(function (c) { return !c[1]; }).map(function (c) { return c[0]; });
 
   // 제품 링크 후보
   let candidates = [];
@@ -188,15 +190,13 @@ function buildMainProductList_(payload) {
   if (payload.legacyFolderUrl) candidates = candidates.concat(legacyWorkbookLinks_(payload.legacyFolderUrl, report));
 
   const stats = { products: 0, vendor: 0, linkNotion: 0, linkWorkbook: 0, storeMain: 0, noLink: 0 };
-  const mainRows = [], basisRows = [], keep = [];
-  rows.forEach(function (row, i) {
+  const extraRows = [extraNames], basisRows = [], blankRows = [];
+  values.slice(1).forEach(function (row, i) {
     const brand = clean_(at(row, '브랜드')), name = clean_(at(row, '상품명'));
-    if (!brand && !name) return;
-    keep.push(i);
+    if (!brand && !name) { blankRows.push(i + 2); extraRows.push(extraNames.map(function () { return ''; })); return; }
     stats.products++;
     const id = BO_MAIN.ID_PREFIX + ('00000' + stats.products).slice(-5);
-    const sourceSheet = String(at(row, '운영 출처시트'));
-    const vendor = sourceSheet.indexOf(BO_MAIN.DIRECT_SOURCE_KEYWORD) >= 0 ? '' : clean_(at(row, '실제 공급사'));
+    const vendor = String(at(row, '운영 출처시트')).indexOf(BO_MAIN.DIRECT_SOURCE_KEYWORD) >= 0 ? '' : clean_(at(row, '실제 공급사'));
     if (vendor) stats.vendor++;
     const link = matchLink_({ brand: brand, name: name, barcode: at(row, '바코드') }, candidates);
     let linkNote = '';
@@ -206,49 +206,47 @@ function buildMainProductList_(payload) {
       linkNote = link.source + (isStoreMainUrl_(link.url) ? ' · 상품 개별 링크 아님' : '');
       if (isStoreMainUrl_(link.url)) stats.storeMain++;
     }
-    mainRows.push(BO_MAIN.COLUMNS.map(function (c) {
-      switch (c[0]) {
-        case '상품 ID': return id;
-        case '벤더': return vendor;
-        case '이미지': return '';
-        case '제품 링크': return link ? link.url : '';
-        case '링크 출처': return linkNote;
-        default: return at(row, c[1]);
-      }
-    }));
+    const extra = { '상품 ID': id, '벤더': vendor, '제품 링크': link ? link.url : '', '링크 출처': linkNote };
+    extraRows.push(extraNames.map(function (n) { return extra[n]; }));
     basisRows.push([id, name].concat(header.map(function (h, c) { return used[c] ? null : row[c]; }).filter(function (v, c) { return !used[c]; })));
   });
-  if (!mainRows.length) throw userError_('옮길 상품이 없습니다.');
+  if (!stats.products) throw userError_('옮길 상품이 없습니다.');
 
-  const book = SpreadsheetApp.create(BO_MAIN.TITLE);
-  try { DriveApp.getFileById(book.getId()).moveTo(driveRoot_()); } catch (error) { report.push('브랜드 자료 루트 폴더로 옮기지 못했습니다: ' + errorMessage_(error)); }
-
-  // 셀 이미지는 같은 파일 안에서만 그대로 복사되므로, 원본 탭을 새 파일로 복사한 뒤 이미지 열만 옮긴다.
-  const copy = sheet.copyTo(book);
-  const main = book.getSheets()[0];
+  // 1) 파일 통째로 복사(셀 이미지 유지)
+  const file = DriveApp.getFileById(source.getId()).makeCopy(BO_MAIN.TITLE, driveRoot_());
+  const book = SpreadsheetApp.openById(file.getId());
+  const main = book.getSheetByName(sheetName);
+  // 2) 다른 탭을 지워도 값이 남도록 이미지 열을 뺀 나머지 셀을 값으로 고정하고, 나머지 탭은 지운다.
+  const imageCol = index[headerKey_('이미지')] + 1;
+  if (imageCol > 1) { const left = main.getRange(1, 1, lastRow, imageCol - 1); left.setValues(left.getValues()); }
+  if (imageCol < lastCol) { const right = main.getRange(1, imageCol + 1, lastRow, lastCol - imageCol); right.setValues(right.getValues()); }
+  book.getSheets().forEach(function (s) { if (s.getName() !== sheetName) book.deleteSheet(s); });
+  const filter = main.getFilter();
+  if (filter) filter.remove();
   main.setName(BO_MAIN.PRODUCT_TAB);
+  // 3) 새 열(상품 ID·벤더·제품 링크·링크 출처)을 끝에 붙이고, 쓰지 않는 원본 열은 오른쪽부터 지운다.
+  main.getRange(1, lastCol + 1, lastRow, extraNames.length).setValues(extraRows);
+  for (let c = lastCol; c >= 1; c--) if (!used[c - 1]) main.deleteColumn(c);
+  // 4) 정한 순서로 열을 옮긴다(이미지 셀도 그대로 따라간다).
+  const nameOf = {};
+  BO_MAIN.COLUMNS.forEach(function (c) { if (c[1]) nameOf[index[headerKey_(c[1])]] = c[0]; });
+  const order = header.map(function (h, c) { return used[c] ? nameOf[c] : null; }).filter(Boolean).concat(extraNames);
+  BO_MAIN.COLUMNS.forEach(function (c, i) {
+    const pos = order.indexOf(c[0]);
+    if (pos === i) return;
+    main.moveColumns(main.getRange(1, pos + 1), i + 1);
+    order.splice(i, 0, order.splice(pos, 1)[0]);
+  });
   const width = BO_MAIN.COLUMNS.length;
   main.getRange(1, 1, 1, width).setValues([BO_MAIN.COLUMNS.map(function (c) { return c[0]; })]).setFontWeight('bold').setBackground('#f1eb9c');
-  main.getRange(2, 1, mainRows.length, width).setValues(mainRows);
-  const imageCol = BO_MAIN.COLUMNS.findIndex(function (c) { return c[0] === '이미지'; }) + 1;
-  const sourceImageCol = index[headerKey_('이미지')] + 1;
-  // 빈 행을 건너뛴 경우에도 맞도록, 이어진 구간마다 한 번에 복사한다.
-  let start = 0;
-  for (let k = 1; k <= keep.length; k++) {
-    if (k === keep.length || keep[k] !== keep[k - 1] + 1) {
-      copy.getRange(keep[start] + 2, sourceImageCol, k - start, 1).copyTo(main.getRange(start + 2, imageCol, k - start, 1));
-      start = k;
-    }
-  }
-  book.deleteSheet(copy);
+  // 5) 빈 행은 아래부터 지운다.
+  blankRows.slice().reverse().forEach(function (row) { main.deleteRow(row); });
   BO_MAIN.PRICE_COLUMNS.forEach(function (name) {
     const col = BO_MAIN.COLUMNS.findIndex(function (c) { return c[0] === name; }) + 1;
-    main.getRange(2, col, mainRows.length, 1).setNumberFormat('#,##0"원"');
+    main.getRange(2, col, stats.products, 1).setNumberFormat('#,##0"원"');
   });
   main.setFrozenRows(1);
   main.setFrozenColumns(2);
-  main.setRowHeights(2, mainRows.length, 64);
-  main.setColumnWidth(imageCol, 72);
 
   const basis = book.insertSheet(BO_MAIN.BASIS_TAB);
   const basisHeader = ['상품 ID', '상품명'].concat(header.filter(function (h, c) { return !used[c]; }).map(function (h) { return String(h).split('\n')[0]; }));
