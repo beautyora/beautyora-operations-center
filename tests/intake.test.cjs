@@ -322,3 +322,94 @@ test('intake: allowlisted admin can activate in editor or USER_ACCESSING context
   env.user.active = env.user.effective = '';
   assert.throws(() => env.call('setupBrandIntake'), error => error.code === 'NO_EMAIL');
 });
+
+function recoverySetup() {
+  const s = setup();
+  const r1 = s.submit('복구 브랜드 하나', { channel1: '사입, 위탁(우선순위)' });
+  const r2 = s.submit('복구 브랜드 둘');
+  s.env.call('setupBrandIntake');
+  const config = { targets: [r1, r2].map(r => ({ brand: s.env.call('formAnswers_', r).brand, company: '테스트회사', timestamp: r.getTimestamp().toISOString() })) };
+  const preview = s.env.call('previewBrandIntakeRecovery', config);
+  config.targets.forEach((t, i) => Object.assign(t, { responseId: preview.responses[i].source.responseId, sourceHash: preview.responses[i].sourceHash, fields: { brand: 'brand', company: 'company', contactName: 'contact' } }));
+  s.env.props.BO_INTAKE_RECOVERY_TWO_V1 = JSON.stringify(config);
+  return { ...s, config, r1, r2 };
+}
+
+test('recovery: preview is read only; two approved old responses register once without changing baseline/existing brands', () => {
+  const s = recoverySetup(), { env, config } = s;
+  const props = JSON.stringify(env.props), pages = JSON.stringify(env.notion.pages);
+  const result = env.call('previewBrandIntakeRecovery', config);
+  assert.equal(result.responses.length, 2);
+  assert.equal(JSON.stringify(env.props), props);
+  assert.equal(JSON.stringify(env.notion.pages), pages);
+  const baseline = Object.fromEntries(Object.entries(env.props).filter(([k]) => /BO_INTAKE_(BASELINE|EXCLUDED)/.test(k)));
+  const existing = JSON.parse(pages), before = s.rows().length;
+  env.call('replayBrandIntakeRecovery');
+  assert.equal(s.rows().length, before + 2);
+  const added = s.rows().find(b => b.name === config.targets[0].brand);
+  assert.ok(added.drive);
+  assert.equal(added.channel1 || '', '', 'legacy value must not be guessed from current title');
+  assert.equal(added.contactName, '자동검증');
+  for (const id of Object.keys(existing)) assert.deepEqual(env.notion.pages[id], existing[id]);
+  for (const [key, value] of Object.entries(baseline)) assert.equal(env.props[key], value);
+  env.call('replayBrandIntakeRecovery');
+  assert.equal(s.rows().length, before + 2);
+  assert.equal(s.sync().processed, 0, 'old responses remain excluded from polling');
+});
+
+test('recovery: rejects non-admin, wrong count, duplicate target and timestamp mismatch without writing', () => {
+  const s = recoverySetup(), { env, config } = s, before = JSON.stringify(env.props);
+  env.setUser('outsider@example.com');
+  assert.throws(() => env.call('previewBrandIntakeRecovery', config));
+  assert.throws(() => env.call('replayBrandIntakeRecovery'));
+  env.setUser('admin@beautyora.test');
+  for (const targets of [[], [config.targets[0]], [...config.targets, config.targets[0]], [config.targets[0], config.targets[0]]]) {
+    assert.throws(() => env.call('previewBrandIntakeRecovery', { targets }));
+  }
+  const invalid = JSON.parse(JSON.stringify(config)); invalid.targets[1].timestamp = '2020-01-01T00:00:00Z';
+  assert.throws(() => env.call('previewBrandIntakeRecovery', invalid));
+  assert.equal(JSON.stringify(env.props), before);
+});
+
+test('recovery: validates both IDs, source hashes and explicit mappings before any writes', () => {
+  for (const mutate of [t => t.responseId = 'ACYDB-ui-id', t => t.sourceHash = 'changed', t => t.fields = {}, t => t.fields.company = 'deleted-item', t => t.fields.unknown = 'brand']) {
+    const s = recoverySetup(); mutate(s.config.targets[1]);
+    s.env.props.BO_INTAKE_RECOVERY_TWO_V1 = JSON.stringify(s.config);
+    const props = JSON.stringify(s.env.props), pages = JSON.stringify(s.env.notion.pages);
+    assert.throws(() => s.env.call('replayBrandIntakeRecovery'));
+    assert.equal(JSON.stringify(s.env.props), props);
+    assert.equal(JSON.stringify(s.env.notion.pages), pages);
+  }
+});
+
+test('recovery: changed source is rejected and first replay freezes the exact two-target configuration', () => {
+  const s = recoverySetup();
+  s.r2.timestamp = new Date('2020-01-01T00:00:00Z');
+  assert.throws(() => s.env.call('replayBrandIntakeRecovery'));
+  s.r2.timestamp = new Date(s.config.targets[1].timestamp);
+  s.env.call('replayBrandIntakeRecovery');
+  delete s.config.targets[0].fields.contactName;
+  s.env.props.BO_INTAKE_RECOVERY_TWO_V1 = JSON.stringify(s.config);
+  assert.throws(() => s.env.call('replayBrandIntakeRecovery'), /확정/);
+});
+
+test('recovery: shared lock blocks writes and partial Drive failure resumes without duplicates', () => {
+  const s = recoverySetup(), { env } = s, before = s.rows().length;
+  const getLock = env.context.LockService.getScriptLock;
+  env.context.LockService.getScriptLock = () => ({ tryLock: () => false });
+  const props = JSON.stringify(env.props);
+  assert.throws(() => env.call('replayBrandIntakeRecovery'), /다른 작업/);
+  assert.equal(JSON.stringify(env.props), props);
+  env.context.LockService.getScriptLock = getLock;
+  env.props.BO_TEMPLATE_FILE_ID = 'unavailable';
+  assert.throws(() => env.call('replayBrandIntakeRecovery'));
+  assert.equal(s.rows().length, before + 1);
+  delete env.props.BO_TEMPLATE_FILE_ID;
+  env.call('replayBrandIntakeRecovery');
+  env.call('replayBrandIntakeRecovery');
+  assert.equal(s.rows().length, before + 2);
+  for (const t of s.config.targets) {
+    const b = s.rows().find(b => b.name === t.brand);
+    assert.equal(Object.values(env.drive.items).filter(x => x.name === t.brand + ' (' + b.code + ')').length, 1);
+  }
+});

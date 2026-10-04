@@ -143,7 +143,7 @@ test('only the audited entry points are callable from google.script.run', () => 
     for (const m of src.matchAll(/^function ([A-Za-z0-9_$]+)\s*\(/gm)) if (!m[1].endsWith('_')) publicFns.push(m[1]);
   });
   // Each of these checks admin/owner or an installed trigger before doing anything.
-  assert.deepEqual(publicFns.sort(), ['api', 'doGet', 'runHealthCheck', 'scheduledBrandFolders', 'scheduledBrandIntake', 'scheduledHealthCheck', 'setupBeautyora', 'setupBrandIntake'].sort());
+  assert.deepEqual(publicFns.sort(), ['api', 'doGet', 'previewBrandIntakeRecovery', 'replayBrandIntakeRecovery', 'runHealthCheck', 'scheduledBrandFolders', 'scheduledBrandIntake', 'scheduledHealthCheck', 'setupBeautyora', 'setupBrandIntake'].sort());
   const { env } = setup();
   env.setUser('');
   assert.throws(() => env.call('runHealthCheck'), /계정/);
