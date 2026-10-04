@@ -1,28 +1,18 @@
 <script>
-/* 공용: 서버 호출, 이스케이프, 서식, 알림, 모달, 서랍, 아이콘. */
+/* 공용: 서버 호출, 이스케이프, 서식, 알림, 모달, 아이콘. */
 'use strict';
-const App = {
-  view: document.body.dataset.view,
-  // 브랜드 전용 주소(Netlify)에서는 토큰이 주소창에만 있다.
-  token: document.body.dataset.token || String(new URLSearchParams(location.search).get('token') || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 64),
-  version: document.body.dataset.version || '',
-  // 비어 있으면 google.script.run, 있으면 이 웹앱 주소로 fetch(뷰티오라 주소의 정적 페이지).
-  apiUrl: document.body.dataset.api || '',
-  // 운영센터 전용 주소(ops.beautyora.kr)의 Google 로그인 클라이언트 ID.
-  clientId: document.body.dataset.clientId || ''
-};
+const App = { version: document.body.dataset.version || '' };
 const $ = (s, root) => (root || document).querySelector(s);
 const $$ = (s, root) => Array.from((root || document).querySelectorAll(s));
 const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const safeUrl = (u) => { const s = String(u || ''); return /^(https?:\/\/|data:image\/)/i.test(s) ? s : ''; };
-const uid = (p) => (p || 'R') + '-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).slice(2, 10).toUpperCase();
+const safeUrl = (u) => { const s = String(u || ''); return /^https?:\/\//i.test(s) ? s : ''; };
 
-/* ---------- 서버 호출 ---------- */
+/* ---------- 서버 호출 (google.script.run → api) ---------- */
 const Api = {
   cache: new Map(),
   call(action, payload, options) {
     options = options || {};
-    const run = () => (App.apiUrl ? Api.signedPost(action, payload) : new Promise((resolve, reject) => {
+    const run = () => new Promise((resolve, reject) => {
       if (!window.google || !google.script || !google.script.run) { reject(new Error('Google Apps Script 환경에서만 동작합니다.')); return; }
       google.script.run
         .withSuccessHandler((res) => {
@@ -30,50 +20,10 @@ const Api = {
           else { const e = new Error((res && res.message) || '응답을 받지 못했습니다.'); e.code = res && res.code; reject(e); }
         })
         .withFailureHandler((err) => { const e = new Error(Api.friendly(err)); e.network = true; reject(e); })
-        .api({ action, payload: payload || {}, token: App.token });
-    }));
-    // 네트워크 오류만 한 번 다시 시도한다(쓰기 요청은 요청 ID로 중복 저장을 막는다).
-    return run().catch((e) => (e.network && !options.noRetry ? new Promise((r) => setTimeout(r, 800)).then(run) : Promise.reject(e)));
-  },
-  /** 운영센터 주소에서는 Google 로그인을 먼저 확인하고, 만료되었다고 하면 다시 로그인한 뒤 한 번 더 보낸다. */
-  async signedPost(action, payload) {
-    if (!Auth.enabled()) return Api.post(action, payload);
-    await Auth.ensure();
-    return Api.post(action, payload).catch(async (e) => {
-      if (e.code !== 'NEED_LOGIN') throw e;
-      Auth.clear();
-      await Auth.ensure();
-      return Api.post(action, payload);
+        .api({ action, payload: payload || {} });
     });
-  },
-  /** 뷰티오라 주소에서 Apps Script 웹앱(doPost)을 부른다. text/plain이라 사전 확인 요청이 없다. */
-  post(action, payload) {
-    return Api.send(action, payload)
-      .then((res) => (res && res.ok && res.packed ? Api.unpack(res) : res))
-      .then((res) => {
-        if (res && res.ok) return res.data;
-        const e = new Error((res && res.message) || '응답을 받지 못했습니다.'); e.code = res && res.code; throw e;
-      });
-  },
-  send(action, payload) {
-    const network = (m) => { const e = new Error(m); e.network = true; return e; };
-    return fetch(App.apiUrl, {
-      method: 'POST', redirect: 'follow', credentials: 'omit',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action, payload: payload || {}, token: App.token, idToken: Auth.token || undefined })
-    }).catch(() => Promise.reject(network('인터넷 연결이 불안정합니다. 잠시 후 다시 시도해 주세요.')))
-      .then((r) => r.json().catch(() => Promise.reject(network('서버 응답을 읽지 못했습니다. 잠시 후 다시 시도해 주세요.'))));
-  },
-  /** 큰 응답(전체 목록)은 서버가 gzip 조각으로 나눠 보낸다. 나머지 조각을 받아 합친 뒤 원래 응답으로 되돌린다. */
-  async unpack(res) {
-    const indexes = Array.from({ length: res.packed.count - 1 }, (_, i) => i + 1);
-    const parts = await Promise.all(indexes.map((index) => Api.send('response.part', { id: res.packed.id, index })));
-    const failed = parts.find((p) => !p || !p.ok);
-    if (failed) return failed;
-    const binary = atob([res.part].concat(parts.map((p) => p.part)).join(''));
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).json();
+    // 네트워크 오류만 한 번 다시 시도한다.
+    return run().catch((e) => (e.network && !options.noRetry ? new Promise((r) => setTimeout(r, 800)).then(run) : Promise.reject(e)));
   },
   friendly(err) {
     const m = String((err && err.message) || err || '');
@@ -82,7 +32,7 @@ const Api = {
     if (/exceeded maximum execution time|시간/i.test(m)) return '처리 시간이 길어져 중단되었습니다. 잠시 후 결과를 확인해 주세요.';
     return m || '요청을 처리하지 못했습니다.';
   },
-  /** 읽기 요청은 짧게 캐시한다. 쓰기 뒤에는 Api.invalidate(). */
+  /** 읽기 요청은 짧게 캐시한다. 새로 고침 뒤에는 Api.invalidate(). */
   get(action, payload, ttl) {
     const key = action + JSON.stringify(payload || {});
     const hit = Api.cache.get(key);
@@ -96,7 +46,6 @@ const Api = {
 
 /* ---------- 서식 ---------- */
 const Fmt = {
-  won(n) { if (n === null || n === undefined || n === '') return '—'; const x = Number(n); return isFinite(x) ? x.toLocaleString('ko-KR') + '원' : esc(n); },
   num(n) { if (n === null || n === undefined || n === '') return '—'; const x = Number(n); return isFinite(x) ? x.toLocaleString('ko-KR') : String(n); },
   date(v) { if (!v) return '—'; const s = String(v); return s.slice(0, 10); },
   datetime(v) { if (!v) return '—'; const d = new Date(v); if (isNaN(d)) return String(v); return d.toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }); },
@@ -106,18 +55,14 @@ const Fmt = {
     if (s < 60) return '방금 전'; if (s < 3600) return Math.floor(s / 60) + '분 전'; if (s < 86400) return Math.floor(s / 3600) + '시간 전';
     if (s < 86400 * 7) return Math.floor(s / 86400) + '일 전'; return Fmt.date(v);
   },
-  list(v) { return Array.isArray(v) ? v.filter(Boolean).join(', ') : (v == null ? '' : String(v)); },
-  bytes(n) { return n > 1048576 ? (n / 1048576).toFixed(1) + 'MB' : Math.max(1, Math.round(n / 1024)) + 'KB'; },
-  today() { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); }
+  list(v) { return Array.isArray(v) ? v.filter(Boolean).join(', ') : (v == null ? '' : String(v)); }
 };
 
 const STATUS_TONE = {
-  '승인 완료': 'ok', '반영 완료': 'ok', '사용 중': 'ok', '정상': 'ok', '확정': 'ok', '입점 완료': 'ok', '운영 중': 'ok', '완료': 'ok', '수령 완료': 'info',
-  '검수 대기': 'warn', '변경 요청': 'warn', '주의': 'warn', '접수·검토': 'info', '입점 예정': 'info', '회신 대기': 'info',
-  '보완 필요': 'bad', '반려': 'bad', '오류': 'bad', '중지': '', '보류': '', '판매 중단': 'bad', '만료': 'bad',
-  '미발송': 'warn', '발송 완료': 'info', '서명 완료': 'ok', '입금 대기': 'warn', '입금 완료': 'ok', '발행 대기': 'warn', '발행 완료': 'ok', '해당 없음': ''
+  '정상': 'ok', '확정': 'ok', '완료': 'ok',
+  '주의': 'warn', '접수·검토': 'info',
+  '오류': 'bad', '보류': ''
 };
-/** 뷰티오라 로고(심볼+워드마크). 글자색(currentColor)을 따라가므로 어두운 바탕에서도 쓸 수 있다. */
 const LOGO_SVG = '<svg class="logo-mark" viewBox="0 0 2601 443" role="img" aria-label="BEAUTYORA" xmlns="http://www.w3.org/2000/svg"><path fill="currentColor" d="M348.054 315.582C385.19 285.785 365.109 243.265 342.063 211.605C306.714 163.041 250.469 128.824 188.403 136.999C163.653 140.259 139.217 150.849 117.229 162.101L137.938 155.56C157.013 150.672 176.628 149.115 196.287 150.541L179.768 156.947C150.224 170.292 139.942 195.323 159.568 223.226C173.911 243.619 197.198 263.443 217.502 277.864C256.444 305.525 298.956 325.298 348.051 315.582C333.295 327.42 308.511 336.593 290.343 342.105C227.262 361.243 165.671 361.028 113.129 317.175C69.3198 280.611 41.5096 210.231 98.5363 171.106C121.251 155.521 151.969 141.291 177.041 129.289C214.628 111.292 266.27 86.2952 307.843 83.4341C368.546 79.2558 412.955 121.658 429.505 176.941C449.768 244.623 417.719 301.795 348.051 315.582H348.054Z"/><path fill="currentColor" d="M713.095 304.27H541.801V144.894H712.394C746.746 144.894 761.936 158.214 761.936 184.388C761.936 203.316 752.822 215.702 734.828 220.609C756.795 225.283 767.778 238.603 767.778 261.739C767.778 291.417 750.485 304.27 713.095 304.27ZM702.579 173.404H578.724V211.262H704.449C717.535 211.262 727.116 205.653 727.116 192.333C727.116 179.246 719.872 173.404 702.579 173.404ZM707.486 237.902H578.724V277.863H705.851C725.013 277.863 732.959 272.956 732.959 258C732.959 242.81 723.377 237.902 707.486 237.902ZM980.503 304.27H771.117V144.894H980.503V174.573H808.508V211.028H975.829V235.565H808.508V274.592H980.503V304.27ZM1189.82 304.27L1167.62 270.385H1037.46L1015.26 304.27H970.388L1077.89 144.894H1127.66L1235.16 304.27H1189.82ZM1054.98 243.978H1150.1L1102.66 171.535L1054.98 243.978ZM1397.96 220.609V144.894H1435.35V228.087C1435.35 282.771 1391.88 306.841 1322.48 306.841C1253.31 306.841 1209.84 282.771 1209.84 228.087V144.894H1247.23V220.609C1247.23 258.934 1270.6 274.825 1322.48 274.825C1374.59 274.825 1397.96 258.934 1397.96 220.609ZM1528.89 176.91H1433.32V144.894H1661.4V176.91H1566.28V304.27H1528.89V176.91ZM1755.16 243.044L1647.43 144.894H1695.57L1774.32 214.767L1852.84 144.894H1900.28L1792.55 243.277V304.27H1755.16V243.044ZM2000.92 307.308C1912.35 307.308 1872.86 281.836 1872.86 224.582C1872.86 167.328 1912.35 141.856 2000.92 141.856C2089.49 141.856 2128.98 167.328 2128.98 224.582C2128.98 281.836 2089.49 307.308 2000.92 307.308ZM2000.92 275.059C2069.39 275.059 2091.13 260.336 2091.13 224.582C2091.13 188.828 2069.39 174.105 2000.92 174.105C1932.45 174.105 1910.25 188.828 1910.25 224.582C1910.25 260.336 1932.45 275.059 2000.92 275.059ZM2170.03 304.27H2132.64V144.894H2288.74C2328 144.894 2352.54 159.149 2352.54 198.643C2352.54 232.995 2332.91 249.587 2296.69 251.69L2282.43 251.924L2295.99 260.804L2350.2 304.27H2302.76L2241.3 253.793H2170.03V304.27ZM2170.03 176.91V225.517H2285.47C2305.8 225.517 2313.98 218.74 2313.98 201.447C2313.98 183.453 2305.8 176.91 2285.47 176.91H2170.03ZM2555.45 304.27L2533.25 270.385H2403.09L2380.89 304.27H2336.02L2443.51 144.894H2493.29L2600.79 304.27H2555.45ZM2420.61 243.978H2515.72L2468.29 171.535L2420.61 243.978Z"/></svg>';
 
 function pill(text, tone) {
@@ -129,28 +74,13 @@ function pill(text, tone) {
 /* ---------- 아이콘(선 아이콘, currentColor) ---------- */
 const ICON_PATHS = {
   home: 'M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
-  inbox: 'M3 13h5l1.5 3h5L16 13h5M5 5h14l2 8v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-6z',
   store: 'M4 9h16l-1.5-5h-13zM5 9v11h14V9M9 20v-6h6v6',
-  box: 'M12 3 3 7.5v9L12 21l9-4.5v-9zM3 7.5l9 4.5 9-4.5M12 12v9',
-  check: 'M4 12.5 9 17.5 20 6.5',
-  review: 'M9 11l2 2 4-4M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z',
-  stock: 'M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10M7.5 5l9 4',
   settings: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z',
   external: 'M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5',
   refresh: 'M20 11a8 8 0 0 0-14.3-4.9L4 8M4 4v4h4M4 13a8 8 0 0 0 14.3 4.9L20 16M20 20v-4h-4',
-  search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM21 21l-4.3-4.3',
-  plus: 'M12 5v14M5 12h14',
-  chevron: 'M5 12h14M13 6l6 6-6 6',
-  upload: 'M12 16V4M7 9l5-5 5 5M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3',
-  file: 'M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8zM14 3v5h5',
-  link: 'M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1',
   x: 'M6 6l12 12M18 6 6 18',
   menu: 'M4 6h16M4 12h16M4 18h16',
-  folder: 'M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z',
-  copy: 'M8 8h11v12H8zM5 16H4V4h12v1',
-  phone: 'M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1z',
-  alert: 'M12 9v4M12 17h.01M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z',
-  trash: 'M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3'
+  alert: 'M12 9v4M12 17h.01M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z'
 };
 function icon(name, cls) {
   return '<svg class="' + (cls || 'icon') + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="' + (ICON_PATHS[name] || '') + '"/></svg>';
@@ -203,196 +133,15 @@ const Modal = {
     });
   }
 };
-
-/* ---------- 서랍(상세 패널) ---------- */
-const Drawer = {
-  onClose: null,
-  open(html, onClose) {
-    Drawer.close(true);
-    const back = document.createElement('div');
-    back.className = 'drawer-backdrop';
-    back.id = 'drawerBack';
-    const panel = document.createElement('aside');
-    panel.className = 'drawer';
-    panel.id = 'drawer';
-    panel.setAttribute('role', 'dialog');
-    panel.setAttribute('aria-modal', 'true');
-    panel.innerHTML = html;
-    back.addEventListener('click', () => Drawer.close());
-    panel.addEventListener('click', (e) => { if (e.target.closest('[data-drawer-close]')) Drawer.close(); });
-    document.body.appendChild(back);
-    document.body.appendChild(panel);
-    Drawer.onClose = onClose || null;
-    return panel;
-  },
-  close(silent) {
-    const panel = $('#drawer'); const back = $('#drawerBack');
-    if (panel) panel.remove(); if (back) back.remove();
-    const cb = Drawer.onClose; Drawer.onClose = null;
-    if (!silent && cb) cb();
-  },
-  body() { return $('#drawer .drawer-body'); }
-};
-document.addEventListener('keydown', (e) => {
-  if (e.key !== 'Escape') return;
-  if ($('#modal')) Modal.close(); else if ($('#drawer')) Drawer.close();
-});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('#modal')) Modal.close(); });
 
 /* ---------- 화면 조각 ---------- */
 const UI = {
   empty(title, text, action) { return '<div class="empty"><strong>' + esc(title) + '</strong>' + (text ? '<span>' + esc(text) + '</span>' : '') + (action || '') + '</div>'; },
   error(e, retry) { return '<div class="empty"><strong>불러오지 못했습니다</strong><span>' + esc(e && e.message ? e.message : e) + '</span>' + (retry ? '<button class="btn" data-retry>' + icon('refresh') + '다시 시도</button>' : '') + '</div>'; },
   skeleton(rows) { let s = ''; for (let i = 0; i < (rows || 5); i++) s += '<div class="skeleton skeleton-line" style="width:' + (60 + ((i * 17) % 40)) + '%"></div>'; return '<div class="card card-pad" aria-busy="true">' + s + '</div>'; },
-  field(label, control, opts) {
-    opts = opts || {};
-    return '<div class="field' + (opts.full ? ' full' : '') + '">' + '<label' + (opts.for ? ' for="' + esc(opts.for) + '"' : '') + '>' + esc(label) + (opts.required ? '<span class="req" aria-hidden="true">*</span>' : '') + '</label>' + control + (opts.help ? '<span class="field-help">' + esc(opts.help) + '</span>' : '') + '<span class="field-error" data-error-for="' + esc(opts.for || '') + '"></span></div>';
-  },
   options(list, selected, placeholder) {
     return (placeholder != null ? '<option value="">' + esc(placeholder) + '</option>' : '') + (list || []).map((o) => { const v = typeof o === 'object' ? o.value : o; const l = typeof o === 'object' ? o.label : o; return '<option value="' + esc(v) + '"' + (String(v) === String(selected == null ? '' : selected) ? ' selected' : '') + '>' + esc(l) + '</option>'; }).join('');
-  },
-  thumb(url, cls) { const u = safeUrl(url); return '<span class="thumb' + (cls ? ' ' + cls : '') + '">' + (u ? '<img src="' + esc(u) + '" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">' : icon('box')) + '</span>'; },
-  driveThumb(fileId) { return fileId ? 'https://drive.google.com/thumbnail?id=' + encodeURIComponent(fileId) + '&sz=w240' : ''; }
-};
-
-/** Notion 속성 한 개를 편집 컨트롤로 그린다. */
-function propertyControl(p, id) {
-  const v = p.value;
-  const name = 'prop-' + id;
-  if (!p.editable) return '<div class="pre">' + (p.display ? esc(p.display) : '<span class="muted">—</span>') + '</div>';
-  switch (p.type) {
-    case 'select': return '<select class="select" id="' + name + '" data-prop="' + esc(p.id) + '">' + UI.options(p.options, v || '', '선택 안 함') + '</select>';
-    case 'multi_select': return '<div class="chips-select" data-prop="' + esc(p.id) + '" data-multi>' + p.options.map((o) => '<label><input type="checkbox" value="' + esc(o) + '"' + ((v || []).indexOf(o) >= 0 ? ' checked' : '') + '>' + esc(o) + '</label>').join('') + '</div>';
-    case 'checkbox': return '<label class="check"><input type="checkbox" id="' + name + '" data-prop="' + esc(p.id) + '"' + (v ? ' checked' : '') + '> 예</label>';
-    case 'number': return '<input class="input num" id="' + name + '" inputmode="decimal" data-prop="' + esc(p.id) + '" value="' + esc(v == null ? '' : v) + '">';
-    case 'date': return '<input class="input" type="date" id="' + name + '" data-prop="' + esc(p.id) + '" value="' + esc(String(v || '').slice(0, 10)) + '">';
-    case 'rich_text': return isLongText(p) ? '<textarea class="textarea" id="' + name + '" rows="3" data-prop="' + esc(p.id) + '">' + esc(v || '') + '</textarea>' : '<input class="input" id="' + name + '" data-prop="' + esc(p.id) + '" value="' + esc(v || '') + '">';
-    case 'url': return '<div class="row"><input class="input" type="url" id="' + name + '" data-prop="' + esc(p.id) + '" value="' + esc(v || '') + '">' + (safeUrl(v) ? '<a class="btn btn-icon" href="' + esc(v) + '" target="_blank" rel="noopener" aria-label="열기">' + icon('external') + '</a>' : '') + '</div>';
-    default: return '<input class="input" id="' + name + '" data-prop="' + esc(p.id) + '" value="' + esc(v == null ? '' : v) + '">';
-  }
-}
-
-/** 긴 글 속성인지(메모·내용·설명 등) 판단한다. 짧은 글은 한 줄 입력으로 그린다. */
-function isLongText(p) {
-  return p.type === 'rich_text' && (/메모|내용|특장점|설명|행동|자료|채널|주소|비고|특이/.test(p.name) || String(p.value || '').length > 60 || /\n/.test(String(p.value || '')));
-}
-const TYPE_LABEL = { title: '제목', rich_text: '텍스트', number: '숫자', select: '선택', multi_select: '여러 개 선택', url: '링크', checkbox: '체크', date: '날짜', email: '이메일', phone_number: '전화번호' };
-
-/** 편집 폼에서 바뀐 속성만 모은다. */
-function collectPropertyChanges(root, properties) {
-  const byId = {};
-  properties.forEach((p) => { byId[p.id] = p; });
-  const changes = [];
-  $$('[data-prop]', root).forEach((el) => {
-    const p = byId[el.dataset.prop];
-    if (!p || !p.editable) return;
-    let value;
-    if (el.hasAttribute('data-multi')) value = $$('input:checked', el).map((i) => i.value);
-    else if (el.type === 'checkbox') value = el.checked;
-    else value = el.value.trim();
-    const before = p.type === 'multi_select' ? (p.value || []).slice().sort().join('|') : p.type === 'checkbox' ? !!p.value : p.type === 'date' ? String(p.value || '').slice(0, 10) : String(p.value == null ? '' : p.value);
-    const after = p.type === 'multi_select' ? value.slice().sort().join('|') : value;
-    if (String(before) !== String(after)) changes.push({ id: p.id, value });
-  });
-  return changes;
-}
-
-function copyText(text) {
-  if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text).then(() => Toast.ok('복사했습니다.'), () => fallbackCopy(text));
-  fallbackCopy(text);
-  return Promise.resolve();
-}
-function fallbackCopy(text) {
-  const t = document.createElement('textarea'); t.value = text; document.body.appendChild(t); t.select();
-  try { document.execCommand('copy'); Toast.ok('복사했습니다.'); } catch (e) { Toast.error('복사하지 못했습니다. 직접 선택해 복사해 주세요.'); }
-  t.remove();
-}
-
-/** 저장소 접근이 막힌 브라우저에서도 동작하도록 감싼다. */
-/* ---------- 운영센터 주소의 Google 로그인 (Google Identity Services) ----------
- * 로그인하면 Google이 서명한 ID 토큰(약 1시간 유효)을 받아 요청마다 함께 보낸다.
- * 서버(doPost)는 이 토큰을 Google에 확인한 뒤 BO_ADMIN_EMAILS와 비교한다. */
-const Auth = {
-  token: '',
-  key: 'bo.idToken',
-  pending: null,
-  enabled() { return App.view === 'admin' && !!App.apiUrl && !!App.clientId; },
-  expiresAt(token) {
-    try { return JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).exp * 1000; } catch (e) { return 0; }
-  },
-  valid() { return !!Auth.token && Auth.expiresAt(Auth.token) > Date.now() + 60000; },
-  clear() { Auth.token = ''; try { sessionStorage.removeItem(Auth.key); } catch (e) { /* 무시 */ } },
-  /** 유효한 로그인이 있을 때까지 기다린다. 없으면 로그인 창을 띄운다. */
-  ensure() {
-    if (!Auth.token) { try { Auth.token = sessionStorage.getItem(Auth.key) || ''; } catch (e) { /* 무시 */ } }
-    if (Auth.valid()) return Promise.resolve(Auth.token);
-    Auth.token = '';
-    if (!Auth.pending) Auth.pending = Auth.signIn().finally(() => { Auth.pending = null; });
-    return Auth.pending;
-  },
-  loadScript() {
-    if (window.google && google.accounts && google.accounts.id) return Promise.resolve();
-    return new Promise((resolve, reject) => {
-      const s = document.createElement('script');
-      s.src = 'https://accounts.google.com/gsi/client'; s.async = true;
-      s.onload = () => resolve();
-      s.onerror = () => reject(new Error('Google 로그인을 불러오지 못했습니다. 인터넷 연결을 확인해 주세요.'));
-      document.head.appendChild(s);
-    });
-  },
-  signIn() {
-    return Auth.loadScript().then(() => new Promise((resolve) => {
-      const box = document.createElement('div');
-      box.className = 'auth-overlay';
-      box.innerHTML = '<div class="auth-card" role="dialog" aria-modal="true" aria-labelledby="authTitle">' + LOGO_SVG +
-        '<strong id="authTitle">운영센터 로그인</strong><p>뷰티오라 관리자로 등록된 Google 계정으로 로그인해 주세요.</p><div id="authButton"></div></div>';
-      document.body.appendChild(box);
-      google.accounts.id.initialize({
-        client_id: App.clientId, auto_select: true, cancel_on_tap_outside: false, use_fedcm_for_prompt: true,
-        callback: (res) => {
-          Auth.token = String((res && res.credential) || '');
-          try { sessionStorage.setItem(Auth.key, Auth.token); } catch (e) { /* 무시 */ }
-          box.remove();
-          resolve(Auth.token);
-        }
-      });
-      google.accounts.id.renderButton($('#authButton', box), { theme: 'outline', size: 'large', text: 'signin_with', locale: 'ko' });
-      google.accounts.id.prompt();
-    }));
-  },
-  signOut() {
-    Auth.clear();
-    try { google.accounts.id.disableAutoSelect(); } catch (e) { /* 무시 */ }
-    location.reload();
   }
 };
-
-const Store = {
-  get(key, fallback) { try { const v = window.localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch (e) { return fallback; } },
-  set(key, value) { try { window.localStorage.setItem(key, JSON.stringify(value)); return true; } catch (e) { return false; } },
-  remove(key) { try { window.localStorage.removeItem(key); } catch (e) { /* 무시 */ } }
-};
-
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
-    reader.onerror = () => reject(new Error('파일을 읽지 못했습니다.'));
-    reader.readAsDataURL(file);
-  });
-}
-
-/** 큰 이미지는 올리기 전에 줄인다(긴 변 2400px, JPEG). 8MB 제한을 넘지 않도록. */
-async function shrinkImage(file) {
-  if (!/^image\/(jpeg|png|webp)$/.test(file.type) || file.size < 1.5 * 1048576) return file;
-  try {
-    const bitmap = await createImageBitmap(file);
-    const scale = Math.min(1, 2400 / Math.max(bitmap.width, bitmap.height));
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.round(bitmap.width * scale); canvas.height = Math.round(bitmap.height * scale);
-    canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    const blob = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.88));
-    if (!blob || blob.size >= file.size) return file;
-    return new File([blob], file.name.replace(/\.(png|webp|jpe?g)$/i, '') + '.jpg', { type: 'image/jpeg' });
-  } catch (e) { return file; }
-}
 </script>

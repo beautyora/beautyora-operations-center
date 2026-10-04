@@ -43,11 +43,6 @@ function today_() {
   return Utilities.formatDate(new Date(), BO.TIMEZONE, 'yyyy-MM-dd');
 }
 
-function addDays_(dateText, days) {
-  const base = dateText ? new Date(dateText + 'T00:00:00+09:00') : new Date();
-  return Utilities.formatDate(new Date(base.getTime() + days * 86400000), BO.TIMEZONE, 'yyyy-MM-dd');
-}
-
 function uuid_(prefix) {
   return (prefix || '') + Utilities.getUuid().replace(/-/g, '').slice(0, 20).toUpperCase();
 }
@@ -63,36 +58,6 @@ function clean_(value) {
 
 function normalizeName_(value) {
   return clean_(value).toLowerCase().replace(/[\s._\-·()\[\]{}]/g, '');
-}
-
-function text_(value, max) {
-  const text = String(value == null ? '' : value).trim();
-  return max ? text.slice(0, max) : text;
-}
-
-function assertId_(value, label) {
-  const text = String(value || '');
-  if (!/^[A-Za-z0-9-]{8,80}$/.test(text)) throw userError_((label || '식별자') + '가 올바르지 않습니다.');
-  return text;
-}
-
-function assertNotionId_(value, label) {
-  const text = String(value || '');
-  if (!/^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i.test(text)) throw userError_((label || 'Notion 페이지') + ' ID가 올바르지 않습니다.');
-  return text;
-}
-
-function assertDate_(value, label, optional) {
-  const text = String(value || '').trim();
-  if (!text && optional) return '';
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) throw userError_((label || '날짜') + ' 형식을 확인해 주세요. (예: 2026-09-28)');
-  const date = new Date(text + 'T00:00:00Z');
-  if (isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== text) throw userError_((label || '날짜') + '가 올바르지 않습니다.');
-  return text;
-}
-
-function sameId_(a, b) {
-  return String(a || '').replace(/-/g, '').toLowerCase() === String(b || '').replace(/-/g, '').toLowerCase() && !!a;
 }
 
 /** 스크립트 전역 잠금. 짧은 쓰기 구간만 감싼다. */
@@ -186,22 +151,6 @@ function cached_(namespace, key, ttl, producer) {
   return cachePutJson_(namespace, key, producer(), ttl);
 }
 
-/** 같은 요청ID로 다시 들어온 쓰기 요청의 결과를 돌려준다(네트워크 재시도 대비). */
-function idempotent_(requestKey, producer) {
-  const key = cacheKey_('req:' + sha256_(String(requestKey)));
-  const store = cache_();
-  const previous = store.get(key);
-  if (previous) {
-    try { return Object.assign(JSON.parse(previous), { duplicate: true }); } catch (ignored) {}
-  }
-  const result = producer();
-  // 실패(검증 오류) 결과는 저장하지 않는다. 고친 뒤 같은 요청으로 다시 보낼 수 있게.
-  if (result && result.ok !== false) {
-    try { store.put(key, JSON.stringify(result), 21600); } catch (ignored) {}
-  }
-  return result;
-}
-
 function parseNumber_(value, label, options) {
   options = options || {};
   const text = String(value == null ? '' : value).replace(/[,\s원]/g, '');
@@ -214,32 +163,6 @@ function parseNumber_(value, label, options) {
   if (options.min != null && number < options.min) throw userError_(label + '은(는) ' + options.min + ' 이상이어야 합니다.');
   if (options.integer && Math.floor(number) !== number) throw userError_(label + '은(는) 정수로 입력해 주세요.');
   return number;
-}
-
-function formatBizNo_(value) {
-  const original = clean_(value);
-  const digits = original.replace(/\D/g, '');
-  if (digits.length !== 10) return original;
-  return digits.slice(0, 3) + '-' + digits.slice(3, 5) + '-' + digits.slice(5);
-}
-
-function formatPhone_(value) {
-  const original = clean_(value);
-  if (!original || /\+|[A-Za-z가-힣]/.test(original)) return original;
-  const digits = original.replace(/\D/g, '');
-  if (digits.length === 8) return digits.slice(0, 4) + '-' + digits.slice(4);
-  if (digits.indexOf('02') === 0) {
-    if (digits.length === 9) return '02-' + digits.slice(2, 5) + '-' + digits.slice(5);
-    if (digits.length === 10) return '02-' + digits.slice(2, 6) + '-' + digits.slice(6);
-    return original;
-  }
-  if (digits.length === 10) return digits.slice(0, 3) + '-' + digits.slice(3, 6) + '-' + digits.slice(6);
-  if (digits.length === 11) return digits.slice(0, 3) + '-' + digits.slice(3, 7) + '-' + digits.slice(7);
-  return original;
-}
-
-function sanitizeFileName_(name) {
-  return String(name || 'file').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').slice(0, 150);
 }
 
 function driveIdFromUrl_(value) {

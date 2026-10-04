@@ -6,12 +6,12 @@
   <meta name="robots" content="noindex">
   <?!= include_('Styles'); ?>
 </head>
-<body data-view="<?= view ?>" data-token="<?= token ?>" data-version="<?= version ?>">
+<body data-version="<?= version ?>">
   <div id="root">
-    <div class="boot" role="status"><div class="spinner"></div><p><?= view === 'partner' ? '상품등록센터를 여는 중입니다.' : '운영센터를 여는 중입니다.' ?></p></div>
+    <div class="boot" role="status"><div class="spinner"></div><p>운영센터를 여는 중입니다.</p></div>
   </div>
   <div id="toasts" class="toasts" aria-live="polite"></div>
   <?!= include_('Common'); ?>
-  <? if (view === 'partner') { ?><?!= include_('Partner'); ?><? } else { ?><?!= include_('Admin'); ?><? } ?>
+  <?!= include_('Admin'); ?>
 </body>
 </html>

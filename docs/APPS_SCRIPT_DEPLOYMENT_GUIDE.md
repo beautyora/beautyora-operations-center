@@ -11,13 +11,13 @@ GitHub를 코드의 유일한 기준으로 사용합니다.
 
 ## 배포 전 환경 연결 확인
 
-v2부터 운영 데이터는 Notion에만 있습니다. 테스트와 운영 Apps Script의 **프로젝트 설정 → 스크립트 속성**에
+테스트와 운영 Apps Script의 **프로젝트 설정 → 스크립트 속성**에
 각 환경의 Notion 데이터 소스 ID와 Drive 폴더를 따로 넣습니다(목록은 `README.md` 참고).
 
 - **테스트 환경은 반드시 테스트용 Notion DB를 가리키게 합니다.** 운영 DB ID를 테스트 스크립트에 넣지 않습니다.
-  테스트용 DB는 운영 브랜드·상품 DB를 Notion에서 복제해 만들면 됩니다.
+  테스트용 DB는 운영 브랜드 목록·연락 진행 이력 DB를 Notion에서 복제해 만들면 됩니다.
 - 새 환경에서는 배포 후 운영센터 → **설정 → 초기 설정 실행**을 한 번 누릅니다.
-- **설정 → 연결 상태**가 모두 "정상"인지 확인한 뒤 브랜드에 링크를 보냅니다.
+- **설정 → 연결 상태**가 모두 "정상"인지 확인합니다.
 
 ## 한 번만 설정할 항목
 
@@ -62,8 +62,8 @@ Windows PowerShell:
 ```text
 design/header-cleanup
 design/mobile-card
-feature/inventory-search
-fix/upload-error
+feature/change-history
+fix/brand-list
 ```
 
 ## 테스트 Apps Script에 반영
@@ -108,4 +108,4 @@ fix/upload-error
 
 - 테스트 Script ID: Apps Script 프로젝트 설정에서 확인
 - 테스트 업로드 폴더: `뷰티오라_테스트_파일`
-- 테스트 Notion: 운영 DB를 복제한 테스트 전용 DB (v2부터 Notion 쓰기가 필수)
+- 테스트 Notion: 운영 DB를 복제한 테스트 전용 DB

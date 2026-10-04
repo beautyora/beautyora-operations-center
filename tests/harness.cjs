@@ -391,10 +391,7 @@ function createEnv(options) {
   const cache = new Map();
   const triggers = [];
   const mail = [];
-  const tokenChecks = [];
   const user = { active: options.user || 'admin@beautyora.test', effective: 'owner@beautyora.test' };
-  let form = null;
-  const legacyBooks = {};
 
   const context = {
     console: options.quiet === false ? console : { log() {}, error() {}, warn() {} },
@@ -425,7 +422,6 @@ function createEnv(options) {
       base64Encode: (bytes) => Buffer.from(bytes.map((b) => b & 255)).toString('base64'),
       base64EncodeWebSafe: (s) => Buffer.from(String(s)).toString('base64').replace(/\+/g, '-').replace(/\//g, '_'),
       newBlob: (bytes, type, name) => blob(Array.isArray(bytes) ? Buffer.from(bytes.map((b) => b & 255)) : Buffer.from(String(bytes || '')), type, name),
-      gzip: (b) => blob(require('zlib').gzipSync(Buffer.from(b.getBytes().map((x) => x & 255))), 'application/x-gzip'),
       sleep: () => {}
     },
     UrlFetchApp: { fetch: (url, opts) => {
@@ -437,13 +433,6 @@ function createEnv(options) {
           if (e.status) return response(e.status, { object: 'error', code: e.code, message: e.message });
           throw e;
         }
-      }
-      if (url.indexOf('https://oauth2.googleapis.com/tokeninfo?id_token=') === 0) {
-        // Fake Google tokeninfo: "<header>.<base64url claims>.<sig>"; sig "bad" means Google rejects it.
-        tokenChecks.push(url);
-        const parts = decodeURIComponent(url.split('id_token=')[1]).split('.');
-        if (parts[2] === 'bad') return response(400, { error: 'invalid_token' });
-        return response(200, JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')));
       }
       if (url.indexOf('https://thumb.test/') === 0) return { getResponseCode: () => 200, getBlob: () => blob(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'), 'image/png'), getHeaders: () => ({}) };
       throw new Error('Unexpected fetch ' + url);
@@ -461,13 +450,6 @@ function createEnv(options) {
       getOAuthToken: () => 'oauth-token'
     },
     MailApp: { getRemainingDailyQuota: () => 100, sendEmail: (to, subject, body) => mail.push({ to, subject, body }) },
-    FormApp: { openById: () => { if (!form) throw new Error('form not found'); return form; } },
-    SpreadsheetApp: { openById: (id) => {
-      if (legacyBooks[id]) return legacyBooks[id];
-      const file = drive.items[id];
-      if (file && file.converted) return { getSheets: () => [{ getDataRange: () => ({ getDisplayValues: () => options.workbookValues || [] }) }] };
-      throw new Error('spreadsheet not found ' + id);
-    } },
     ContentService: {
       MimeType: { JSON: 'application/json' },
       createTextOutput: (text) => { const out = { text: String(text), mime: '', setMimeType(m) { out.mime = m; return out; }, getContent: () => out.text }; return out; }
@@ -489,14 +471,8 @@ function createEnv(options) {
     context, notion, drive, props, cache, triggers, mail, user,
     call: (name, ...args) => context.__run(name, args),
     api: (action, payload, token) => context.__run('api', [{ action, payload: payload || {}, token }]),
-    tokenChecks,
-    /** A Google ID token as the fake tokeninfo understands it. */
-    idToken: (email, claims) => ['eyJhbGciOiJSUzI1NiJ9', Buffer.from(JSON.stringify(Object.assign({ iss: 'https://accounts.google.com', aud: props.BO_GOOGLE_CLIENT_ID, email, email_verified: 'true', exp: String(Math.floor(Date.now() / 1000) + 3600) }, claims || {}))).toString('base64url'), (claims && claims.sig) || 'sig'].join('.'),
-    post: (body) => JSON.parse(context.__run('doPost', [{ parameter: {}, postData: { type: 'text/plain', contents: typeof body === 'string' ? body : JSON.stringify(body) } }]).getContent()),
     setUser: (email) => { user.active = email; },
-    clearCache: () => cache.clear(),
-    setForm: (f) => { form = f; },
-    addLegacyBook: (id, book) => { legacyBooks[id] = book; }
+    clearCache: () => cache.clear()
   };
   return env;
 }
@@ -530,8 +506,7 @@ function template(name, context) {
 }
 
 /* ------------------------------------------------------------------ seed data */
-function seed(env, opts) {
-  opts = opts || {};
+function seed(env) {
   const n = env.notion;
   const brandId = n.addSource('brand', { properties: {
     '브랜드명': { type: 'title' }, '브랜드 ID': { type: 'rich_text' },
@@ -547,31 +522,11 @@ function seed(env, opts) {
     '소통 담당자': { type: 'people' }, '사업자등록증 Drive URL': { type: 'url' }, '브랜드 소개서 Drive URL': { type: 'url' }, '계약서 Drive URL': { type: 'url' },
     '기타 브랜드 자료 Drive URL': { type: 'url' }, '최근 수정': { type: 'last_edited_time' }
   } });
-  const productId = n.addSource('product', { properties: {
-    '상품명': { type: 'title' }, '운영센터 상품 ID': { type: 'rich_text' }, '브랜드': { type: 'relation', relation: brandId },
-    '등록 검수 상태': { type: 'select', options: ['검수 대기', '승인 완료', '보완 필요', '반려'] },
-    '대표 이미지 Drive URL': { type: 'url' }, '상세페이지 Drive URL': { type: 'url' }, '바코드(텍스트)': { type: 'rich_text' }, '옵션명': { type: 'rich_text' },
-    '제품 설명': { type: 'rich_text' }, '소비자가': { type: 'number' }, '매입가(매입 가능시)': { type: 'number' }, '공급가(위탁 가능시)': { type: 'number' },
-    '오프라인 위탁 판매가': { type: 'number' }, '온라인 최저가': { type: 'number' }, 'MOQ': { type: 'number' },
-    '카테고리': { type: 'multi_select', options: ['스킨케어(베이직)', '메이크업', '미분류'] }, '참고 링크': { type: 'url' },
-    '노출 희망 채널': { type: 'multi_select', options: ['온라인 B2C', '약국'] }, '이미지': { type: 'files' }, '최초 등록일': { type: 'created_time' },
-    '검토 상태': { type: 'select', options: ['자료 수집', '추천'] }, '검토 메모': { type: 'rich_text' }, '입출고 이력': { type: 'relation', relation: 'movement-ds' }
-  } });
-  const storeId = n.addSource('store', { properties: { '매장명': { type: 'title' }, '매장 코드': { type: 'rich_text' }, '운영 상태': { type: 'select', options: ['운영 중'] }, '채널 유형': { type: 'select', options: ['약국'] }, '기본 거래 방식': { type: 'select', options: ['위탁'] }, '입점 상품 운영': { type: 'relation', relation: 'inventory-ds' } } });
-  const movementId = n.addSource('movement', { id: 'movement-ds', properties: { '이력명': { type: 'title' }, '상품': { type: 'relation', relation: productId }, '입점 매장': { type: 'relation', relation: storeId }, '수량 (+/-)': { type: 'number' }, '구분': { type: 'select', options: ['최초 입고', '추가 입고', '반품', '회수', '재고 조정'] }, '입출고 방향': { type: 'select', options: ['+', '-'] }, '처리일': { type: 'date' }, '처리 상태': { type: 'select', options: ['예정', '완료', '취소'] }, '비고': { type: 'rich_text' }, '브랜드 연결(회사명용)': { type: 'relation', relation: brandId } } });
-  const inventoryId = n.addSource('inventory', { id: 'inventory-ds', properties: { '관리명': { type: 'title' }, '상품': { type: 'relation', relation: productId }, '입점 매장': { type: 'relation', relation: storeId }, '실재고': { type: 'number' }, '브랜드사': { type: 'relation', relation: brandId }, '샘플·DP 수량': { type: 'number' }, '입점 상태': { type: 'select', options: ['입점 예정', '입점 완료', '판매 중단'] }, '판매 방식': { type: 'select', options: ['위탁', '매입'] }, '위탁 공급가': { type: 'number' }, '위탁 매장 판매가': { type: 'number' }, '진열 위치': { type: 'rich_text' }, '특이사항': { type: 'rich_text' }, '특이사항 유형': { type: 'multi_select', options: ['수량 불일치'] }, '확인 필요': { type: 'checkbox' }, '납품일': { type: 'date' } } });
   const activityId = n.addSource('activity', { properties: { '이력명': { type: 'title' }, '브랜드': { type: 'relation', relation: brandId }, '일자': { type: 'date' }, '연락 방식': { type: 'select', options: ['전화', '이메일', '미팅', '메신저', '기타'] }, '결과': { type: 'select', options: ['완료', '부재', '회신 대기'] }, '상대방 담당자': { type: 'rich_text' }, '통화 내용': { type: 'rich_text' }, '다음 행동': { type: 'rich_text' }, '후속 확인일': { type: 'date' }, '후속 완료': { type: 'checkbox' }, '상담 담당자': { type: 'people' } } });
-  const termsId = n.addSource('terms', { properties: { '조건명': { type: 'title' }, '벤더': { type: 'relation', relation: brandId }, '상품': { type: 'relation', relation: productId }, '거래 방식': { type: 'multi_select', options: ['위탁', '사입'] }, '검토 상태': { type: 'select', options: ['사용 중'] }, '매입가(매입 가능시)': { type: 'number' }, '현재 채택': { type: 'checkbox' }, '기준일': { type: 'date' } } });
-  n.sources[brandId].properties['공급조건'] = { id: 'rel1', name: '공급조건', type: 'relation', relation: { data_source_id: termsId } };
-
   Object.assign(env.props, {
-    BO_GOOGLE_CLIENT_ID: '1234567890-testclient.apps.googleusercontent.com',
     BO_NOTION_TOKEN: 'secret-test-token', BO_ADMIN_EMAILS: 'admin@beautyora.test, second@beautyora.test',
-    BO_NOTION_BRAND_DATA_SOURCE_ID: brandId, BO_NOTION_PRODUCT_DATA_SOURCE_ID: productId,
-    BO_NOTION_ACTIVITY_DATA_SOURCE_ID: activityId, BO_ROOT_FOLDER_ID: env.drive.root,
-    BO_PARTNER_WEBAPP_URL: 'https://script.google.com/macros/s/PARTNER/exec'
+    BO_NOTION_BRAND_DATA_SOURCE_ID: brandId, BO_NOTION_ACTIVITY_DATA_SOURCE_ID: activityId, BO_ROOT_FOLDER_ID: env.drive.root
   });
-  if (!opts.skipDiscovery) Object.assign(env.props, { BO_NOTION_INVENTORY_DATA_SOURCE_ID: inventoryId, BO_NOTION_MOVEMENT_DATA_SOURCE_ID: movementId, BO_NOTION_STORE_DATA_SOURCE_ID: storeId, BO_NOTION_TERMS_DATA_SOURCE_ID: termsId });
 
   const brand = (name, code, stage, extra) => n.createPage(brandId, Object.assign({
     '브랜드명': { title: [{ text: { content: name } }] }, '브랜드 ID': { rich_text: [{ text: { content: code } }] },
@@ -580,17 +535,7 @@ function seed(env, opts) {
   const b1 = brand('루엠', 'BO-0001', '확정', { '사업자 번호': { rich_text: [{ text: { content: '123-45-67890' } }] } });
   const b2 = brand('셀리본', 'BO-0002', '조건 협의');
   const b3 = brand('새싹랩', 'BO-0003', '접수·검토', { '접수일': { date: { start: '2026-09-27' } }, '사업자 번호': { rich_text: [{ text: { content: '1234567890' } }] } });
-  const product = (brandPage, name, pid, review, barcode) => n.createPage(productId, {
-    '상품명': { title: [{ text: { content: name } }] }, '운영센터 상품 ID': { rich_text: [{ text: { content: pid } }] },
-    '브랜드': { relation: [{ id: brandPage.id }] }, '등록 검수 상태': { select: review ? { name: review } : null },
-    '바코드(텍스트)': { rich_text: [{ text: { content: barcode || '' } }] }, '소비자가': { number: 25000 }, '카테고리': { multi_select: [{ name: '스킨케어(베이직)' }] }
-  });
-  const p1 = product(b1, '시카 리페어 앰플', 'PRD-0001-AAAA', '승인 완료', '8800000000011');
-  const p2 = product(b1, '수분 크림', 'PRD-0002-BBBB', '검수 대기', '8800000000028');
-  const p3 = product(b2, '립 틴트', 'PRD-0003-CCCC', '승인 완료', '8800000000035');
-  const s1 = n.createPage(storeId, { '매장명': { title: [{ text: { content: '팜픽 홍대점' } }] } });
-  const inv = n.createPage(inventoryId, { '관리명': { title: [{ text: { content: '홍대 · 앰플' } }] }, '상품': { relation: [{ id: p1.id }] }, '입점 매장': { relation: [{ id: s1.id }] }, '실재고': { number: 10 }, '확인 필요': { checkbox: true } });
-  return { ids: { brandId, productId, storeId, movementId, inventoryId, activityId, termsId }, b1, b2, b3, p1, p2, p3, s1, inv };
+  return { ids: { brandId, activityId }, b1, b2, b3 };
 }
 
 module.exports = { createEnv, seed, FakeNotion, FakeDrive };
