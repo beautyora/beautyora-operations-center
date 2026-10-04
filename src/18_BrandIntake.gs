@@ -195,13 +195,13 @@ function intakeCreateOnce_(schema, properties, answers) {
 }
 
 /** 호출자는 프로젝트 잠금을 보유한다. 기존 브랜드에는 PATCH/댓글도 쓰지 않는다. */
-function intakeProcessResponse_(response, schema) {
+function intakeProcessResponse_(response, schema, reviewedAnswers) {
   const responseId = String(response.getId() || '');
   if (!responseId) throw userError_('Form 응답 ID가 없습니다.');
   const key = BO_INTAKE_JOB + sha256_(responseId), raw = prop_(key);
   let job = raw ? JSON.parse(raw) : null;
   if (job && job.done) return { skipped: true };
-  const answers = formAnswers_(response), fingerprint = sha256_(JSON.stringify(answers));
+  const answers = reviewedAnswers || formAnswers_(response), fingerprint = sha256_(JSON.stringify(answers));
   const names = splitBrandNames_(answers.brand);
   if (!names.length || names.length > 25) throw userError_('입점 브랜드명은 1~25개여야 합니다.');
   if (job && job.fingerprint !== fingerprint) throw userError_('처리 중 응답이 수정되었습니다. 관리자 확인이 필요합니다.');
@@ -295,5 +295,112 @@ function scheduledBrandIntake(e) {
   if (!isProjectTrigger_(e)) throw new Error('트리거에서만 실행할 수 있습니다.');
   const result = syncBrandIntake_();
   if (result.failed.length) notifyAdmins_('입점 신규 응답 등록 오류', result.failed.map(function (f) { return f.reference + ': ' + f.message; }).join('\n'));
+  return result;
+}
+
+
+/** 관리자 두 건 복구. 원문/개인정보는 로그하지 않는다. 설정은 Script Properties에만 둔다. */
+const BO_INTAKE_RECOVERY_CONFIG = 'BO_INTAKE_RECOVERY_TWO_V1';
+const BO_INTAKE_RECOVERY_FROZEN = 'BO_INTAKE_RECOVERY_FROZEN_V1';
+
+function intakeRecoveryConfig_(config) {
+  config = config || JSON.parse(prop_(BO_INTAKE_RECOVERY_CONFIG) || 'null');
+  if (!config || !Array.isArray(config.targets) || config.targets.length !== 2) throw userError_('복구 대상은 정확히 두 건이어야 합니다.');
+  config.targets.forEach(function (t) {
+    if (!t || typeof t.brand !== 'string' || !t.brand.trim() || typeof t.company !== 'string' || !t.company.trim() ||
+        typeof t.timestamp !== 'string' || !/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/.test(t.timestamp) || !isFinite(Date.parse(t.timestamp))) {
+      throw userError_('브랜드/회사/시간대 포함 접수 timestamp가 필요합니다.');
+    }
+  });
+  return config;
+}
+
+function intakeRecoverySource_(response) {
+  const source = {
+    responseId: String(response.getId() || ''), timestamp: response.getTimestamp().toISOString(),
+    questions: response.getItemResponses().map(function (r) {
+      const item = r.getItem();
+      return { id: String(item.getId()), title: item.getTitle(), type: String(item.getType()), answer: r.getResponse() };
+    })
+  };
+  if (!source.responseId) throw userError_('원본 Form 응답 ID가 없습니다.');
+  return { source: source, sourceHash: sha256_(JSON.stringify(source)), currentMapping: formAnswers_(response) };
+}
+
+function intakeRecoveryFind_(config, previewOnly) {
+  const responses = intakeForm_().getResponses();
+  const selected = config.targets.map(function (target) {
+    const matches = responses.filter(function (r) {
+      if (Math.abs(r.getTimestamp().getTime() - Date.parse(target.timestamp)) > (previewOnly ? 1000 : 0)) return false;
+      const answers = formAnswers_(r);
+      return answers.brand === target.brand && answers.company === target.company;
+    });
+    if (matches.length !== 1) throw userError_('브랜드/회사/접수시각으로 원본 응답을 하나로 확정할 수 없습니다.');
+    return matches[0];
+  });
+  if (String(selected[0].getId()) === String(selected[1].getId())) throw userError_('서로 다른 두 응답이 필요합니다.');
+  return selected;
+}
+
+/** 읽기 전용. 반환 원문은 관리자 화면에서만 확인하고 로그/공개 저장소에 복사하지 않는다. */
+function previewBrandIntakeRecovery(config) {
+  assertAdmin_();
+  return withLock_(function () {
+    config = intakeRecoveryConfig_(config);
+    return { responses: intakeRecoveryFind_(config, true).map(intakeRecoverySource_),
+      warning: '현재 Form에서 삭제된 질문은 누락될 수 있습니다. Sheet 원본 대조 후 fields를 명시하세요. currentMapping은 승인된 매핑이 아닙니다.' };
+  }, 20000);
+}
+
+function intakeRecoveryAnswers_(target, preview) {
+  if (target.responseId !== preview.source.responseId || target.sourceHash !== preview.sourceHash) throw userError_('승인한 원본 ID/hash와 다릅니다. preview를 다시 확인하세요.');
+  if (!target.fields || typeof target.fields !== 'object' || Array.isArray(target.fields)) throw userError_('승인한 질문 ID별 fields 매핑이 필요합니다.');
+  const answers = {};
+  Object.keys(target.fields).forEach(function (key) {
+    if (!Object.prototype.hasOwnProperty.call(BO_FORM_QUESTIONS, key)) throw userError_('허용되지 않은 복구 필드입니다.');
+    const items = preview.source.questions.filter(function (q) { return q.id === target.fields[key]; });
+    if (items.length !== 1) throw userError_('승인 필드의 원본 질문 ID를 찾을 수 없습니다.');
+    const value = items[0].answer;
+    answers[key] = Array.isArray(value) ? value.map(function (v) { return Array.isArray(v) ? v.join(' ') : v; }).join(', ') : String(value == null ? '' : value).trim();
+  });
+  if (answers.brand !== target.brand || answers.company !== target.company || splitBrandNames_(answers.brand).length !== 1) throw userError_('복구는 응답당 승인된 브랜드 하나만 허용합니다.');
+  answers._original = preview.source.questions.map(function (q) { return q.title + ': ' + String(q.answer); }).join('\n');
+  return answers;
+}
+
+/** 편집기 실행용. 승인된 설정만 사용하며 첫 실행 이후 대상/매핑 변경을 거부한다. */
+function replayBrandIntakeRecovery() {
+  assertAdmin_();
+  return withLock_(function () {
+    const config = intakeRecoveryConfig_();
+    const hash = sha256_(JSON.stringify(config)), frozen = JSON.parse(prop_(BO_INTAKE_RECOVERY_FROZEN) || 'null');
+    if (frozen && frozen !== hash) throw userError_('이미 확정된 두 건 복구 설정과 다릅니다.');
+    const responses = intakeRecoveryFind_(config);
+    const baseline = intakeBaseline_();
+    if (!baseline || responses.some(function (r) { return !baseline.excluded.has(sha256_(String(r.getId()))); })) throw userError_('초기 기준점에 포함된 과거 응답 두 건만 복구할 수 있습니다.');
+    // 두 건 모두 원본과 승인 매핑이 일치해야 첫 쓰기를 시작한다.
+    const answers = responses.map(function (r, i) { return intakeRecoveryAnswers_(config.targets[i], intakeRecoverySource_(r)); });
+    const schema = intakeSchema_();
+    if (!frozen) intakeSave_(BO_INTAKE_RECOVERY_FROZEN, hash);
+    return { results: responses.map(function (r, i) { return intakeProcessResponse_(r, schema, answers[i]); }) };
+  }, 20000);
+}
+
+/** 편집기 Run 전용: 승인된 두 응답의 검증 메타데이터만 기록한다. 답변 원문은 출력하지 않는다. */
+function inspectBrandIntakeRecovery() {
+  assertAdmin_();
+  const preview = previewBrandIntakeRecovery();
+  const result = {
+    warning: preview.warning,
+    responses: preview.responses.map(function (p) {
+      return {
+        expectedMatch: true, responseId: p.source.responseId, timestamp: p.source.timestamp, sourceHash: p.sourceHash,
+        questions: p.source.questions.map(function (q) {
+          return { id: q.id, title: q.title, type: q.type, answerHash: sha256_(JSON.stringify(q.answer)) };
+        })
+      };
+    })
+  };
+  console.log(JSON.stringify(result));
   return result;
 }
