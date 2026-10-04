@@ -185,7 +185,7 @@ test('main product list: one tab with brand and vendor columns, thumbnails kept,
   const header = ['브랜드', '이미지', '상품명', '구성', '카테고리', '바코드', '공유 매입용 공급가', '공유 위탁용 공급가', '권장판매가', '매입MOQ\n단위 : EA', '핵심포인트', '제품설명', '거래유형', '실제 공급사', '계산모드', '원본행 ID', '운영 출처시트'];
   const row = (brand, name, barcode, supplier, sourceSheet, price) => [brand, '', name, '20mL', '스킨케어', barcode, price, '', 5000, 20, '포인트', '설명', '매입', supplier, '자동', 'r-' + name.length, sourceSheet];
   const values = [header,
-    row('[EYENLIP]', '아이앤립 비비 크림 20ml', '8809555252672', '시온', '시온', 2409),
+    row('[EYENLIP]', '아이앤립 비비 크림 20ml', 8809555252672, '시온', '시온', 2409),
     row('루엠', '루엠 시카 리페어 앰플 30ml', '', '주식회사 픽오라(뷰티오라)', '픽오라(매입) / 픽오라(위탁)', 9000),
     ['', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
     row('벨라앤베카', 'Velra&Becca Active Daily Serum 50ml', '', '주식회사 픽오라(뷰티오라)', '픽오라(매입) / 픽오라(위탁)', 14100),
@@ -197,8 +197,8 @@ test('main product list: one tab with brand and vendor columns, thumbnails kept,
   const before = JSON.stringify(env.sheets.books[srcId]);
 
   const r = ok(env.api('products.mainBuild', { sourceUrl: 'https://docs.google.com/spreadsheets/d/' + srcId + '/edit?gid=1', sheetName: '뷰티오라', legacyFolderUrl: 'https://drive.google.com/drive/folders/' + legacyRoot }));
-  assert.deepEqual(r.stats, { products: 4, vendor: 2, images: 4, linkNotion: 2, linkWorkbook: 1, storeMain: 1, noLink: 1 });
-  assert.deepEqual(r.report, []);
+  assert.deepEqual(r.stats, { products: 4, vendor: 2, linkNotion: 2, linkWorkbook: 1, storeMain: 1, noLink: 1 });
+  assert.deepEqual(r.report, ['섬네일: 통합리스트 "뷰티오라" 탭의 이미지 열(B2:B6)을 복사해 메인 상품목록 이미지 열(D2)에 붙여 넣어 주세요. 상품 순서가 같습니다. (빈 행 1개를 건너뛰어 순서가 어긋나니 빈 행을 먼저 지워 주세요)']);
   assert.equal(JSON.stringify(env.sheets.books[srcId]), before, 'the integrated list is not changed');
 
   const bookId = /\/d\/([^/]+)/.exec(r.url)[1];
@@ -220,9 +220,10 @@ test('main product list: one tab with brand and vendor columns, thumbnails kept,
   assert.equal(rows[2][col('링크 출처')], '기존 엑셀');
   assert.equal(rows[3][col('제품 링크')], '');
   assert.equal(rows[0][col('매입 MOQ')], 20);
-  // Thumbnails are rebuilt from the source image URLs and land next to their product (the blank row is skipped).
-  const imageCol = col('이미지') + 1;
-  assert.deepEqual([2, 3, 4, 5, 6].map((rr) => main.images[rr + ',' + imageCol] || null), ['img:bb', 'img:ample', 'img:serum', 'img:perfume', null]);
+  // Text columns stay text (no time/number conversion).
+  assert.equal(main.formats[col('원본행 ID') + 1], '@');
+  assert.equal(main.formats[col('바코드') + 1], '@');
+  assert.equal(rows[0][col('바코드')], '8809555252672');
   const basis = book.sheets[1];
   assert.deepEqual(basis.cells[0], ['상품 ID', '상품명', '실제 공급사', '계산모드', '운영 출처시트']);
   assert.deepEqual(basis.cells[1], ['BP-00001', '아이앤립 비비 크림 20ml', '시온', '자동', '시온']);
