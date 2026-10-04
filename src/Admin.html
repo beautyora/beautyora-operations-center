@@ -128,10 +128,25 @@ async function pageBrands(view) {
     const list = data.brands.filter((b) => (!text || [b.name, b.company, b.code, b.contactName, b.email].join(' ').toLowerCase().includes(text)) && (!stage || b.stage === stage) && (!priority || b.priority === priority));
     $('#bcount').textContent = list.length + ' / ' + data.brands.length + '곳';
     $('#btable').innerHTML = list.length ? '<table class="table"><thead><tr><th>브랜드</th><th>진행 단계</th><th class="hide-sm">우선순위</th><th class="hide-sm">담당자</th><th class="hide-sm">구글 드라이브</th><th class="hide-sm">최근 수정</th></tr></thead><tbody>' +
-      list.slice(0, 500).map((b) => '<tr data-code="' + esc(b.code) + '"><td><div class="cell-title">' + notionLink(b.url, b.name || '(이름 없음)') + (b.issue ? ' ' + pill(b.issue, 'bad') : '') + '</div><div class="cell-sub">' + esc(b.code) + (b.company ? ' · ' + esc(b.company) : '') + '</div></td><td>' + pill(b.stage) + '</td><td class="hide-sm">' + esc(b.priority || '—') + '</td><td class="hide-sm small">' + esc([b.contactName, b.email].filter(Boolean).join(' · ') || '—') + '</td><td class="hide-sm">' + (safeUrl(b.drive) ? '<a class="btn btn-sm" href="' + esc(b.drive) + '" target="_blank" rel="noopener">' + icon('external') + '열기</a>' : '<span class="muted small">없음</span>') + '</td><td class="hide-sm small muted nowrap">' + esc(Fmt.ago(b.edited)) + '</td></tr>').join('') +
+      list.slice(0, 500).map((b) => '<tr data-code="' + esc(b.code) + '"><td><div class="cell-title">' + notionLink(b.url, b.name || '(이름 없음)') + (b.issue ? ' ' + pill(b.issue, 'bad') : '') + '</div><div class="cell-sub">' + esc(b.code) + (b.company ? ' · ' + esc(b.company) : '') + '</div></td><td>' + pill(b.stage) + '</td><td class="hide-sm">' + esc(b.priority || '—') + '</td><td class="hide-sm small">' + esc([b.contactName, b.email].filter(Boolean).join(' · ') || '—') + '</td><td class="hide-sm">' + (safeUrl(b.drive) ? '<a class="btn btn-sm" href="' + esc(b.drive) + '" target="_blank" rel="noopener">' + icon('external') + '열기</a>' : '<button class="btn btn-sm" data-folder="' + esc(b.code) + '">폴더 만들기</button>') + '</td><td class="hide-sm small muted nowrap">' + esc(Fmt.ago(b.edited)) + '</td></tr>').join('') +
       '</tbody></table>' : UI.empty('조건에 맞는 브랜드가 없습니다');
   };
   ['bq', 'bstage', 'bpriority'].forEach((id) => $('#' + id).addEventListener(id === 'bq' ? 'input' : 'change', paint));
+  $('#btable').addEventListener('click', (e) => {
+    const button = e.target.closest('[data-folder]');
+    if (!button) return;
+    const brand = data.brands.find((b) => b.code === button.dataset.folder);
+    busy(button, async () => {
+      if (!await Modal.confirm('드라이브 폴더 만들기', brand.name + ' 폴더를 만들고(하위 폴더·취합 엑셀 양식 포함) Notion "구글 드라이브"에 주소를 넣습니다.', '만들기')) return;
+      try {
+        const r = await Api.call('brands.folder', { code: brand.code }, { noRetry: true });
+        brand.drive = r.url;
+        Api.invalidate();
+        paint();
+        Toast.ok('폴더를 만들고 Notion에 주소를 넣었습니다.');
+      } catch (err) { Toast.error(err); }
+    });
+  });
   paint();
 }
 
@@ -141,6 +156,14 @@ async function pageSettings(view) {
     '<section class="card"><div class="card-head"><h2>연결 상태</h2><div class="row"><button class="btn btn-sm" id="sHealth">' + icon('refresh') + '다시 점검</button><button class="btn btn-sm btn-primary" id="sSetup">초기 설정 실행</button></div></div><div class="card-body" id="sHealthBox">' + UI.skeleton(4) + '</div></section>';
   view.insertAdjacentHTML('beforeend', '<section class="card"><div class="card-head"><h2>메인 상품목록</h2><span class="small muted">상품의 원본(Google 시트)</span></div><div class="card-body stack" id="mBox">' + UI.skeleton(2) + '</div></section>');
   mainProductsCard();
+  view.insertAdjacentHTML('beforeend', '<section class="card"><div class="card-head"><h2>브랜드 드라이브 폴더</h2><button class="btn btn-sm" id="fSync">지금 처리</button></div><div class="card-body stack"><p class="small muted">Notion 브랜드 목록에서 "드라이브 폴더 만들기"를 체크하면 5분 안에 폴더가 만들어지고 "구글 드라이브"에 주소가 들어갑니다. 브랜드 화면의 "폴더 만들기" 버튼으로 바로 만들 수도 있습니다.</p><div id="fOut"></div></div></section>');
+  $('#fSync').addEventListener('click', (e) => busy(e.currentTarget, async () => {
+    try {
+      const r = await Api.call('brands.foldersSync', {}, { noRetry: true });
+      $('#fOut').innerHTML = r.skipped ? '<div class="notice warn">' + icon('alert') + '<div>' + esc(r.skipped) + '</div></div>' : '<div class="notice ' + (r.failed.length ? 'warn' : 'ok') + '"><div>만든 폴더 ' + r.created.length + '개' + (r.created.length ? ': ' + esc(r.created.map((c) => c.name).join(', ')) : '') + (r.failed.length ? '<br>실패 ' + r.failed.length + '개: ' + esc(r.failed.map((f) => f.name + ' — ' + f.message).join(' / ')) : '') + '</div></div>';
+      if (r.created && r.created.length) Api.invalidate();
+    } catch (err) { $('#fOut').innerHTML = UI.error(err); }
+  }));
   const paintHealth = (h) => {
     $('#sHealthBox').innerHTML = '<div class="table-wrap"><table class="table"><tbody>' + h.results.map((r) => '<tr><td class="nowrap cell-title">' + esc(r.target) + '</td><td>' + pill(r.status) + '</td><td class="small">' + esc(r.message) + '</td></tr>').join('') + '</tbody></table></div><p class="small muted" style="margin-top:8px">' + esc(Fmt.datetime(h.checkedAt)) + ' 점검</p>';
   };

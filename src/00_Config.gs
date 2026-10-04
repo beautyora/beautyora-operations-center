@@ -17,6 +17,7 @@ const BO = Object.freeze({
     LEGACY_NOTION_TOKEN: 'NOTION_TOKEN',
     ADMIN_EMAILS: 'BO_ADMIN_EMAILS',
     ROOT_FOLDER_ID: 'BO_ROOT_FOLDER_ID',
+    TEMPLATE_FILE_ID: 'BO_TEMPLATE_FILE_ID',
     ALLOW_EMBED: 'BO_ALLOW_EMBED',
     SCHEMA_IDS: 'BO_SCHEMA_IDS'
   })
@@ -46,6 +47,7 @@ const BO_SCHEMAS = Object.freeze({
       memo: ['rich_text', ['핵심 메모']],
       next: ['rich_text', ['다음 행동']],
       drive: ['url', ['구글 드라이브']],
+      makeFolder: ['checkbox', ['드라이브 폴더 만들기']],
       bizNo: ['rich_text', ['사업자 번호']],
       received: ['date', ['접수일']],
       issue: ['select', ['이슈 여부']],

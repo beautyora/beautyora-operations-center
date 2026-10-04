@@ -9,7 +9,7 @@ Notion으로 하기 어려운 일을 맡는 **내부 직원 전용** Google Apps
 | 브랜드·영업 진행 | Notion `브랜드 목록` | 읽기, 진행 현황 보기 (수정은 Notion에서) |
 | 연락·진행 기록 | Notion `연락 · 진행 이력` | (예정) 변경 이력 |
 | 상품 | Google 시트 `메인 상품목록` | 설정 → 메인 상품목록에서 통합 상품리스트로 한 번 생성. (예정) 브랜드 자료 반영 |
-| 브랜드 자료(엑셀·사진·서류) | 브랜드 전용 Google Drive 폴더 | (예정) Notion `자료 요청` 승인 시 폴더 생성, 자동 수집 |
+| 브랜드 자료(엑셀·사진·서류) | 브랜드 전용 Google Drive 폴더 | Notion `드라이브 폴더 만들기` 체크(5분 안) 또는 운영센터 브랜드 화면의 `폴더 만들기` → 폴더·하위 폴더·취합 엑셀 양식 생성, `구글 드라이브`에 주소 입력 |
 | 입점 신청 폼 → Notion | 별도 Apps Script 프로젝트 | 다루지 않음 |
 | 설정값·토큰 | Apps Script 스크립트 속성 | 코드·저장소에 넣지 않음 |
 
@@ -29,6 +29,7 @@ src/
   03_Auth.gs        관리자·소유자·트리거 확인
   10_Brands.gs      브랜드 목록(읽기)
   15_Files.gs       Drive 루트 폴더
+  16_BrandFolders.gs 브랜드 드라이브 폴더 만들기(Notion 체크박스·버튼)
   30_MainProducts.gs 메인 상품목록 만들기(통합리스트 → 새 시트, 제품 링크 찾기)
   19_Dashboard.gs   홈 화면
   20_Setup.gs       초기 설정·연결 점검·트리거
@@ -74,6 +75,7 @@ tests/
 | `BO_ADMIN_EMAILS` | ✅ | 관리자 Google 계정, 쉼표로 구분 |
 | `BO_NOTION_BRAND_DATA_SOURCE_ID` | ✅ | 브랜드 목록 데이터 소스 ID |
 | `BO_ROOT_FOLDER_ID` | ✅ | 브랜드 자료 루트 Drive 폴더 |
+| `BO_TEMPLATE_FILE_ID` | | 브랜드 폴더에 복사할 취합 엑셀 양식 파일 ID (없으면 양식 없이 폴더만) |
 | `BO_ALLOW_EMBED` | ops 주소 | `true`면 ops.beautyora.kr 안에 표시 허용 |
 | `BO_NOTION_ACTIVITY_DATA_SOURCE_ID` | 권장 | 연락 · 진행 이력 (변경 이력에 사용 예정) |
 

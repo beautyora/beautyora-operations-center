@@ -23,7 +23,7 @@ test('setup installs the health-check trigger and removes leftover triggers such
   const res = ok(env.api('system.setup'));
   assert.equal(res.ok, true, res.report.join('\n'));
   assert.ok(res.report.includes('삭제: 예전 트리거 onBrandFormSubmit'), res.report.join('\n'));
-  assert.deepEqual(env.triggers.map((t) => t.getHandlerFunction()), ['scheduledHealthCheck']);
+  assert.deepEqual(env.triggers.map((t) => t.getHandlerFunction()), ['scheduledHealthCheck', 'scheduledBrandFolders']);
   const again = ok(env.api('system.setup'));
   assert.deepEqual(again.report, ['변경할 설정이 없습니다. 이미 준비되어 있습니다.']);
   assert.equal(again.health.ok, true, JSON.stringify(again.health.results));
@@ -134,7 +134,7 @@ test('only the audited entry points are callable from google.script.run', () => 
     for (const m of src.matchAll(/^function ([A-Za-z0-9_$]+)\s*\(/gm)) if (!m[1].endsWith('_')) publicFns.push(m[1]);
   });
   // Each of these checks admin/owner or an installed trigger before doing anything.
-  assert.deepEqual(publicFns.sort(), ['api', 'doGet', 'runHealthCheck', 'scheduledHealthCheck', 'setupBeautyora'].sort());
+  assert.deepEqual(publicFns.sort(), ['api', 'doGet', 'runHealthCheck', 'scheduledBrandFolders', 'scheduledHealthCheck', 'setupBeautyora'].sort());
   const { env } = setup();
   env.setUser('');
   assert.throws(() => env.call('runHealthCheck'), /계정/);
@@ -277,4 +277,31 @@ test('thumbnails: image files from the catalog sheet are copied into our folder 
   assert.equal(again.filled, 0);
   assert.equal(again.already, 3);
   assert.equal(env.drive.copies, copies);
+});
+
+test('brand folders: Notion checkbox (trigger) or the button creates the folder once and writes its URL to 구글 드라이브', () => {
+  const { env, data } = setup();
+  const templateId = env.drive.file({ name: '매입정보_취합파일.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', parents: [env.drive.root] }).id;
+  env.props.BO_TEMPLATE_FILE_ID = templateId;
+  const page = (p) => env.notion.pages[p.id];
+  const driveOf = (id) => (page(id).properties['구글 드라이브'] || {}).url || null;
+  const children = (parent) => Object.values(env.drive.items).filter((x) => x.parents[0] === parent && !x.trashed).map((x) => x.name).sort();
+  // 체크된 브랜드만 처리한다.
+  page(data.b1).properties['드라이브 폴더 만들기'] = { checkbox: true };
+  const r = ok(env.api('brands.foldersSync'));
+  assert.deepEqual(r.created.map((c) => c.code), ['BO-0001']);
+  assert.deepEqual(r.failed, []);
+  const folder = Object.values(env.drive.items).find((x) => x.folder && x.name === '루엠 (BO-0001)');
+  assert.ok(folder && folder.parents[0] === env.drive.root, 'folder under the root');
+  assert.equal(driveOf(data.b1), 'https://drive.google.com/drive/folders/' + folder.id);
+  assert.deepEqual(children(folder.id), ['01_상품 이미지', '02_상세페이지', '03_서류', '루엠_매입정보_취합파일.xlsx']);
+  assert.equal(driveOf(data.b2), null, 'unchecked brand untouched');
+  // 다시 돌려도 새로 만들지 않는다(구글 드라이브가 채워져 있음).
+  assert.deepEqual(ok(env.api('brands.foldersSync')).created, []);
+  // 버튼: 체크 없이 바로 만든다. 이미 주소가 있으면 그대로 돌려준다.
+  const b = ok(env.api('brands.folder', { code: 'BO-0002' }));
+  assert.equal(b.created, true);
+  assert.equal(driveOf(data.b2), b.url);
+  assert.equal(ok(env.api('brands.folder', { code: 'BO-0002' })).created, false);
+  assert.equal(Object.values(env.drive.items).filter((x) => x.folder && x.name === '셀리본 (BO-0002)').length, 1);
 });
