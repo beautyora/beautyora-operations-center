@@ -9,6 +9,12 @@ function clearSchemaMemo_() {
 }
 
 function installTriggers_(report) {
+  withLock_(function () {
+    if (!prop_(BO_FOLDER_START)) {
+      props_().setProperty(BO_FOLDER_START, new Date().toISOString());
+      report.push('신규 브랜드 자동 처리 시작: ' + prop_(BO_FOLDER_START) + ' (기존 브랜드는 자동 생성하지 않음)');
+    }
+  });
   ScriptApp.getProjectTriggers().forEach(function (trigger) {
     if (BO_TRIGGER_HANDLERS.indexOf(trigger.getHandlerFunction()) < 0) {
       ScriptApp.deleteTrigger(trigger);
@@ -83,6 +89,7 @@ function healthCheck_() {
   } catch (error) {
     add('Google Drive', '오류', errorMessage_(error));
   }
+  if (!prop_(BO_FOLDER_START)) add('신규 브랜드 폴더', '주의', '초기 설정을 실행하여 자동 처리를 시작해 주세요.');
   const handlers = ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction(); });
   const legacy = handlers.filter(function (h) { return BO_TRIGGER_HANDLERS.indexOf(h) < 0; });
   if (legacy.length) add('트리거', '주의', '예전 트리거가 남아 있습니다: ' + legacy.join(', ') + ' (초기 설정을 실행하면 정리됩니다)');
