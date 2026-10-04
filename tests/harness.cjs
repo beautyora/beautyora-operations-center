@@ -413,6 +413,7 @@ class FakeSheets {
         getDisplayValues: () => r.getValues().map((line) => line.map((v) => (v && typeof v === 'object' ? '' : String(v)))),
         getFormulas: () => { const out = []; for (let i = 0; i < nr; i++) { const line = []; for (let j = 0; j < nc; j++) line.push((sh.formulas || {})[(row + i) + ',' + (col + j)] || ''); out.push(line); } return out; },
         setFormula: (f) => { sh.formulas = sh.formulas || {}; sh.formulas[row + ',' + col] = f; return r; },
+        setFormulas: (fs) => { sh.formulas = sh.formulas || {}; fs.forEach((line, i) => line.forEach((f, j) => { const k = (row + i) + ',' + (col + j); if (f) sh.formulas[k] = f; else delete sh.formulas[k]; })); return r; },
         setValues: (vals) => {
           if (vals.length !== nr || vals.some((line) => line.length !== nc)) throw new Error('setValues: size mismatch');
           vals.forEach((line, i) => {

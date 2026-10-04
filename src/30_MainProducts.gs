@@ -2,14 +2,14 @@
  * 메인 상품목록(Google 시트): 상품의 원본.
  * 처음 한 번, 통합 상품리스트(벤더별 운영본)의 정리 탭에서 만든다. 이후에는 이 시트가 원본이고 통합리스트는 외부 제공용 작업 공간이다.
  * - '상품' 탭: 브랜드 열 하나로 정리하고, 벤더를 통해 들어온 상품만 '벤더' 열에 벤더사 이름을 적는다(직거래는 비움).
- * - '가격 근거' 탭: 통합리스트의 가격 계산·출처 열을 상품 ID로 이어 보관한다.
+ * - 위탁가 비고: 통합리스트 '위탁 가격상태'에 '임의 5% 가산'이 있는 상품만 표시한다(그 밖의 가격 계산 열은 가져오지 않음).
  * - 제품 링크: 통합리스트에는 없어서 Notion 상품 DB의 '참고 링크', 기존 브랜드 폴더의 입점 상품 리스트 '참고링크'에서 찾아 채운다.
  */
 
 const BO_MAIN = Object.freeze({
   TITLE: '뷰티오라 메인 상품목록',
   PRODUCT_TAB: '상품',
-  BASIS_TAB: '가격 근거',
+  CONSIGN_NOTE: '임의 5% 가산',
   ID_PREFIX: 'BP-',
   /** 통합리스트 '운영 출처시트'에 이 글자가 있으면 자사(직거래) 상품이라 벤더를 비운다. */
   DIRECT_SOURCE_KEYWORD: '픽오라',
@@ -26,17 +26,17 @@ const BO_MAIN = Object.freeze({
     ['거래유형', '거래유형'],
     ['매입 공급가', '공유 매입용 공급가'],
     ['위탁 공급가', '공유 위탁용 공급가'],
+    ['위탁가 비고'],
     ['권장판매가', '권장판매가'],
     ['매입 MOQ', '매입MOQ'],
     ['핵심포인트', '핵심포인트'],
     ['제품설명', '제품설명'],
     ['제품 링크'],
-    ['링크 출처'],
-    ['원본행 ID', '원본행 ID']
+    ['링크 출처']
   ],
   PRICE_COLUMNS: ['매입 공급가', '위탁 공급가', '권장판매가'],
   /** 숫자·시간으로 바뀌면 안 되는 열(예: 원본행 ID '400000013:119'가 시간으로 읽힘). 쓰기 전에 텍스트 서식으로 둔다. */
-  TEXT_COLUMNS: ['상품 ID', '바코드', '원본행 ID'],
+  TEXT_COLUMNS: ['상품 ID', '바코드'],
   /** 기존 Notion 상품 DB(읽기만). v2에서 쓰던 스크립트 속성을 그대로 읽는다. */
   LEGACY_PRODUCT_PROP: 'BO_NOTION_PRODUCT_DATA_SOURCE_ID',
   SHEET_PROP: 'BO_MAIN_PRODUCT_SHEET_ID',
@@ -182,9 +182,7 @@ function buildMainProductList_(payload) {
   const missing = need.filter(function (name) { return !hasOwn_(index, headerKey_(name)); });
   if (missing.length) throw userError_('통합 상품리스트 머리글을 찾지 못했습니다: ' + missing.join(', '));
 
-  const at = function (row, name) { return row[index[headerKey_(name)]]; };
-  const used = {};
-  BO_MAIN.COLUMNS.forEach(function (c) { if (c[1]) used[index[headerKey_(c[1])]] = true; });
+  const at = function (row, name) { const key = headerKey_(name); return hasOwn_(index, key) ? row[index[key]] : ''; };
 
   // 제품 링크 후보
   let candidates = [];
@@ -192,7 +190,7 @@ function buildMainProductList_(payload) {
   if (payload.legacyFolderUrl) candidates = candidates.concat(legacyWorkbookLinks_(payload.legacyFolderUrl, report));
 
   const stats = { products: 0, vendor: 0, linkNotion: 0, linkWorkbook: 0, storeMain: 0, noLink: 0 };
-  const mainRows = [], basisRows = [];
+  const mainRows = [];
   values.slice(1).forEach(function (row) {
     const brand = clean_(at(row, '브랜드')), name = clean_(at(row, '상품명'));
     if (!brand && !name) return;
@@ -215,13 +213,13 @@ function buildMainProductList_(payload) {
         case '이미지': return '';
         case '제품 링크': return link ? link.url : '';
         case '링크 출처': return linkNote;
+        case '위탁가 비고': return String(at(row, '위탁 가격상태') || '').indexOf(BO_MAIN.CONSIGN_NOTE) >= 0 ? BO_MAIN.CONSIGN_NOTE : '';
         default: {
           const v = at(row, c[1]);
           return v && typeof v === 'object' && !(v instanceof Date) ? '' : v;
         }
       }
     }));
-    basisRows.push([id, name].concat(header.map(function (h, c) { return used[c] ? null : row[c]; }).filter(function (v, c) { return !used[c]; })));
   });
   if (!stats.products) throw userError_('옮길 상품이 없습니다.');
 
@@ -248,11 +246,6 @@ function buildMainProductList_(payload) {
   main.setRowHeights(2, mainRows.length, 64);
   main.setColumnWidth(imageCol, 72);
 
-  const basis = book.insertSheet(BO_MAIN.BASIS_TAB);
-  const basisHeader = ['상품 ID', '상품명'].concat(header.filter(function (h, c) { return !used[c]; }).map(function (h) { return String(h).split('\n')[0]; }));
-  basis.getRange(1, 1, 1, basisHeader.length).setValues([basisHeader]).setFontWeight('bold');
-  basis.getRange(2, 1, basisRows.length, basisHeader.length).setValues(basisRows.map(function (r) { return r.map(function (v) { return v && typeof v === 'object' && !(v instanceof Date) ? '' : v; }); }));
-  basis.setFrozenRows(1);
 
   // 통합리스트의 셀 이미지는 Apps Script로 읽거나 옮길 수 없다(파일 복사 시 #REF!). 섬네일은 '섬네일 넣기'가 IMAGE 함수로 채운다.
   report.push('섬네일: 설정 → 메인 상품목록 → 섬네일 넣기로 채워 주세요.');
@@ -335,7 +328,8 @@ function fillMainProductImages_(payload) {
   const at = function (name) { return names.indexOf(name); };
   const data = main.getRange(2, 1, rows, names.length).getValues();
   const imageCol = at('이미지') + 1;
-  const formulas = main.getRange(2, imageCol, rows, 1).getFormulas();
+  const imageRange = main.getRange(2, imageCol, rows, 1);
+  const formulas = imageRange.getFormulas();
   const folder = childFolder_(driveRoot_(), BO_MAIN.IMAGE_FOLDER);
   const copies = {};
   const copyOf = function (sourceId) {
@@ -362,13 +356,15 @@ function fillMainProductImages_(payload) {
       continue;
     }
     try {
-      main.getRange(i + 2, imageCol).setFormula(imageFormula_(copyOf(sourceId)));
+      formulas[i][0] = imageFormula_(copyOf(sourceId));
       result.filled++;
     } catch (error) {
       logError_('fillMainProductImages_', error);
       result.failed++;
     }
   }
+  // 비어 있던 칸에만 새 수식이 들어가고, 원래 있던 수식은 그대로 다시 쓴다.
+  if (result.filled) imageRange.setFormulas(formulas);
   logInfo_('mainProducts.images', { by: activeEmail_(), result: result });
   return Object.assign(result, { catalog: catalog.length, url: mainProductSheetUrl_() });
 }
