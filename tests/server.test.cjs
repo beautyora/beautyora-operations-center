@@ -197,14 +197,13 @@ test('main product list: one tab with brand and vendor columns, thumbnails kept,
   const before = JSON.stringify(env.sheets.books[srcId]);
 
   const r = ok(env.api('products.mainBuild', { sourceUrl: 'https://docs.google.com/spreadsheets/d/' + srcId + '/edit?gid=1', sheetName: '뷰티오라', legacyFolderUrl: 'https://drive.google.com/drive/folders/' + legacyRoot }));
-  assert.deepEqual(r.stats, { products: 4, vendor: 2, linkNotion: 2, linkWorkbook: 1, storeMain: 1, noLink: 1 });
+  assert.deepEqual(r.stats, { products: 4, vendor: 2, images: 4, linkNotion: 2, linkWorkbook: 1, storeMain: 1, noLink: 1 });
   assert.deepEqual(r.report, []);
   assert.equal(JSON.stringify(env.sheets.books[srcId]), before, 'the integrated list is not changed');
 
   const bookId = /\/d\/([^/]+)/.exec(r.url)[1];
   const book = env.sheets.books[bookId];
-  assert.deepEqual(book.sheets.map((s) => s.name), ['상품', '가격 근거'], 'other tabs of the copied file are removed');
-  assert.equal(book.sheets[0].filter, false, 'old filter removed');
+  assert.deepEqual(book.sheets.map((s) => s.name), ['상품', '가격 근거']);
   assert.equal(env.sheets.books[srcId].sheets.length, 2, 'source still has its tabs');
   const main = book.sheets[0];
   const col = (name) => main.cells[0].indexOf(name);
@@ -221,7 +220,7 @@ test('main product list: one tab with brand and vendor columns, thumbnails kept,
   assert.equal(rows[2][col('링크 출처')], '기존 엑셀');
   assert.equal(rows[3][col('제품 링크')], '');
   assert.equal(rows[0][col('매입 MOQ')], 20);
-  // Thumbnails stay with their product: the image cells are only moved, never rewritten.
+  // Thumbnails are rebuilt from the source image URLs and land next to their product (the blank row is skipped).
   const imageCol = col('이미지') + 1;
   assert.deepEqual([2, 3, 4, 5, 6].map((rr) => main.images[rr + ',' + imageCol] || null), ['img:bb', 'img:ample', 'img:serum', 'img:perfume', null]);
   const basis = book.sheets[1];
