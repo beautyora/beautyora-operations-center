@@ -4,7 +4,9 @@
 
 ## 1. 읽기 전용 preview
 
-관리자 웹 앱에서 `google.script.run.withSuccessHandler(resolve).withFailureHandler(reject).previewBrandIntakeRecovery(config)` 형태로 호출하여 반환값을 관리자에게만 표시합니다. 콘솔/실행 로그/공개 PR에 원문을 출력하지 마세요. 인자 생략 시 Script Property `BO_INTAKE_RECOVERY_TWO_V1`의 JSON을 읽습니다. 편집기 실행은 반환값을 화면에 자동 표시하지 않으므로 원문 확인에는 관리자 웹 앱 호출을 사용합니다.
+**지원되는 편집기 경로:** Script Property `BO_INTAKE_RECOVERY_TWO_V1`에 아래 두 대상 설정을 저장한 뒤 편집기 함수 목록에서 `inspectBrandIntakeRecovery`를 선택하고 Run 합니다. 관리자 확인 후 읽기 전용 preview를 호출하고 실행 로그에 실제 응답 ID, source hash, expectedMatch, 질문 ID/제목/유형/답변 hash만 기록합니다. 회사명·브랜드명·전화·이메일·답변 원문은 로그하지 않습니다. 원문은 이미 확보한 Sheet와 별도 대조합니다. 로그 메타데이터도 공개 PR에 복사하지 마세요.
+
+`previewBrandIntakeRecovery(config)`는 원문을 반환하는 내부 검토용 관리자 진입점입니다. 인자를 생략하면 동일 Script Property를 읽습니다. 편집기에서는 반환값이 자동 표시되지 않으므로 위 inspector를 사용합니다. 임의 브라우저 런타임 코드 주입은 필요하지 않습니다.
 
 ```json
 {"targets":[

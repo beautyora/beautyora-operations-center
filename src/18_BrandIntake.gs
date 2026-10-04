@@ -385,3 +385,22 @@ function replayBrandIntakeRecovery() {
     return { results: responses.map(function (r, i) { return intakeProcessResponse_(r, schema, answers[i]); }) };
   }, 20000);
 }
+
+/** 편집기 Run 전용: 승인된 두 응답의 검증 메타데이터만 기록한다. 답변 원문은 출력하지 않는다. */
+function inspectBrandIntakeRecovery() {
+  assertAdmin_();
+  const preview = previewBrandIntakeRecovery();
+  const result = {
+    warning: preview.warning,
+    responses: preview.responses.map(function (p) {
+      return {
+        expectedMatch: true, responseId: p.source.responseId, sourceHash: p.sourceHash,
+        questions: p.source.questions.map(function (q) {
+          return { id: q.id, title: q.title, type: q.type, answerHash: sha256_(JSON.stringify(q.answer)) };
+        })
+      };
+    })
+  };
+  console.log(JSON.stringify(result));
+  return result;
+}

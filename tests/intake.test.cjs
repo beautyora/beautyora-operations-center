@@ -413,3 +413,22 @@ test('recovery: shared lock blocks writes and partial Drive failure resumes with
     assert.equal(Object.values(env.drive.items).filter(x => x.name === t.brand + ' (' + b.code + ')').length, 1);
   }
 });
+
+test('recovery: editor inspector logs only approved metadata and never raw answers', () => {
+  const s = recoverySetup(), logs = [];
+  s.env.context.console = { log: value => logs.push(value) };
+  const props = JSON.stringify(s.env.props), pages = JSON.stringify(s.env.notion.pages);
+  const result = s.env.call('inspectBrandIntakeRecovery');
+  assert.equal(result.responses.length, 2);
+  assert.equal(logs.length, 1);
+  for (const value of ['테스트회사', '복구 브랜드 하나', '자동검증', '000-0000-0000', 'test@example.com', '사입, 위탁(우선순위)']) assert.ok(!logs[0].includes(value), value);
+  const logged = JSON.parse(logs[0]);
+  assert.equal(logged.responses[0].responseId, s.r1.getId());
+  assert.equal(logged.responses[0].expectedMatch, true);
+  assert.ok(logged.responses[0].questions.every(q => Object.keys(q).sort().join(',') === 'answerHash,id,title,type'));
+  assert.equal(JSON.stringify(s.env.props), props);
+  assert.equal(JSON.stringify(s.env.notion.pages), pages);
+  s.env.setUser('outsider@example.com');
+  assert.throws(() => s.env.call('inspectBrandIntakeRecovery'));
+  assert.equal(logs.length, 1);
+});
