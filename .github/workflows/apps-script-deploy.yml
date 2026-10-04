@@ -57,7 +57,7 @@ jobs:
 
       - name: 서버 테스트
         # Apps Script에 쓰기 전에 가짜 Notion·Drive로 전체 흐름을 검증한다.
-        run: node --test tests/server.test.cjs
+        run: node --test tests/*.test.cjs
 
       - name: 배포 환경 선택
         shell: bash

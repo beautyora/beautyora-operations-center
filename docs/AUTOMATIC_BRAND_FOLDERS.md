@@ -1,5 +1,7 @@
 # 신규 브랜드 Drive 폴더 전환
 
+이 문서의 등록기 미확인 내용은 PR32 당시 조사 결과입니다. 이후 확인된 실제 등록 경로 삭제와 복구/활성화 절차는 [입점 등록 복구](BRAND_INTAKE_RECOVERY.md)를 참고하세요.
+
 ## 확인 범위
 
 운영센터 main `89c10679fb2461d4556cb1ddc464fd894c1ebe8c`(PR31), 브랜드 랜딩 main `a0c5c82`를 확인했다. 랜딩 `google-apps-script/form-bridge.gs`는 `FormResponse.submit()` 후 반환한다. 중복 확인 → Notion 등록 → BO ID 발급을 담당하는 별도 프로젝트 소스/ID는 두 저장소에 없다. FormResponse.submit()이 form-submit 트리거를 실행한다고 가정하지 않는다.

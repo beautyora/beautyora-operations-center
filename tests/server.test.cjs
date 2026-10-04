@@ -143,7 +143,7 @@ test('only the audited entry points are callable from google.script.run', () => 
     for (const m of src.matchAll(/^function ([A-Za-z0-9_$]+)\s*\(/gm)) if (!m[1].endsWith('_')) publicFns.push(m[1]);
   });
   // Each of these checks admin/owner or an installed trigger before doing anything.
-  assert.deepEqual(publicFns.sort(), ['api', 'doGet', 'runHealthCheck', 'scheduledBrandFolders', 'scheduledHealthCheck', 'setupBeautyora'].sort());
+  assert.deepEqual(publicFns.sort(), ['api', 'doGet', 'runHealthCheck', 'scheduledBrandFolders', 'scheduledBrandIntake', 'scheduledHealthCheck', 'setupBeautyora', 'setupBrandIntake'].sort());
   const { env } = setup();
   env.setUser('');
   assert.throws(() => env.call('runHealthCheck'), /계정/);
@@ -154,7 +154,7 @@ test('removed features leave no traces in the code', () => {
   const root = path.join(__dirname, '..');
   const files = fs.readdirSync(path.join(root, 'src')).map((f) => path.join(root, 'src', f));
   const text = files.map((f) => fs.readFileSync(f, 'utf8')).join('\n');
-  ['doPost', 'partner', 'idToken', 'google.accounts', 'BO_GOOGLE_CLIENT_ID', 'BO_PARTNER_WEBAPP_URL', 'BO_GOOGLE_FORM_ID', 'onBrandFormSubmit(']
+  ['doPost', 'partner', 'idToken', 'google.accounts', 'BO_GOOGLE_CLIENT_ID', 'BO_PARTNER_WEBAPP_URL', 'onBrandFormSubmit(']
     .forEach((needle) => assert.ok(!text.includes(needle), 'still mentions ' + needle));
   ['Partner.html', '13_Partner.gs', '14_Links.gs', '16_Intake.gs', '17_Crm.gs', '18_Inventory.gs', '23_Billing.gs']
     .forEach((name) => assert.ok(!fs.existsSync(path.join(root, 'src', name)), name + ' should be removed'));

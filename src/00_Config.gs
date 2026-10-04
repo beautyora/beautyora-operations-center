@@ -4,7 +4,7 @@
  * 원칙
  * - 브랜드·영업 진행의 원본은 Notion이다. 운영센터는 읽고, 정해진 속성만 자동으로 채운다.
  * - 상품의 원본은 Google 시트(메인 상품목록)다. Notion 상품 DB는 쓰지 않는다.
- * - 입점 신청 폼 → Notion 등록은 별도 Apps Script 프로젝트가 맡는다. 여기서는 다루지 않는다.
+ * - 입점 신청은 원본 Form 응답 폴링으로 신규 브랜드만 Notion에 등록한다.
  * - 환경별 값(데이터 소스 ID, 폴더 ID, 토큰)은 모두 스크립트 속성에서 읽는다. 코드에 운영 ID를 넣지 않는다.
  */
 const BO = Object.freeze({
@@ -17,6 +17,8 @@ const BO = Object.freeze({
     LEGACY_NOTION_TOKEN: 'NOTION_TOKEN',
     ADMIN_EMAILS: 'BO_ADMIN_EMAILS',
     ROOT_FOLDER_ID: 'BO_ROOT_FOLDER_ID',
+    GOOGLE_FORM_ID: 'BO_GOOGLE_FORM_ID',
+    INTAKE_SHEET_ID: 'BO_INTAKE_RESPONSE_SHEET_ID',
     TEMPLATE_FILE_ID: 'BO_TEMPLATE_FILE_ID',
     ALLOW_EMBED: 'BO_ALLOW_EMBED',
     SCHEMA_IDS: 'BO_SCHEMA_IDS'
@@ -44,6 +46,17 @@ const BO_SCHEMAS = Object.freeze({
       email: ['rich_text', ['이메일']],
       category: ['multi_select', ['카테고리']],
       trade: ['multi_select', ['희망 거래 방식']],
+      area: ['multi_select', ['희망 영역']],
+      channel1: ['rich_text', ['희망 채널 1순위']],
+      channel2: ['rich_text', ['희망 채널 2순위']],
+      channelAny: ['rich_text', ['순위 무관 희망 채널']],
+      currentSales: ['rich_text', ['현재 판매 채널']],
+      salesChannel: ['multi_select', ['판매 채널']],
+      reference: ['rich_text', ['참고 링크/자료']],
+      feature: ['rich_text', ['상품 특장점']],
+      launch: ['date', ['브랜드 런칭일자']],
+      formSubmitted: ['checkbox', ['폼 제출']],
+      formResponseId: ['rich_text', ['폼 응답 ID']],
       memo: ['rich_text', ['핵심 메모']],
       next: ['rich_text', ['다음 행동']],
       drive: ['url', ['구글 드라이브']],

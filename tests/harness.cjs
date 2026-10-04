@@ -667,7 +667,7 @@ function seed(env) {
     '순위 무관 희망 채널': { type: 'rich_text' }, '현재 판매 채널': { type: 'rich_text' }, '판매 채널': { type: 'multi_select', options: ['쿠팡'] },
     '핵심 메모': { type: 'rich_text' }, '다음 행동': { type: 'rich_text' }, '참고 링크/자료': { type: 'rich_text' }, '구글 드라이브': { type: 'url' },
     '상품 특장점': { type: 'rich_text' }, '대표 상품군': { type: 'rich_text' }, '사업자 번호': { type: 'rich_text' }, '접수일': { type: 'date' },
-    '브랜드 런칭일자': { type: 'date' }, '미팅일': { type: 'date' }, '폼 제출': { type: 'checkbox' }, '이슈 여부': { type: 'select', options: ['이슈'] },
+    '브랜드 런칭일자': { type: 'date' }, '미팅일': { type: 'date' }, '폼 제출': { type: 'checkbox' }, '폼 응답 ID': { type: 'rich_text' }, '이슈 여부': { type: 'select', options: ['이슈'] },
     '소통 담당자': { type: 'people' }, '사업자등록증 Drive URL': { type: 'url' }, '브랜드 소개서 Drive URL': { type: 'url' }, '계약서 Drive URL': { type: 'url' },
     '기타 브랜드 자료 Drive URL': { type: 'url' }, '최근 수정': { type: 'last_edited_time' }
   } });

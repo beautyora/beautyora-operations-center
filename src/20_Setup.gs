@@ -85,7 +85,12 @@ function healthCheck_() {
   try {
     if (!brandFolderBaseline_()) add('신규 브랜드 폴더', '주의', '초기 설정을 실행하여 자동 처리를 시작해 주세요.');
   } catch (error) { add('신규 브랜드 폴더', '오류', errorMessage_(error)); }
+  if (prop_(BO_INTAKE_BASELINE)) {
+    try { const intake = intakeBaseline_(); add('입점 신규 응답', '정상', '활성화됨 · 기존 응답 ' + intake.state.count + '개 제외'); }
+    catch (error) { add('입점 신규 응답', '오류', errorMessage_(error)); }
+  } else add('입점 신규 응답', '주의', '비활성 · setupBrandIntake를 별도로 실행해 주세요.');
   const handlers = ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction(); });
+  if (prop_(BO_INTAKE_BASELINE) && handlers.indexOf(BO_INTAKE_TRIGGER) < 0) add('입점 폴링 트리거', '주의', '현재 계정의 scheduledBrandIntake 트리거가 없습니다. 설치 계정을 확인해 주세요.');
   const missing = BO_TRIGGER_HANDLERS.filter(function (h) { return handlers.indexOf(h) < 0; });
   const duplicates = BO_TRIGGER_HANDLERS.filter(function (h) { return handlers.filter(function (v) { return v === h; }).length > 1; });
   if (missing.length || duplicates.length) add('트리거', '주의', '관리 대상 트리거 누락/중복: ' + missing.concat(duplicates).join(', ') + ' (초기 설정을 실행해 주세요)');
