@@ -169,7 +169,10 @@ async function mainProductsCard() {
       '<div class="field"><label for="mTab">탭 이름</label><input class="input" id="mTab" value="뷰티오라"></div>' +
       '<div class="field"><label for="mLegacy">기존 브랜드 자료 폴더 (제품 링크 찾기, 선택)</label><input class="input" id="mLegacy" placeholder="https://drive.google.com/drive/folders/…"></div>' +
     '</div>' +
-    '<div class="row" style="justify-content:flex-end"><button class="btn btn-primary" id="mBuild">' + (status.url ? '새로 만들기' : '메인 상품목록 만들기') + '</button></div><div id="mOut"></div>';
+    '<div class="row" style="justify-content:flex-end"><button class="btn' + (status.url ? '' : ' btn-primary') + '" id="mBuild">' + (status.url ? '새로 만들기' : '메인 상품목록 만들기') + '</button></div><div id="mOut"></div>' +
+    (status.url ? '<h3 class="section-title">섬네일 넣기</h3><p class="small muted">이미지 목록 시트(IMAGE 함수로 된 상품 사진)에서 바코드·상품명으로 찾아, 사진 파일을 "메인 상품목록 이미지" 폴더로 복사하고 IMAGE 함수로 넣습니다. 비어 있는 칸만 채우고, 오래 걸리면 멈춘 뒤 다시 누르면 이어서 합니다.</p>' +
+      '<div class="form-grid"><div class="field full"><label for="iSheet">이미지 목록 시트 주소</label><input class="input" id="iSheet" placeholder="https://docs.google.com/spreadsheets/d/…"></div></div>' +
+      '<div class="row" style="justify-content:flex-end"><button class="btn btn-primary" id="iRun">섬네일 넣기</button></div><div id="iOut"></div>' : '');
   $('#mBuild').addEventListener('click', (e) => busy(e.currentTarget, async () => {
     const sourceUrl = $('#mSource').value.trim();
     if (!sourceUrl) { Toast.error('통합 상품리스트 주소를 넣어 주세요.'); return; }
@@ -180,6 +183,15 @@ async function mainProductsCard() {
       const s = r.stats;
       $('#mOut').innerHTML = '<div class="notice ok"><div><a href="' + esc(safeUrl(r.url)) + '" target="_blank" rel="noopener"><strong>메인 상품목록 열기</strong></a><br>상품 ' + Fmt.num(s.products) + '개 (벤더 상품 ' + Fmt.num(s.vendor) + '개) · 제품 링크: Notion ' + Fmt.num(s.linkNotion) + '개, 기존 엑셀 ' + Fmt.num(s.linkWorkbook) + '개, 못 찾음 ' + Fmt.num(s.noLink) + '개' + (s.storeMain ? ' · 상품 개별 링크가 아닌 것 ' + Fmt.num(s.storeMain) + '개' : '') + (r.report.length ? '<ul>' + r.report.map((l) => '<li>' + esc(l) + '</li>').join('') + '</ul>' : '') + '</div></div>';
     } catch (err) { $('#mOut').innerHTML = UI.error(err); }
+  }));
+  if ($('#iRun')) $('#iRun').addEventListener('click', (e) => busy(e.currentTarget, async () => {
+    const imageSheetUrl = $('#iSheet').value.trim();
+    if (!imageSheetUrl) { Toast.error('이미지 목록 시트 주소를 넣어 주세요.'); return; }
+    $('#iOut').innerHTML = '<div class="notice"><div>섬네일을 넣는 중입니다. 최대 5분쯤 걸립니다.</div></div>';
+    try {
+      const r = await Api.call('products.mainImages', { imageSheetUrl }, { noRetry: true });
+      $('#iOut').innerHTML = '<div class="notice ' + (r.remaining ? 'warn' : 'ok') + '"><div><a href="' + esc(safeUrl(r.url)) + '" target="_blank" rel="noopener"><strong>메인 상품목록 열기</strong></a><br>이번에 넣음 ' + Fmt.num(r.filled) + '개 · 이미 있음 ' + Fmt.num(r.already) + '개 · 이미지 목록에서 못 찾음 ' + Fmt.num(r.unmatched) + '개' + (r.failed ? ' · 실패 ' + Fmt.num(r.failed) + '개' : '') + (r.remaining ? '<br><strong>시간이 모자라 ' + Fmt.num(r.remaining) + '개가 남았습니다. 한 번 더 눌러 주세요.</strong>' : '') + (r.unmatchedSamples.length ? '<br><span class="small">못 찾은 예: ' + esc(r.unmatchedSamples.join(' / ')) + '</span>' : '') + '</div></div>';
+    } catch (err) { $('#iOut').innerHTML = UI.error(err); }
   }));
 }
 

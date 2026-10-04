@@ -198,7 +198,7 @@ test('main product list: one tab with brand and vendor columns, thumbnails kept,
 
   const r = ok(env.api('products.mainBuild', { sourceUrl: 'https://docs.google.com/spreadsheets/d/' + srcId + '/edit?gid=1', sheetName: '뷰티오라', legacyFolderUrl: 'https://drive.google.com/drive/folders/' + legacyRoot }));
   assert.deepEqual(r.stats, { products: 4, vendor: 2, linkNotion: 2, linkWorkbook: 1, storeMain: 1, noLink: 1 });
-  assert.deepEqual(r.report, ['섬네일: 통합리스트 "뷰티오라" 탭의 이미지 열(B2:B6)을 복사해 메인 상품목록 이미지 열(D2)에 붙여 넣어 주세요. 상품 순서가 같습니다. (빈 행 1개를 건너뛰어 순서가 어긋나니 빈 행을 먼저 지워 주세요)']);
+  assert.deepEqual(r.report, ['섬네일: 설정 → 메인 상품목록 → 섬네일 넣기로 채워 주세요.']);
   assert.equal(JSON.stringify(env.sheets.books[srcId]), before, 'the integrated list is not changed');
 
   const bookId = /\/d\/([^/]+)/.exec(r.url)[1];
@@ -235,4 +235,49 @@ test('main product list: one tab with brand and vendor columns, thumbnails kept,
 
   assert.match(env.api('products.mainBuild', { sourceUrl: 'not a sheet' }).message, /통합 상품리스트 주소/);
   assert.match(env.api('products.mainBuild', { sourceUrl: srcId, sheetName: '없는탭' }).message, /"없는탭" 탭이 없습니다/);
+});
+
+test('thumbnails: image files from the catalog sheet are copied into our folder and written as IMAGE formulas', () => {
+  const { env } = setup();
+  const header = ['브랜드', '이미지', '상품명', '구성', '카테고리', '바코드', '공유 매입용 공급가', '공유 위탁용 공급가', '권장판매가', '매입MOQ', '핵심포인트', '제품설명', '거래유형', '실제 공급사', '원본행 ID', '운영 출처시트'];
+  const row = (brand, name, barcode) => [brand, '', name, '', '', barcode, 1000, '', 2000, 1, '', '', '매입', '시온', 'r1', '시온'];
+  const srcId = 'src1111111111111111111111111';
+  env.drive.items[srcId] = { id: srcId, name: '통합', mimeType: 'application/vnd.google-apps.spreadsheet', parents: [], trashed: false };
+  env.sheets.addBook(srcId, '통합', { '뷰티오라': [header, row('광동제약', '활력 밀크씨슬 750mg × 30캡슐', ''), row('다온', '세라 크림 50ml', '8801111111111'), row('없는브랜드', '사진 없는 상품', ''), row('A', '같은 이름', ''), row('B', '같은 이름', '')] });
+  ok(env.api('products.mainBuild', { sourceUrl: srcId }));
+
+  // Image files and the catalog sheet with IMAGE formulas (two tabs with different layouts).
+  const pub = env.drive.folder('뷰티오라_상품목록_공개사진', null);
+  const img = (n) => env.drive.file({ name: n, mimeType: 'image/jpeg', parents: [pub] }).id;
+  const i1 = img('image1.jpg'), i2 = img('image2.jpg'), i3 = img('image3.jpg'), i4 = img('image4.jpg');
+  const catId = 'cat2222222222222222222222222';
+  env.sheets.addBook(catId, '공유용', {
+    '상품 목록': [['상품 목록'], [''], [''], ['브랜드', '이미지', '상품명', '카테고리'], ['광동제약', '', '활력 밀크씨슬 750mg x 30캡슐', ''], ['A', '', '같은 이름', ''], ['C', '', '같은 이름', '']],
+    '다온': [['품목구분', '', '브랜드', '제품사진', '제품명', '바코드'], ['', '', '다온', '', '세라 크림', '8801111111111']]
+  });
+  const book = env.sheets.books[catId];
+  const f = (id) => '=IMAGE("https://lh3.googleusercontent.com/d/' + id + '",1)';
+  book.sheets[0].formulas = { '5,2': f(i1), '6,2': f(i3), '7,2': f(i4) };
+  book.sheets[1].formulas = { '2,4': f(i2) };
+
+  const r = ok(env.api('products.mainImages', { imageSheetUrl: 'https://docs.google.com/spreadsheets/d/' + catId + '/edit' }));
+  assert.equal(r.catalog, 4);
+  assert.equal(r.filled, 3, JSON.stringify(r));
+  assert.equal(r.unmatched, 2);
+  assert.equal(r.remaining, 0);
+  const main = env.sheets.books[env.props.BO_MAIN_PRODUCT_SHEET_ID].sheets[0];
+  const folder = Object.values(env.drive.items).find((x) => x.folder && x.name === '메인 상품목록 이미지');
+  const copyFor = (src) => Object.values(env.drive.items).find((x) => x.name === 'src_' + src && x.parents[0] === folder.id);
+  assert.equal(main.formulas['2,4'], f(copyFor(i1).id), 'name match treats × and x alike');
+  assert.equal(main.formulas['3,4'], f(copyFor(i2).id), 'matched by barcode');
+  assert.equal(main.formulas['5,4'], f(copyFor(i3).id), 'same name: brand decides');
+  assert.equal(main.formulas['4,4'], undefined);
+  assert.equal(copyFor(i1).sharing, 'ANYONE_WITH_LINK:VIEW', 'IMAGE needs a link-viewable copy');
+  assert.equal(env.drive.items[i1].sharing, undefined, 'the original file is not changed');
+  // Running again copies nothing new and keeps existing images.
+  const copies = env.drive.copies;
+  const again = ok(env.api('products.mainImages', { imageSheetUrl: catId }));
+  assert.equal(again.filled, 0);
+  assert.equal(again.already, 3);
+  assert.equal(env.drive.copies, copies);
 });

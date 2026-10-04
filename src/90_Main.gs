@@ -25,6 +25,7 @@ function adminActions_() {
     'brands.list': apiBrandsList_,
     'products.main': apiMainProductsStatus_,
     'products.mainBuild': apiMainProductsBuild_,
+    'products.mainImages': apiMainProductsImages_,
     'system.health': function () { return healthCheck_(); },
     'system.setup': function () { return setupSystem_(); },
     'system.refresh': function () { bumpCache_('brand', 'activity', 'source'); return { refreshed: true }; }

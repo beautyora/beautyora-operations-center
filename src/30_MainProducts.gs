@@ -39,7 +39,10 @@ const BO_MAIN = Object.freeze({
   TEXT_COLUMNS: ['상품 ID', '바코드', '원본행 ID'],
   /** 기존 Notion 상품 DB(읽기만). v2에서 쓰던 스크립트 속성을 그대로 읽는다. */
   LEGACY_PRODUCT_PROP: 'BO_NOTION_PRODUCT_DATA_SOURCE_ID',
-  SHEET_PROP: 'BO_MAIN_PRODUCT_SHEET_ID'
+  SHEET_PROP: 'BO_MAIN_PRODUCT_SHEET_ID',
+  IMAGE_FOLDER: '메인 상품목록 이미지',
+  /** 한 번 실행에서 섬네일 넣기에 쓰는 시간(밀리초). Apps Script 6분 제한 안에서 끊고, 다시 누르면 이어서 한다. */
+  IMAGE_BUDGET_MS: 270000
 });
 
 function spreadsheetIdFromUrl_(value) {
@@ -48,12 +51,6 @@ function spreadsheetIdFromUrl_(value) {
   if (match) return match[1];
   if (/^[\w-]{20,}$/.test(text)) return text;
   throw userError_('통합 상품리스트 주소를 확인해 주세요. (Google 시트 주소)');
-}
-
-function columnLetter_(n) {
-  let s = '';
-  for (; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + (n - 1) % 26) + s;
-  return s;
 }
 
 function headerKey_(value) {
@@ -257,11 +254,123 @@ function buildMainProductList_(payload) {
   basis.getRange(2, 1, basisRows.length, basisHeader.length).setValues(basisRows.map(function (r) { return r.map(function (v) { return v && typeof v === 'object' && !(v instanceof Date) ? '' : v; }); }));
   basis.setFrozenRows(1);
 
-  // 통합리스트의 셀 이미지는 Apps Script로 읽거나 다른 파일로 옮길 수 없다(파일 복사 시 #REF!). 행 순서가 같으므로 화면에서 붙여 넣는다.
-  report.push('섬네일: 통합리스트 "' + sheetName + '" 탭의 이미지 열(' + columnLetter_(index[headerKey_('이미지')] + 1) + '2:' + columnLetter_(index[headerKey_('이미지')] + 1) + lastRow + ')을 복사해 메인 상품목록 이미지 열(' + columnLetter_(imageCol) + '2)에 붙여 넣어 주세요. 상품 순서가 같습니다.' + (stats.products < lastRow - 1 ? ' (빈 행 ' + (lastRow - 1 - stats.products) + '개를 건너뛰어 순서가 어긋나니 빈 행을 먼저 지워 주세요)' : ''));
+  // 통합리스트의 셀 이미지는 Apps Script로 읽거나 옮길 수 없다(파일 복사 시 #REF!). 섬네일은 '섬네일 넣기'가 IMAGE 함수로 채운다.
+  report.push('섬네일: 설정 → 메인 상품목록 → 섬네일 넣기로 채워 주세요.');
   props_().setProperty(BO_MAIN.SHEET_PROP, book.getId());
   logInfo_('mainProducts.build', { by: activeEmail_(), products: stats.products, sheet: book.getId() });
   return { url: book.getUrl(), stats: stats, candidates: candidates.length, report: report };
+}
+
+/* ---------- 섬네일 (IMAGE 함수) ---------- */
+
+function imageFormula_(fileId) {
+  return '=IMAGE("https://lh3.googleusercontent.com/d/' + fileId + '",1)';
+}
+
+function driveIdFromImageFormula_(formula) {
+  const match = String(formula || '').match(/googleusercontent\.com\/d\/([\w-]{20,})|drive\.google\.com\/(?:uc\?[^"]*id=|file\/d\/|thumbnail\?[^"]*id=)([\w-]{20,})/);
+  return match ? (match[1] || match[2]) : '';
+}
+
+/**
+ * 이미지 목록 시트(예: '뷰티오라 상품 목록 · 공유용')의 모든 탭에서 { 바코드, 브랜드, 상품명, 이미지 파일 ID }를 읽는다.
+ * 탭마다 위쪽 몇 줄 안에서 '상품명/제품명'과 '이미지/제품사진' 머리글을 찾는다.
+ */
+function imageCatalog_(sheetUrl) {
+  const book = SpreadsheetApp.openById(spreadsheetIdFromUrl_(sheetUrl));
+  const out = [];
+  book.getSheets().forEach(function (sheet) {
+    const rows = sheet.getLastRow(), cols = sheet.getLastColumn();
+    if (rows < 2 || cols < 2) return;
+    const values = sheet.getRange(1, 1, rows, cols).getDisplayValues();
+    const formulas = sheet.getRange(1, 1, rows, cols).getFormulas();
+    const headerAt = values.slice(0, 8).findIndex(function (row) { return row.some(function (v) { return /^(상품명|제품명)$/.test(headerKey_(v)); }); });
+    if (headerAt < 0) return;
+    const header = values[headerAt].map(headerKey_);
+    const col = function (re) { return header.findIndex(function (v) { return re.test(v); }); };
+    const cName = col(/^(상품명|제품명)$/), cImage = col(/^(이미지|제품사진)$/), cBrand = col(/^브랜드$/), cBarcode = col(/^바코드/);
+    if (cImage < 0) return;
+    for (let r = headerAt + 1; r < rows; r++) {
+      const fileId = driveIdFromImageFormula_(formulas[r][cImage]);
+      const name = clean_(values[r][cName]);
+      if (!fileId || !name) continue;
+      out.push({ name: name, brand: cBrand >= 0 ? clean_(values[r][cBrand]) : '', barcode: cBarcode >= 0 ? clean_(values[r][cBarcode]) : '', fileId: fileId });
+    }
+  });
+  return out;
+}
+
+/** 바코드가 같으면 바로, 아니면 상품명이 같은 것(브랜드가 적혀 있으면 브랜드도 같아야). 후보가 갈리면 고르지 않는다. */
+function matchImage_(product, catalog) {
+  const barcode = clean_(product.barcode);
+  if (barcode) {
+    const ids = catalog.filter(function (c) { return c.barcode === barcode; }).map(function (c) { return c.fileId; });
+    if (ids.length && ids.every(function (id) { return id === ids[0]; })) return ids[0];
+  }
+  const key = function (v) { return normalizeName_(v).replace(/×/g, 'x'); };
+  const name = key(product.name), brand = normalizeName_(product.brand);
+  const hits = catalog.filter(function (c) {
+    if (key(c.name) !== name) return false;
+    const b = normalizeName_(c.brand);
+    return !b || !brand || b === brand || b.indexOf(brand) >= 0 || brand.indexOf(b) >= 0;
+  }).map(function (c) { return c.fileId; }).filter(function (id, i, a) { return a.indexOf(id) === i; });
+  return hits.length === 1 ? hits[0] : '';
+}
+
+/**
+ * 메인 상품목록의 비어 있는 이미지 칸에 섬네일을 넣는다.
+ * 원본 이미지 파일을 '메인 상품목록 이미지' 폴더로 복사하고(링크가 있는 사람 보기), =IMAGE("https://lh3.googleusercontent.com/d/<복사본 ID>",1)을 쓴다.
+ * 시간이 모자라면 멈추고 남은 개수를 알려 준다. 다시 실행하면 이어서 한다(이미 복사한 파일은 다시 복사하지 않음).
+ */
+function fillMainProductImages_(payload) {
+  const started = Date.now();
+  const sheetId = prop_(BO_MAIN.SHEET_PROP);
+  if (!sheetId) throw userError_('메인 상품목록을 먼저 만들어 주세요.');
+  const catalog = imageCatalog_(payload.imageSheetUrl);
+  if (!catalog.length) throw userError_('이미지 목록 시트에서 IMAGE 함수로 된 상품 이미지를 찾지 못했습니다.');
+  const main = SpreadsheetApp.openById(sheetId).getSheetByName(BO_MAIN.PRODUCT_TAB);
+  if (!main) throw userError_('메인 상품목록에 "' + BO_MAIN.PRODUCT_TAB + '" 탭이 없습니다.');
+  const rows = main.getLastRow() - 1;
+  const names = BO_MAIN.COLUMNS.map(function (c) { return c[0]; });
+  const at = function (name) { return names.indexOf(name); };
+  const data = main.getRange(2, 1, rows, names.length).getValues();
+  const imageCol = at('이미지') + 1;
+  const formulas = main.getRange(2, imageCol, rows, 1).getFormulas();
+  const folder = childFolder_(driveRoot_(), BO_MAIN.IMAGE_FOLDER);
+  const copies = {};
+  const copyOf = function (sourceId) {
+    if (copies[sourceId]) return copies[sourceId];
+    const name = 'src_' + sourceId;
+    const existing = folder.getFilesByName(name);
+    let file;
+    if (existing.hasNext()) file = existing.next();
+    else {
+      file = DriveApp.getFileById(sourceId).makeCopy(name, folder);
+      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    }
+    return (copies[sourceId] = file.getId());
+  };
+  const result = { filled: 0, already: 0, unmatched: 0, failed: 0, remaining: 0, unmatchedSamples: [] };
+  for (let i = 0; i < rows; i++) {
+    if (formulas[i][0]) { result.already++; continue; }
+    if (Date.now() - started > BO_MAIN.IMAGE_BUDGET_MS) { result.remaining++; continue; }
+    const product = { name: data[i][at('상품명')], brand: data[i][at('브랜드')], barcode: data[i][at('바코드')] };
+    const sourceId = matchImage_(product, catalog);
+    if (!sourceId) {
+      result.unmatched++;
+      if (result.unmatchedSamples.length < 10) result.unmatchedSamples.push(data[i][at('상품 ID')] + ' ' + product.name);
+      continue;
+    }
+    try {
+      main.getRange(i + 2, imageCol).setFormula(imageFormula_(copyOf(sourceId)));
+      result.filled++;
+    } catch (error) {
+      logError_('fillMainProductImages_', error);
+      result.failed++;
+    }
+  }
+  logInfo_('mainProducts.images', { by: activeEmail_(), result: result });
+  return Object.assign(result, { catalog: catalog.length, url: mainProductSheetUrl_() });
 }
 
 /* ---------- 관리자 API ---------- */
@@ -272,4 +381,8 @@ function apiMainProductsStatus_() {
 
 function apiMainProductsBuild_(payload) {
   return withLock_(function () { return buildMainProductList_(payload); }, 5000);
+}
+
+function apiMainProductsImages_(payload) {
+  return withLock_(function () { return fillMainProductImages_(payload || {}); }, 5000);
 }

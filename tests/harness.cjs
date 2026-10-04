@@ -319,8 +319,13 @@ class FakeDrive {
       getFolders: () => iter(children().map((c) => self.folderApi(c.id))),
       getFiles: () => iter(Object.values(self.items).filter((x) => !x.folder && !x.trashed && x.parents[0] === id).map((f) => ({ getId: () => f.id, getName: () => f.name, getMimeType: () => f.mimeType, getLastUpdated: () => new Date(f.modifiedTime || f.createdTime) }))),
       getFoldersByName: (name) => iter(children().filter((c) => c.name === name).map((c) => self.folderApi(c.id))),
+      getFilesByName: (name) => iter(Object.values(self.items).filter((x) => !x.folder && !x.trashed && x.parents[0] === id && x.name === name).map((f) => self.fileApi(f.id))),
       createFolder: (name) => self.folderApi(self.folder(name, id))
     };
+  }
+  fileApi(id) {
+    const f = this.items[id];
+    return { getId: () => id, setSharing: (access, perm) => { f.sharing = access + ':' + perm; } };
   }
   file(resource, blob) {
     const id = this.nextId('file');
@@ -405,7 +410,9 @@ class FakeSheets {
           }
           return out;
         },
-        getDisplayValues: () => r.getValues().map((line) => line.map((v) => String(v))),
+        getDisplayValues: () => r.getValues().map((line) => line.map((v) => (v && typeof v === 'object' ? '' : String(v)))),
+        getFormulas: () => { const out = []; for (let i = 0; i < nr; i++) { const line = []; for (let j = 0; j < nc; j++) line.push((sh.formulas || {})[(row + i) + ',' + (col + j)] || ''); out.push(line); } return out; },
+        setFormula: (f) => { sh.formulas = sh.formulas || {}; sh.formulas[row + ',' + col] = f; return r; },
         setValues: (vals) => {
           if (vals.length !== nr || vals.some((line) => line.length !== nc)) throw new Error('setValues: size mismatch');
           vals.forEach((line, i) => {
@@ -557,6 +564,7 @@ function createEnv(options) {
       throw new Error('Unexpected fetch ' + url);
     } },
     DriveApp: {
+      Access: { ANYONE_WITH_LINK: 'ANYONE_WITH_LINK' }, Permission: { VIEW: 'VIEW' },
       getFolderById: (id) => drive.folderApi(id),
       getFileById: (id) => {
         const f = drive.items[id]; if (!f) throw new Error('File not found: ' + id);
@@ -567,7 +575,8 @@ function createEnv(options) {
             drive.items[copyId] = Object.assign({}, f, { id: copyId, name, parents: [folder.getId()] });
             const src = sheets.books[id];
             if (src) sheets.books[copyId] = { id: copyId, name, sheets: src.sheets.map((sh) => Object.assign(sheets.sheet(sh.name, sh.cells, sh.images), { filter: sh.filter })) };
-            return { getId: () => copyId };
+            drive.copies = (drive.copies || 0) + 1;
+            return drive.fileApi(copyId);
           }
         };
       }
