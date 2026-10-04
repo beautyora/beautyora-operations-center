@@ -1,6 +1,6 @@
 /** 초기 설정, 트리거, 연결 점검, 관리자 알림. */
 
-/** 이 프로젝트가 설치하는 트리거. 목록에 없는 트리거(예전 입점 신청 폼 트리거 등)는 초기 설정이 지운다. */
+/** 초기 설정이 관리하는 두 핸들러. 다른 핸들러의 트리거는 보존한다. */
 const BO_TRIGGER_HANDLERS = Object.freeze(['scheduledHealthCheck', 'scheduledBrandFolders']);
 
 function clearSchemaMemo_() {
@@ -9,21 +9,20 @@ function clearSchemaMemo_() {
 }
 
 function installTriggers_(report) {
-  ScriptApp.getProjectTriggers().forEach(function (trigger) {
-    if (BO_TRIGGER_HANDLERS.indexOf(trigger.getHandlerFunction()) < 0) {
-      ScriptApp.deleteTrigger(trigger);
-      report.push('삭제: 예전 트리거 ' + trigger.getHandlerFunction());
-    }
+  withLock_(function () {
+    initializeBrandFolderBaseline_(report);
+
+    BO_TRIGGER_HANDLERS.forEach(function (handler) {
+      const previous = ScriptApp.getProjectTriggers().filter(function (t) { return t.getHandlerFunction() === handler; });
+      // Trigger API는 기존 주기를 읽을 수 없다. 소유한 핸들러만 올바른 주기로 교체한다.
+      // 생성 실패 시 기존 트리거를 보존하기 위해 새 트리거를 먼저 만든다.
+      const builder = ScriptApp.newTrigger(handler).timeBased();
+      if (handler === BO_FOLDER_TRIGGER) builder.everyMinutes(1).create();
+      else builder.everyHours(6).create();
+      previous.forEach(function (trigger) { ScriptApp.deleteTrigger(trigger); });
+      report.push('설정: ' + handler + (handler === BO_FOLDER_TRIGGER ? ' (1분마다)' : ' (6시간마다)'));
+    });
   });
-  const has = function (handler) { return ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === handler; }); };
-  if (!has('scheduledHealthCheck')) {
-    ScriptApp.newTrigger('scheduledHealthCheck').timeBased().everyHours(6).create();
-    report.push('설치: 6시간마다 연결 점검 트리거');
-  }
-  if (!has(BO_FOLDER_TRIGGER)) {
-    ScriptApp.newTrigger(BO_FOLDER_TRIGGER).timeBased().everyMinutes(1).create();
-    report.push('설치: 1분마다 브랜드 드라이브 폴더 만들기 트리거');
-  }
 }
 
 const BO_CONNECT_HINT = 'Notion에서 "뷰티오라 대시보드" 페이지 오른쪽 위 ··· → 연결 → 운영센터 통합을 추가한 뒤 초기 설정을 다시 실행해 주세요.';
@@ -83,11 +82,14 @@ function healthCheck_() {
   } catch (error) {
     add('Google Drive', '오류', errorMessage_(error));
   }
+  try {
+    if (!brandFolderBaseline_()) add('신규 브랜드 폴더', '주의', '초기 설정을 실행하여 자동 처리를 시작해 주세요.');
+  } catch (error) { add('신규 브랜드 폴더', '오류', errorMessage_(error)); }
   const handlers = ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction(); });
-  const legacy = handlers.filter(function (h) { return BO_TRIGGER_HANDLERS.indexOf(h) < 0; });
-  if (legacy.length) add('트리거', '주의', '예전 트리거가 남아 있습니다: ' + legacy.join(', ') + ' (초기 설정을 실행하면 정리됩니다)');
-  else if (BO_TRIGGER_HANDLERS.some(function (h) { return handlers.indexOf(h) < 0; })) add('트리거', '주의', '빠진 트리거가 있습니다. 초기 설정을 실행해 주세요.');
-  else add('트리거', '정상', handlers.length + '개 설치됨');
+  const missing = BO_TRIGGER_HANDLERS.filter(function (h) { return handlers.indexOf(h) < 0; });
+  const duplicates = BO_TRIGGER_HANDLERS.filter(function (h) { return handlers.filter(function (v) { return v === h; }).length > 1; });
+  if (missing.length || duplicates.length) add('트리거', '주의', '관리 대상 트리거 누락/중복: ' + missing.concat(duplicates).join(', ') + ' (초기 설정을 실행해 주세요)');
+  else add('트리거', '정상', '관리 대상 2개 설치됨 (다른 핸들러는 보존)');
   return { checkedAt: now_(), results: results, ok: !results.some(function (r) { return r.status === '오류'; }) };
 }
 

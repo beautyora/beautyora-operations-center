@@ -16,17 +16,26 @@ function ok(result) {
   return JSON.parse(JSON.stringify(result.data));
 }
 
-test('setup installs the health-check trigger and removes leftover triggers such as the old form trigger', () => {
+test('setup preserves unrelated triggers and normalizes only owned triggers', () => {
   const { env } = setup();
-  // 예전 버전이 설치한 입점 신청 폼 트리거(지금은 별도 프로젝트가 담당).
+  // 관계없는 등록/외부 동기화 트리거는 객체와 ID까지 그대로 보존한다.
   env.call('(function () { ScriptApp.newTrigger("onBrandFormSubmit").forForm("form-1").onFormSubmit().create(); })');
   const res = ok(env.api('system.setup'));
   assert.equal(res.ok, true, res.report.join('\n'));
-  assert.ok(res.report.includes('삭제: 예전 트리거 onBrandFormSubmit'), res.report.join('\n'));
-  assert.deepEqual(env.triggers.map((t) => t.getHandlerFunction()), ['scheduledHealthCheck', 'scheduledBrandFolders']);
+  const unrelated = env.triggers.find(t => t.getHandlerFunction() === 'onBrandFormSubmit');
+  assert.deepEqual(env.triggers.map(t => t.getHandlerFunction()), ['onBrandFormSubmit', 'scheduledHealthCheck', 'scheduledBrandFolders']);
+  env.call('(function () { ScriptApp.newTrigger("scheduledBrandFolders").timeBased().everyHours(12).create(); ScriptApp.newTrigger("externalSync").timeBased().everyHours(1).create(); })');
+  const external = env.triggers.find(t => t.getHandlerFunction() === 'externalSync');
   const again = ok(env.api('system.setup'));
-  assert.deepEqual(again.report, ['변경할 설정이 없습니다. 이미 준비되어 있습니다.']);
   assert.equal(again.health.ok, true, JSON.stringify(again.health.results));
+  assert.ok(env.triggers.includes(unrelated));
+  assert.ok(env.triggers.includes(external));
+  for (const [handler, cadence] of [['scheduledHealthCheck', { hours: 6 }], ['scheduledBrandFolders', { minutes: 1 }]]) {
+    const owned = env.triggers.filter(t => t.getHandlerFunction() === handler);
+    assert.equal(owned.length, 1);
+    assert.deepEqual(owned[0].cadence, cadence);
+  }
+  assert.equal(again.health.results.find(r => r.target === '트리거').status, '정상');
 });
 
 test('setup keeps going when one step fails and says how to fix it', () => {
@@ -279,30 +288,238 @@ test('thumbnails: image files from the catalog sheet are copied into our folder 
   assert.equal(env.drive.copies, copies);
 });
 
-test('brand folders: Notion checkbox (trigger) or the button creates the folder once and writes its URL to 구글 드라이브', () => {
+test('brand folders: automatic processing starts at migration, without a checkbox or public sharing', () => {
   const { env, data } = setup();
-  const templateId = env.drive.file({ name: '매입정보_취합파일.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', parents: [env.drive.root] }).id;
-  env.props.BO_TEMPLATE_FILE_ID = templateId;
-  const page = (p) => env.notion.pages[p.id];
-  const driveOf = (id) => (page(id).properties['구글 드라이브'] || {}).url || null;
-  const children = (parent) => Object.values(env.drive.items).filter((x) => x.parents[0] === parent && !x.trashed).map((x) => x.name).sort();
-  // 체크된 브랜드만 처리한다.
-  page(data.b1).properties['드라이브 폴더 만들기'] = { checkbox: true };
+  assert.ok(ok(env.api('brands.foldersSync')).skipped);
+  env.call('setupBeautyora');
+  const since = env.props.BO_BRAND_FOLDERS_START_AT;
+  env.call('setupBeautyora');
+  assert.equal(env.props.BO_BRAND_FOLDERS_START_AT, since);
+  const added = env.notion.createPage(data.ids.brandId, { '브랜드명': { title: [{ text: { content: '신규' } }] }, '브랜드 ID': { rich_text: [{ text: { content: 'BO-0004' } }] } });
+  const page = env.notion.pages[added.id];
+  page.created_time = new Date(Math.floor(Date.parse(since) / 60000) * 60000).toISOString();
+  [data.b2, data.b3].forEach(b => { env.notion.pages[b.id].created_time = '2020-01-01T00:00:00.000Z'; });
   const r = ok(env.api('brands.foldersSync'));
-  assert.deepEqual(r.created.map((c) => c.code), ['BO-0001']);
+  assert.deepEqual(r.created.map(c => c.code), ['BO-0004']);
   assert.deepEqual(r.failed, []);
-  const folder = Object.values(env.drive.items).find((x) => x.folder && x.name === '루엠 (BO-0001)');
-  assert.ok(folder && folder.parents[0] === env.drive.root, 'folder under the root');
-  assert.equal(driveOf(data.b1), 'https://drive.google.com/drive/folders/' + folder.id);
-  assert.equal(folder.sharing, 'ANYONE_WITH_LINK:EDIT', 'brands upload through the link');
-  assert.deepEqual(children(folder.id), ['01_상품 이미지', '02_상세페이지', '03_서류', '루엠_매입정보_취합파일.xlsx']);
-  assert.equal(driveOf(data.b2), null, 'unchecked brand untouched');
-  // 다시 돌려도 새로 만들지 않는다(구글 드라이브가 채워져 있음).
+  const folder = Object.values(env.drive.items).find(x => x.name === '신규 (BO-0004)');
+  assert.equal(folder.sharing, undefined);
+  assert.deepEqual(Object.values(env.drive.items).filter(x => x.parents[0] === folder.id).map(x => x.name).sort(), ['01_섬네일', '02_상세페이지', '03_서류']);
+  assert.equal(page.properties['구글 드라이브'].url, 'https://drive.google.com/drive/folders/' + folder.id);
   assert.deepEqual(ok(env.api('brands.foldersSync')).created, []);
-  // 버튼: 체크 없이 바로 만든다. 이미 주소가 있으면 그대로 돌려준다.
-  const b = ok(env.api('brands.folder', { code: 'BO-0002' }));
-  assert.equal(b.created, true);
-  assert.equal(driveOf(data.b2), b.url);
-  assert.equal(ok(env.api('brands.folder', { code: 'BO-0002' })).created, false);
-  assert.equal(Object.values(env.drive.items).filter((x) => x.folder && x.name === '셀리본 (BO-0002)').length, 1);
+  assert.ok(!(env.notion.pages[data.b2.id].properties['구글 드라이브'] || {}).url);
+});
+
+test('brand folders: ID assignment can lag registration and duplicate IDs fail closed', () => {
+  const { env, data } = setup();
+  env.props.BO_BRAND_FOLDERS_BASELINE = JSON.stringify({ since: '2000-01-01T00:00:00.000Z', chunks: 0, count: 0 });
+  const page = env.notion.pages[data.b1.id], original = page.properties['브랜드 ID'];
+  page.properties['브랜드 ID'] = { type: 'rich_text', rich_text: [] };
+  assert.ok(!ok(env.api('brands.foldersSync')).created.some(c => c.code === 'BO-0001'));
+  page.properties['브랜드 ID'] = original;
+  assert.deepEqual(ok(env.api('brands.foldersSync')).created.map(c => c.code), ['BO-0001']);
+  env.notion.pages[data.b2.id].properties['브랜드 ID'] = original;
+  assert.equal(env.api('brands.folder', { code: 'BO-0001' }).ok, false);
+});
+
+test('brand folders: partial failure and renamed brand reuse pending folder, files, and legacy image directory', () => {
+  const { env, data } = setup();
+  env.props.BO_BRAND_FOLDERS_BASELINE = JSON.stringify({ since: '2000-01-01T00:00:00.000Z', chunks: 0, count: 0 });
+  const old = env.drive.folder('[BO-0001] 루엠', env.drive.root);
+  env.drive.items[old].sharing = 'PRIVATE:EDIT';
+  const images = env.drive.folder('01_상품 이미지', old);
+  const asset = env.drive.file({ name: 'existing.jpg', parents: [images] });
+  env.props.BO_TEMPLATE_FILE_ID = 'missing-template';
+  const r = ok(env.api('brands.foldersSync'));
+  assert.equal(r.failed.length, 3);
+  assert.equal(env.props['BO_BRAND_FOLDER_PENDING_' + data.b1.id], old);
+  const template = env.drive.file({ name: '양식.xlsx', parents: [env.drive.root] });
+  env.props.BO_TEMPLATE_FILE_ID = template.id;
+  env.notion.pages[data.b1.id].properties['브랜드명'] = { type: 'title', title: [{ plain_text: '새 이름', text: { content: '새 이름' } }] };
+  assert.equal(ok(env.api('brands.foldersSync')).failed.length, 0);
+  assert.equal(env.notion.pages[data.b1.id].properties['구글 드라이브'].url, 'https://drive.google.com/drive/folders/' + old);
+  assert.equal(env.props['BO_BRAND_FOLDER_PENDING_' + data.b1.id], undefined);
+  assert.equal(env.drive.items[old].sharing, 'PRIVATE:EDIT');
+  assert.ok(env.drive.items[asset.id]);
+  assert.ok(!Object.values(env.drive.items).some(x => x.parents[0] === old && x.name === '01_섬네일'));
+  const before = Object.keys(env.drive.items).length;
+  ok(env.api('brands.folder', { code: 'BO-0001' }));
+  assert.equal(Object.keys(env.drive.items).length, before);
+});
+
+test('brand folders: Notion write failure retries without duplicate folders or template copies', () => {
+  const { env, data } = setup();
+  env.props.BO_TEMPLATE_FILE_ID = env.drive.file({ name: '양식.xlsx', parents: [env.drive.root] }).id;
+  const patch = env.context.notionPatch_;
+  env.context.notionPatch_ = () => { throw new Error('Notion unavailable'); };
+  assert.equal(env.api('brands.folder', { code: 'BO-0001' }).ok, false);
+  const count = Object.keys(env.drive.items).length;
+  env.context.notionPatch_ = patch;
+  assert.equal(ok(env.api('brands.folder', { code: 'BO-0001' })).created, true);
+  assert.equal(Object.keys(env.drive.items).length, count);
+  assert.equal(env.props['BO_BRAND_FOLDER_PENDING_' + data.b1.id], undefined);
+});
+
+test('brand folders: linked folders repair only missing children, invalid links and ambiguous roots fail safely', () => {
+  const { env, data } = setup();
+  const folder = env.drive.folder('existing', env.drive.root);
+  env.drive.folder('01_섬네일', folder);
+  const p = env.notion.pages[data.b1.id];
+  p.properties['구글 드라이브'] = { type: 'url', url: 'https://drive.google.com/drive/folders/' + folder };
+  assert.equal(ok(env.api('brands.folder', { code: 'BO-0001' })).created, false);
+  assert.equal(Object.values(env.drive.items).filter(x => x.parents[0] === folder).length, 3);
+  p.properties['구글 드라이브'].url = 'https://example.com';
+  assert.equal(env.api('brands.folder', { code: 'BO-0001' }).ok, false);
+  env.drive.folder('A (BO-0002)', env.drive.root);
+  env.drive.folder('B (BO-0002)', env.drive.root);
+  assert.equal(env.api('brands.folder', { code: 'BO-0002' }).ok, false);
+});
+
+test('brand folders: interrupted child creation resumes under the same parent', () => {
+  const { env } = setup();
+  const folderApi = env.drive.folderApi.bind(env.drive);
+  let fail = true;
+  env.drive.folderApi = id => {
+    const api = folderApi(id), create = api.createFolder;
+    api.createFolder = name => {
+      if (name === '02_상세페이지' && fail) { fail = false; throw new Error('interrupted'); }
+      return create(name);
+    };
+    return api;
+  };
+  assert.equal(env.api('brands.folder', { code: 'BO-0001' }).ok, false);
+  ok(env.api('brands.folder', { code: 'BO-0001' }));
+  const parents = Object.values(env.drive.items).filter(x => x.name === '루엠 (BO-0001)');
+  assert.equal(parents.length, 1);
+  assert.deepEqual(Object.values(env.drive.items).filter(x => x.parents[0] === parents[0].id).map(x => x.name).sort(), ['01_섬네일', '02_상세페이지', '03_서류']);
+});
+
+test('brand folders: installed trigger remains usable after migration and foreign trigger is rejected', () => {
+  const { env } = setup();
+  env.call('setupBeautyora');
+  env.call('setupBeautyora');
+  const uid = env.triggers.find(t => t.getHandlerFunction() === 'scheduledBrandFolders').getUniqueId();
+  assert.equal(env.triggers.filter(t => t.getHandlerFunction() === 'scheduledBrandFolders').length, 1);
+  assert.doesNotThrow(() => env.call('scheduledBrandFolders', { triggerUid: uid }));
+  assert.throws(() => env.call('scheduledBrandFolders', { triggerUid: 'foreign' }));
+});
+
+
+test('setup retains existing triggers if a replacement cannot be created', () => {
+  const { env } = setup();
+  env.call('setupBeautyora');
+  const original = env.triggers.slice();
+  env.context.ScriptApp.newTrigger = () => { throw new Error('trigger quota exceeded'); };
+  const result = ok(env.api('system.setup'));
+  assert.equal(result.ok, false);
+  assert.deepEqual(env.triggers, original);
+});
+
+function addFolderTestBrand(env, data, code, created) {
+  const page = env.notion.createPage(data.ids.brandId, {
+    '브랜드명': { title: [{ text: { content: code } }] },
+    '브랜드 ID': { rich_text: [{ text: { content: code } }] }
+  });
+  if (created) env.notion.pages[page.id].created_time = created;
+  return page;
+}
+
+test('baseline: same-minute old pages are excluded and registrations during/after activation are processed', () => {
+  const { env, data } = setup();
+  const minute = '2026-10-04T13:52:00.000Z';
+  env.context.Date = class extends Date {
+    constructor(...args) { super(...(args.length ? args : ['2026-10-04T13:52:30.000Z'])); }
+    static now() { return Date.parse('2026-10-04T13:52:30.000Z'); }
+  };
+  Object.values(env.notion.pages).forEach(p => { p.created_time = minute; });
+  // New registration after the snapshot read but before manifest commit must not be lost.
+  const query = env.context.notionQueryAll_;
+  let concurrent;
+  env.context.notionQueryAll_ = (...args) => {
+    const result = query(...args);
+    if (!concurrent && !args[1].filter) concurrent = addFolderTestBrand(env, data, 'BO-0100', minute);
+    return result;
+  };
+  env.call('setupBeautyora');
+  env.context.notionQueryAll_ = query;
+  addFolderTestBrand(env, data, 'BO-0101', minute);
+  addFolderTestBrand(env, data, 'BO-0102', '2026-10-04T13:53:00.000Z');
+  const baseline = env.props.BO_BRAND_FOLDERS_BASELINE;
+  env.call('setupBeautyora');
+  assert.equal(env.props.BO_BRAND_FOLDERS_BASELINE, baseline, 'rerun never re-snapshots new registrations');
+  assert.deepEqual(ok(env.api('brands.foldersSync')).created.map(x => x.code).sort(), ['BO-0100', 'BO-0101', 'BO-0102']);
+  for (const old of [data.b1, data.b2, data.b3]) assert.ok(!(env.notion.pages[old.id].properties['구글 드라이브'] || {}).url);
+});
+
+test('baseline: paginated existing brands are chunked and never backfilled', () => {
+  const { env, data } = setup();
+  for (let i = 4; i <= 132; i++) addFolderTestBrand(env, data, 'BO-' + String(i).padStart(4, '0'));
+  env.call('setupBeautyora');
+  const baseline = JSON.parse(env.props.BO_BRAND_FOLDERS_BASELINE);
+  assert.equal(baseline.count, 132);
+  assert.equal(baseline.chunks, 2);
+  for (let i = 0; i < baseline.chunks; i++) assert.ok(Buffer.byteLength(env.props['BO_BRAND_FOLDERS_EXCLUDED_' + i]) < 9000);
+  assert.deepEqual(ok(env.api('brands.foldersSync')).created, []);
+});
+
+test('baseline: query failure or interrupted snapshot save leaves automatic processing disabled', () => {
+  const { env } = setup();
+  const query = env.context.notionQueryAll_;
+  env.context.notionQueryAll_ = () => { throw new Error('snapshot unavailable'); };
+  assert.equal(ok(env.api('system.setup')).ok, false);
+  assert.equal(env.props.BO_BRAND_FOLDERS_BASELINE, undefined);
+  assert.ok(ok(env.api('brands.foldersSync')).skipped);
+  env.context.notionQueryAll_ = query;
+  const properties = env.context.PropertiesService.getScriptProperties;
+  env.context.PropertiesService.getScriptProperties = () => {
+    const store = properties(), save = store.setProperty;
+    store.setProperty = (key, value) => {
+      if (key === 'BO_BRAND_FOLDERS_BASELINE') throw new Error('interrupted manifest save');
+      save(key, value);
+    };
+    return store;
+  };
+  assert.equal(ok(env.api('system.setup')).ok, false);
+  assert.ok(env.props.BO_BRAND_FOLDERS_EXCLUDED_0, 'partial snapshot exists');
+  assert.ok(ok(env.api('brands.foldersSync')).skipped);
+  env.context.PropertiesService.getScriptProperties = properties;
+  assert.equal(ok(env.api('system.setup')).ok, true);
+  assert.deepEqual(ok(env.api('brands.foldersSync')).created, []);
+  delete env.props.BO_BRAND_FOLDERS_EXCLUDED_0;
+  assert.equal(env.api('brands.foldersSync').ok, false, 'missing snapshot never permits backfill');
+  assert.equal(ok(env.api('system.setup')).ok, false, 'corrupt committed baseline is never silently replaced');
+});
+
+test('baseline: property capacity exhaustion fails closed before activation', () => {
+  const { env } = setup();
+  for (let i = 0; i < 20; i++) env.props['UNRELATED_CONFIGURATION_' + i] = 'x'.repeat(7000);
+  const result = ok(env.api('system.setup'));
+  assert.equal(result.ok, false);
+  assert.equal(env.props.BO_BRAND_FOLDERS_BASELINE, undefined);
+  assert.ok(ok(env.api('brands.foldersSync')).skipped);
+  assert.equal(env.props.UNRELATED_CONFIGURATION_0.length, 7000);
+});
+
+test('deployment: production target guard fails closed without exposing configured IDs', () => {
+  const { spawnSync } = require('child_process');
+  const script = path.join(__dirname, '..', 'scripts', 'verify-deploy-target.cjs');
+  const { EXPECTED_PRODUCTION_SCRIPT_ID } = require(script);
+  const run = env => spawnSync(process.execPath, [script], { env, encoding: 'utf8' });
+  const correct = run({ TARGET: 'production', PROD_SCRIPT_ID: EXPECTED_PRODUCTION_SCRIPT_ID });
+  assert.equal(correct.status, 0);
+  assert.match(correct.stdout, /운영 프로젝트 확인: 일치/);
+  assert.ok(!correct.stdout.includes(EXPECTED_PRODUCTION_SCRIPT_ID));
+  for (const value of ['', 'unused-project-sentinel', EXPECTED_PRODUCTION_SCRIPT_ID + ' ']) {
+    const wrong = run({ TARGET: 'production', PROD_SCRIPT_ID: value });
+    assert.equal(wrong.status, 1);
+    assert.match(wrong.stderr, /운영 프로젝트 불일치 또는 미설정/);
+    if (value) assert.ok(!(wrong.stdout + wrong.stderr).includes(value));
+  }
+  assert.equal(run({ TARGET: 'test', PROD_SCRIPT_ID: 'unused-project-sentinel' }).status, 0);
+  assert.equal(run({ TARGET: 'unknown' }).status, 1);
+  const workflow = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'apps-script-deploy.yml'), 'utf8');
+  const guard = workflow.indexOf('node scripts/verify-deploy-target.cjs');
+  assert.ok(guard > 0 && guard < workflow.indexOf('> .clasp.json'));
+  assert.ok(guard < workflow.indexOf('- name: Google 인증 준비'));
+  assert.ok(guard < workflow.indexOf('clasp@3 push'));
 });
