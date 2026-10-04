@@ -8,7 +8,7 @@ Notion으로 하기 어려운 일을 맡는 **내부 직원 전용** Google Apps
 |---|---|---|
 | 브랜드·영업 진행 | Notion `브랜드 목록` | 읽기, 진행 현황 보기 (수정은 Notion에서) |
 | 연락·진행 기록 | Notion `연락 · 진행 이력` | (예정) 변경 이력 |
-| 상품 | Google 시트 `메인 상품목록` | (예정) 통합 상품리스트에서 생성, 브랜드 자료 반영 |
+| 상품 | Google 시트 `메인 상품목록` | 설정 → 메인 상품목록에서 통합 상품리스트로 한 번 생성. (예정) 브랜드 자료 반영 |
 | 브랜드 자료(엑셀·사진·서류) | 브랜드 전용 Google Drive 폴더 | (예정) Notion `자료 요청` 승인 시 폴더 생성, 자동 수집 |
 | 입점 신청 폼 → Notion | 별도 Apps Script 프로젝트 | 다루지 않음 |
 | 설정값·토큰 | Apps Script 스크립트 속성 | 코드·저장소에 넣지 않음 |
@@ -29,6 +29,7 @@ src/
   03_Auth.gs        관리자·소유자·트리거 확인
   10_Brands.gs      브랜드 목록(읽기)
   15_Files.gs       Drive 루트 폴더
+  30_MainProducts.gs 메인 상품목록 만들기(통합리스트 → 새 시트, 제품 링크 찾기)
   19_Dashboard.gs   홈 화면
   20_Setup.gs       초기 설정·연결 점검·트리거
   90_Main.gs        doGet, 단일 API 진입점 api()
@@ -45,6 +46,16 @@ tests/
 
 브랜드 목록은 10분 동안 저장해 두고, 그 사이에는 요청 때마다(10초 간격) Notion에 **마지막으로 읽은 뒤 수정된 페이지만** 물어 바꿔 끼웁니다.
 그래서 Notion에서 직접 바꾼 값도 곧바로 운영센터에 보입니다(`src/02_Notion.gs`의 `syncedList_`).
+
+## 메인 상품목록
+
+설정 → **메인 상품목록**에서 통합 상품리스트(벤더별 운영본) 주소와 탭 이름(기본 `뷰티오라`)을 넣고 만듭니다. 통합리스트는 바꾸지 않고, 브랜드 자료 루트 폴더에 새 시트를 만듭니다.
+
+- `상품` 탭: 상품 ID(`BP-00001`…), 브랜드, **벤더**(벤더를 통해 들어온 상품만 벤더사 이름, 직거래는 빈칸), 이미지(셀 섬네일 그대로), 상품명, 구성, 카테고리, 바코드, 거래유형, 매입·위탁 공급가, 권장판매가, 매입 MOQ, 핵심포인트, 제품설명, **제품 링크**, 링크 출처, 원본행 ID
+  - 벤더 판단: 통합리스트 `운영 출처시트`에 `픽오라`가 있으면 직거래, 아니면 `실제 공급사`를 벤더로 적습니다.
+- `가격 근거` 탭: 그 밖의 통합리스트 열(계산모드, 가격 근거 셀 등)을 상품 ID와 함께 보관
+- 제품 링크: 기존 Notion 상품 DB(`BO_NOTION_PRODUCT_DATA_SOURCE_ID`, 읽기만)의 `참고 링크`와, 선택한 기존 브랜드 자료 폴더의 `입점 상품 리스트` 엑셀 `참고링크`에서 바코드 → 브랜드+상품명 순으로 찾습니다. 홈페이지 첫 화면 주소는 "상품 개별 링크 아님"으로 표시합니다.
+- 만든 시트 ID는 스크립트 속성 `BO_MAIN_PRODUCT_SHEET_ID`에 저장됩니다. 다시 만들면 새 파일이 생기고 이전 파일은 남습니다.
 
 ## 보안 원칙
 
@@ -65,7 +76,7 @@ tests/
 | `BO_ALLOW_EMBED` | ops 주소 | `true`면 ops.beautyora.kr 안에 표시 허용 |
 | `BO_NOTION_ACTIVITY_DATA_SOURCE_ID` | 권장 | 연락 · 진행 이력 (변경 이력에 사용 예정) |
 
-v2에서 쓰던 속성(`BO_NOTION_PRODUCT_DATA_SOURCE_ID`, `BO_NOTION_LINK_…`, `BO_NOTION_BILLING_…`, `BO_NOTION_INVENTORY_/MOVEMENT_/STORE_/TERMS_…`, `BO_GOOGLE_FORM_ID`, `BO_PARTNER_WEBAPP_URL`, `BO_GOOGLE_CLIENT_ID`, `BO_SPREADSHEET_ID`, `BO_MIGRATION_STATE`)은 더 이상 읽지 않습니다. 남아 있어도 문제는 없습니다.
+v2에서 쓰던 속성(`BO_NOTION_LINK_…`, `BO_NOTION_BILLING_…`, `BO_NOTION_INVENTORY_/MOVEMENT_/STORE_/TERMS_…`, `BO_GOOGLE_FORM_ID`, `BO_PARTNER_WEBAPP_URL`, `BO_GOOGLE_CLIENT_ID`, `BO_SPREADSHEET_ID`, `BO_MIGRATION_STATE`)은 더 이상 읽지 않습니다. 남아 있어도 문제는 없습니다. `BO_NOTION_PRODUCT_DATA_SOURCE_ID`는 메인 상품목록을 만들 때 제품 링크를 찾는 데만 읽습니다.
 
 ## 처음 설정(환경마다 한 번)
 

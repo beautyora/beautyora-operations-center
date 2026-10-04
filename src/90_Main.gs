@@ -23,6 +23,8 @@ function adminActions_() {
     'admin.bootstrap': function () { return { user: { email: activeEmail_() }, version: BO.VERSION, dashboard: apiDashboard_() }; },
     'dashboard': apiDashboard_,
     'brands.list': apiBrandsList_,
+    'products.main': apiMainProductsStatus_,
+    'products.mainBuild': apiMainProductsBuild_,
     'system.health': function () { return healthCheck_(); },
     'system.setup': function () { return setupSystem_(); },
     'system.refresh': function () { bumpCache_('brand', 'activity', 'source'); return { refreshed: true }; }
