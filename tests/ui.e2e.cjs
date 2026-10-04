@@ -1,6 +1,6 @@
 'use strict';
 /**
- * Browser test: renders the real HTML (Index + Admin/Partner) in Chromium and bridges
+ * Browser test: renders the real HTML (Index + Common + Admin) in Chromium and bridges
  * google.script.run → the real server code running on the fake Notion/Drive harness.
  * Run: NODE_PATH=$(npm root -g) node tests/ui.e2e.cjs [screenshotDir]
  */
@@ -18,39 +18,12 @@ const env = createEnv();
 const data = seed(env);
 const setup = env.api('system.setup');
 assert.equal(setup.ok, true, setup.message);
-const link = env.api('links.issue', { code: 'BO-0001', days: 30 });
-const token = new URL(link.data.url).searchParams.get('token');
-// A pending change request for BO-0002 so the review queue has both kinds.
-const token2 = new URL(env.api('links.issue', { code: 'BO-0002', days: 30 }).data.url).searchParams.get('token');
-['대표 이미지', '상세페이지'].forEach((category, i) => env.api('partner.upload', { kind: 'asset', productId: 'PRD-0003-CCCC', category, uploadId: 'UP-SEED-000' + i, fileName: i ? 'd.pdf' : 'm.png', mimeType: i ? 'application/pdf' : 'image/png', base64: Buffer.from('x').toString('base64') }, token2));
-const change = env.api('partner.submit', { requestId: 'REQ-SEED-00001', contactName: '셀리본 담당', products: [{ productId: 'PRD-0003-CCCC', data: { product_name: '립 틴트 벨벳', barcode: '8800000000035', category: ['메이크업'], retail_price: 19000 } }] }, token2);
-assert.equal(change.ok, true, change.message);
-assert.equal(change.data.ok, true, JSON.stringify(change.data));
-env.api('partner.upload', { kind: 'doc', category: '사업자등록증', uploadId: 'DOC-SEED-0001', fileName: 'biz.pdf', mimeType: 'application/pdf', base64: Buffer.from('pdf').toString('base64') }, token2);
 
 // Hostile text coming from Notion must render as text, never as markup.
-env.notion.createPage(data.ids.brandId, { '브랜드명': { title: [{ text: { content: '<img src=x onerror="window.__xss=1">' } }] }, '브랜드 ID': { rich_text: [{ text: { content: 'BO-0099' } }] }, '진행 단계': { select: { name: '접수·검토' } } });
+env.notion.createPage(data.ids.brandId, { '브랜드명': { title: [{ text: { content: '<img src=x onerror="window.__xss=1">' } }] }, '브랜드 ID': { rich_text: [{ text: { content: 'BO-0099' } }] }, '진행 단계': { select: { name: '접수·검토' } }, '구글 드라이브': { url: 'javascript:alert(1)' } });
 env.api('system.refresh');
 
-// Brand domain build (Netlify): same screens, server calls go to the brand web app via fetch.
-const API_URL = 'https://script.google.com/macros/s/E2E_PARTNER/exec';
-const BRAND_DIR = path.join(OUT, '.brand-web');
-require('child_process').execFileSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'build-partner-web.cjs'), BRAND_DIR], { env: Object.assign({}, process.env, { BO_PARTNER_API_URL: API_URL }), stdio: 'ignore' });
-// Ops domain build: admin screens behind Google sign-in (Google Identity Services is faked below).
-const OPS_DIR = path.join(OUT, '.ops-web');
-require('child_process').execFileSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'build-web.cjs'), 'admin', OPS_DIR], { env: Object.assign({}, process.env, { BO_API_URL: API_URL, BO_GOOGLE_CLIENT_ID: env.props.BO_GOOGLE_CLIENT_ID }), stdio: 'ignore' });
-const FAKE_GSI = `window.google = window.google || {}; google.accounts = { id: {
-  initialize(o) { this.o = o; },
-  renderButton(el) { el.innerHTML = '<button id="fakeGsi" type="button">Google 계정으로 로그인</button>'; el.firstChild.onclick = () => this.o.callback({ credential: window.__ID_TOKEN }); },
-  prompt() {}, disableAutoSelect() { window.__signedOut = true; }
-} };`;
-
-const pages = {
-  '/ops': () => fs.readFileSync(path.join(OPS_DIR, 'index.html'), 'utf8'),
-  '/brand': () => fs.readFileSync(path.join(BRAND_DIR, 'index.html'), 'utf8'),
-  '/admin': () => env.call('doGet', { parameter: {} }).getContent(),
-  '/partner': () => env.call('doGet', { parameter: { token } }).getContent()
-};
+const pages = { '/admin': () => env.call('doGet', { parameter: {} }).getContent() };
 const server = http.createServer((req, res) => {
   const route = pages[req.url.split('?')[0]];
   if (!route) { res.writeHead(404); res.end(); return; }
@@ -71,289 +44,74 @@ const errors = [];
 async function open(browser, url, viewport) {
   const page = await browser.newPage({ viewport });
   page.on('pageerror', (e) => errors.push(url + ': ' + e.message));
-  page.on('console', (m) => { if (m.type() === 'error' && !/pretendard|Failed to load resource|drive\.google/.test(m.text())) errors.push(url + ' console: ' + m.text()); });
+  page.on('console', (m) => { if (m.type() === 'error' && !/pretendard|Failed to load resource/.test(m.text())) errors.push(url + ' console: ' + m.text()); });
   await page.exposeFunction('__api', (json) => JSON.stringify(env.call('api', JSON.parse(json))));
   await page.addInitScript(SHIM);
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   return page;
 }
-const shot = async (page, name) => { await page.waitForTimeout(900); return page.screenshot({ path: path.join(OUT, name + '.png'), fullPage: true }); };
+const shot = async (page, name) => { await page.waitForTimeout(600); return page.screenshot({ path: path.join(OUT, name + '.png'), fullPage: true }); };
 
 (async () => {
   await new Promise((r) => server.listen(0, r));
   const base = 'http://127.0.0.1:' + server.address().port;
-  const browser = await chromium.launch({ executablePath: fs.existsSync('/opt/pw-browsers/chromium') ? undefined : undefined });
+  const browser = await chromium.launch();
   try {
-    /* ----- Admin desktop ----- */
+    /* ----- Desktop ----- */
     const a = await open(browser, base + '/admin', { width: 1366, height: 900 });
     await a.waitForSelector('.stats .stat');
-    assert.match(await a.textContent('.stats'), /입점 신청/);
-    await shot(a, '01-admin-home');
+    assert.deepEqual(await a.$$eval('.nav-item span', (els) => els.map((e) => e.textContent)), ['홈', '브랜드', '설정']);
+    assert.match(await a.textContent('.stats'), /접수·검토/);
+    await shot(a, '01-home');
 
-    await a.click('a[data-path="intake"]');
-    await a.waitForSelector('tr[data-code="BO-0003"]');
-    await a.click('tr[data-code="BO-0003"]');
-    await a.waitForSelector('#intakeStage');
-    await shot(a, '02-admin-intake-drawer');
-    await a.selectOption('#intakeStage', '통화 예정');
-    await a.fill('#intakeNote', '다음 주 통화');
-    await a.click('#intakeSave');
-    await a.waitForSelector('.toast');
-    await a.waitForFunction(() => !document.querySelector('#drawer'));
-
-    await a.click('a[data-path="brands"]');
+    // A stage tile opens the brand list filtered to that stage.
+    await a.click('.stats .stat:has-text("확정")');
     await a.waitForSelector('tr[data-code="BO-0001"]');
-    await shot(a, '03-admin-brands');
-    await a.click('tr[data-code="BO-0001"]');
-    await a.waitForSelector('#brandForm');
-    await shot(a, '04-admin-brand-overview');
-    await a.click('[data-tab="activity"]');
-    await a.waitForSelector('#aContent');
-    await a.fill('#aContent', '신상품 3종 제안 받음');
-    await a.fill('#aNext', '샘플 요청');
-    await a.click('#aSave');
-    await a.waitForSelector('.timeline-item');
-    await shot(a, '05-admin-brand-activity');
-    await a.click('[data-tab="billing"]');
-    await a.waitForSelector('#bSave');
-    await a.selectOption('#bKind', '입점비');
-    await a.fill('#bAmount', '330000');
-    await a.click('#bSave');
-    await a.waitForSelector('button[data-bill][data-field="pay"]');
-    await a.click('button[data-bill][data-field="pay"]');
-    await a.waitForSelector('button[data-bill][data-field="pay"][data-value="입금 대기"]');
-    await shot(a, '05b-admin-brand-billing');
-    await a.click('[data-tab="links"]');
-    await a.waitForSelector('#linkIssue');
-    await shot(a, '06-admin-brand-links');
-    await a.click('[data-tab="stock"]');
-    await a.waitForSelector('[data-move="-"]');
-    await a.click('[data-move="-"]');
-    await a.fill('#mvQty', '2');
-    await a.click('#mvSave');
-    await a.waitForFunction(() => !document.querySelector('#modal'));
-    await a.waitForSelector('td.right.num strong');
-    assert.match(await a.textContent('#bBody'), /\b8\b/);
-    await a.keyboard.press('Escape');
+    assert.equal(await a.locator('tbody tr').count(), 1);
+    assert.equal(await a.inputValue('#bstage'), '확정');
+    await a.selectOption('#bstage', '');
+    await a.waitForSelector('tr[data-code="BO-0002"]');
+    await a.fill('#bq', '셀리본');
+    assert.equal(await a.locator('tbody tr').count(), 1);
+    await a.fill('#bq', '');
+    const notionHref = await a.getAttribute('tr[data-code="BO-0001"] .cell-title a', 'href');
+    assert.match(notionHref, /^https:\/\/www\.notion\.so\//, 'brand name opens the Notion page');
+    assert.equal(await a.getAttribute('tr[data-code="BO-0001"] .cell-title a', 'target'), '_blank');
+    await shot(a, '02-brands');
 
-    await a.click('a[data-path="review"]');
-    await a.waitForSelector('[data-review]');
-    await a.click('[data-review]:has-text("립 틴트")');
-    await a.waitForSelector('table.diff');
-    await shot(a, '07-admin-review-change');
-    await a.click('[data-decide="approve"]');
-    await a.waitForSelector('.toast.ok');
-    await a.waitForFunction(() => !/립 틴트/.test(document.querySelector('#rlist').textContent));
-    await a.click('[data-rtab="docs"]');
-    await a.waitForSelector('[data-doc]');
-    await shot(a, '08-admin-review-docs');
+    // Notion text is shown as text; unsafe links are not rendered as links.
+    assert.match(await a.textContent('tr[data-code="BO-0099"]'), /<img src=x/);
+    assert.equal(await a.locator('tr[data-code="BO-0099"] a[href^="javascript:"]').count(), 0);
+    assert.equal(await a.evaluate(() => window.__xss), undefined, 'no script injection from Notion text');
 
-    await a.click('a[data-path="products"]');
-    await a.waitForSelector('tr[data-page]');
-    await shot(a, '09-admin-products');
-    await a.click('tr[data-page]:has-text("립 틴트 벨벳")');
-    await a.waitForSelector('#pdForm');
-    await shot(a, '10-admin-product-drawer');
-    await a.keyboard.press('Escape');
-
-    await a.click('a[data-path="inventory"]');
-    await a.waitForSelector('#itable');
-    await shot(a, '11-admin-inventory');
     await a.click('a[data-path="settings"]');
     await a.waitForSelector('#sHealthBox table');
-    await a.waitForSelector('#sFields table');
-    await shot(a, '12-admin-settings');
+    await a.click('#sSetup');
+    await a.click('#modal [data-ok]');
+    await a.waitForSelector('#modal:has-text("초기 설정 결과")');
+    await shot(a, '03-settings');
+    await a.click('#modal [data-close]');
 
-    /* ----- Admin mobile ----- */
+    /* ----- Mobile ----- */
     const am = await open(browser, base + '/admin', { width: 390, height: 844 });
     await am.waitForSelector('.stats .stat');
-    await shot(am, '13-admin-home-mobile');
+    await shot(am, '04-home-mobile');
     const overflow = await am.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
-    if (overflow > 1) console.log(await am.evaluate(() => Array.from(document.querySelectorAll('*')).filter((el) => el.getBoundingClientRect().right > window.innerWidth + 1).slice(0, 8).map((el) => el.tagName + '.' + el.className + ' ' + Math.round(el.getBoundingClientRect().right) + ' ' + (el.textContent || '').slice(0, 40)).join('\n')));
     assert.ok(overflow <= 1, 'no horizontal scroll on mobile home, got ' + overflow);
     await am.click('#menuToggle');
-    await shot(am, '14-admin-menu-mobile');
+    await am.click('a[data-path="brands"]');
+    await am.waitForSelector('tr[data-code="BO-0001"]');
+    const listOverflow = await am.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    assert.ok(listOverflow <= 1, 'no horizontal scroll on mobile brand list, got ' + listOverflow);
+    await shot(am, '05-brands-mobile');
 
-    /* ----- Partner ----- */
-    const p = await open(browser, base + '/partner', { width: 1280, height: 900 });
-    await p.waitForSelector('#plist');
-    await shot(p, '15-partner-products');
-    await p.click('#pNew');
-    await p.waitForSelector('#dForm');
-    await p.fill('[data-field="product_name"]', '데일리 수분 토너');
-    await p.fill('[data-field="barcode"]', '8800000000123');
-    await p.check('[data-field="category"] input[value="스킨케어(베이직)"]');
-    await p.fill('[data-field="retail_price"]', '21000');
-    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
-    await p.setInputFiles('[data-upload="main"]', { name: 'main.png', mimeType: 'image/png', buffer: png });
-    await p.waitForSelector('text=완료');
-    await p.setInputFiles('[data-upload="detail"]', { name: 'detail.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4') });
-    await p.waitForFunction(() => document.querySelectorAll('.file-row').length >= 2 && !/올리는 중/.test(document.querySelector('#dEditor').textContent));
-    await p.waitForSelector('#dSubmitOne:not([disabled])');
-    await shot(p, '16-partner-editor');
-    await p.click('#dSubmitOne');
-    await p.fill('#sName', '김담당');
-    await p.click('#sGo');
-    await p.waitForSelector('#plist .pm-row:has-text("데일리 수분 토너")');
-    await shot(p, '17-partner-status');
-    const created = Object.values(env.notion.pages).find((pg) => pg.properties['상품명'] && pg.properties['상품명'].title.map((t) => t.plain_text).join('') === '데일리 수분 토너');
-    assert.ok(created, 'submitted product exists in Notion');
-    assert.equal(created.properties['등록 검수 상태'].select.name, '검수 대기');
-    await p.click('[data-ptab="docs"]');
-    await p.waitForSelector('#docFile', { state: 'attached' });
-    await shot(p, '18-partner-docs');
+    /* ----- Not an admin ----- */
+    env.setUser('stranger@gmail.com');
+    const s = await open(browser, base + '/admin', { width: 800, height: 600 });
+    await s.waitForSelector('text=운영센터를 열 수 없습니다');
+    assert.match(await s.textContent('#root'), /관리자로 등록되어 있지 않습니다/);
+    env.setUser('admin@beautyora.test');
 
-    // 엑셀(CSV)로 여러 상품을 불러온 뒤 사진을 파일 이름으로 한꺼번에 올린다.
-    await p.click('[data-ptab="products"]');
-    await p.setInputFiles('#importFile', { name: 'list.csv', mimeType: 'text/csv', buffer: Buffer.from('상품명 *,바코드,카테고리,소비자가\n선크림,8800000000201,스킨케어(베이직),15000\n립밤,,메이크업,9000\n') });
-    await p.waitForSelector('#dPhotos');
-    const beforeFiles = Object.values(env.drive.items).filter((f) => f.appProperties && f.appProperties.boKind === 'asset').length;
-    await p.click('#dPhotos');
-    await p.setInputFiles('#bpFiles', [
-      { name: '8800000000201_대표.png', mimeType: 'image/png', buffer: png },
-      { name: '8800000000201_상세_1.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4') },
-      { name: '3_대표.png', mimeType: 'image/png', buffer: png },
-      { name: 'IMG_0001.png', mimeType: 'image/png', buffer: png }
-    ]);
-    await p.waitForSelector('text=3개 올림');
-    await shot(p, '18b-partner-bulk-photos');
-    await p.click('#bpGo');
-    await p.waitForFunction(() => !document.querySelector('#modal'));
-    const afterFiles = Object.values(env.drive.items).filter((f) => f.appProperties && f.appProperties.boKind === 'asset').length;
-    assert.equal(afterFiles - beforeFiles, 3, 'three matched photos uploaded');
-
-    // 등록된 상품(바코드 8800000000011)은 수정 요청 초안이 자동으로 생기고, 이미 올린 같은 파일은 건너뛴다.
-    await p.click('#dPhotos');
-    await p.setInputFiles('#bpFiles', [
-      { name: '8800000000011_상세_1.png', mimeType: 'image/png', buffer: png },
-      { name: '8800000000201_대표.png', mimeType: 'image/png', buffer: png }
-    ]);
-    await p.waitForSelector('text=같은 파일 1개 건너뜀');
-    await p.waitForSelector('text=등록 상품 · 수정 요청으로');
-    await shot(p, '18c-partner-bulk-registered');
-    await p.click('#bpGo');
-    await p.waitForFunction(() => !document.querySelector('#modal'));
-    const p1Files = Object.values(env.drive.items).filter((f) => f.appProperties && f.appProperties.boProduct === 'PRD-0001-AAAA' && f.appProperties.boCat === 'detail');
-    assert.equal(p1Files.length, 1, 'photo attached to the registered product');
-    assert.ok(p1Files[0].appProperties.boHash, 'content hash stored');
-    assert.equal(Object.values(env.drive.items).filter((f) => f.appProperties && f.appProperties.boKind === 'asset').length - afterFiles, 1, 'duplicate skipped');
-    await p.waitForSelector('text=시카 리페어 앰플');
-
-    // 상품 관리: 거르기·검색, 수정 패널(바뀐 칸 표시), 표로 한꺼번에 수정
-    await p.click('[data-ptab="products"]');
-    await p.waitForSelector('.pm-rail');
-    await p.fill('#pq', '8800000000028');
-    await p.waitForFunction(() => document.querySelectorAll('#plist .pm-row:not(.pm-head)').length === 1);
-    await p.fill('#pq', '');
-    await p.waitForFunction(() => document.querySelectorAll('#plist .pm-row:not(.pm-head)').length > 1);
-    await shot(p, '17b-partner-manage');
-    await p.click('#plist .pm-row:has-text("수분 크림") [data-act]');
-    await p.waitForSelector('#drawer #dForm');
-    await p.fill('#drawer [data-field="retail_price"]', '19900');
-    await p.waitForSelector('#drawer [data-diff="retail_price"].changed');
-    await p.waitForSelector('#drawer .pd-foot:has-text("바뀐 항목 1개")');
-    await shot(p, '17c-partner-drawer');
-    await p.click('#pdReset');
-    await p.waitForSelector('#drawer .pd-foot:has-text("아직 바뀐 내용이 없습니다")');
-    await p.click('#drawer [data-drawer-close]');
-    await p.waitForFunction(() => !document.querySelector('#drawer'));
-    const boxes = await p.$$('#plist [data-sel]');
-    await boxes[0].check();
-    await boxes[1].check();
-    await p.waitForSelector('.pm-selbar:has-text("2개 선택됨")');
-    await p.click('[data-bulk="all"]');
-    await p.waitForSelector('#bkBody tr');
-    await p.selectOption('#bkField', 'retail_price');
-    await p.fill('#bkVal', '10');
-    await p.click('#bkApply');
-    await p.waitForSelector('.bk-cell.changed');
-    await p.waitForSelector('#bkSubmit:not([disabled])');
-    await shot(p, '17d-partner-bulk-edit');
-    await p.click('#bkReset');
-    await p.waitForSelector('#bkSubmit[disabled]');
-    await p.click('#bBack');
-    await p.waitForSelector('.pm-rail');
-
-    const pm = await open(browser, base + '/partner', { width: 390, height: 844 });
-    await pm.waitForSelector('#plist');
-    await shot(pm, '19-partner-mobile');
-    const pOverflow = await pm.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
-    assert.ok(pOverflow <= 1, 'no horizontal scroll on partner mobile, got ' + pOverflow);
-
-    /* ----- Brand domain (Netlify build, fetch → doPost) ----- */
-    const bd = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-    bd.on('pageerror', (e) => errors.push('brand: ' + e.message));
-    const posted = [];
-    await bd.route(API_URL, (route) => {
-      const req = route.request();
-      posted.push(req.headers()['content-type']);
-      route.fulfill({ status: 200, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify(env.post(req.postData())) });
-    });
-    assert.equal(await (await bd.goto(base + '/brand?token=' + token)).status(), 200);
-    await bd.waitForSelector('#plist');
-    assert.equal(await bd.evaluate(() => typeof window.google), 'undefined', 'no Apps Script bridge on the brand domain');
-    assert.ok(posted.length && posted.every((t) => /^text\/plain/.test(t)), 'simple CORS requests only: ' + posted.join(','));
-    await shot(bd, '20-brand-domain');
-    await bd.goto(base + '/brand');
-    await bd.waitForSelector('text=상품등록 링크가 필요합니다');
-    await bd.goto(base + '/brand?token=' + 'f'.repeat(48));
-    await bd.waitForSelector('text=상품등록센터를 열 수 없습니다');
-    await bd.close();
-
-    /* ----- Ops domain (Google sign-in → doPost admin actions) ----- */
-    const ops = await browser.newPage({ viewport: { width: 1366, height: 900 } });
-    ops.on('pageerror', (e) => errors.push('ops: ' + e.message));
-    const opsBodies = [];
-    await ops.route('https://accounts.google.com/gsi/client', (route) => route.fulfill({ status: 200, contentType: 'text/javascript', body: FAKE_GSI }));
-    await ops.route(API_URL, (route) => {
-      const body = route.request().postData();
-      opsBodies.push(JSON.parse(body));
-      route.fulfill({ status: 200, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify(env.post(body)) });
-    });
-    await ops.addInitScript((t) => { window.__ID_TOKEN = t; }, env.idToken('admin@beautyora.test'));
-    await ops.goto(base + '/ops');
-    await ops.waitForSelector('.auth-card #fakeGsi');
-    assert.equal(opsBodies.length, 0, 'nothing is sent before sign-in');
-    await shot(ops, '21-ops-sign-in');
-    await ops.click('#fakeGsi');
-    await ops.waitForSelector('.stats .stat');
-    assert.equal(await ops.locator('.auth-overlay').count(), 0);
-    assert.match(await ops.textContent('.sidebar-foot'), /admin@beautyora\.test/);
-    assert.ok(opsBodies.every((b) => b.idToken), 'every admin request carries the Google sign-in');
-    await shot(ops, '22-ops-home');
-    // Large lists come back as gzip parts (Google's doPost relay drops big responses); the screen joins them.
-    env.context.BO_POST_PART_CHARS_ = 1500;
-    const partsBefore = opsBodies.filter((b) => b.action === 'response.part').length;
-    for (const [path, selector] of [['brands', '#btable tr[data-code]'], ['products', '#ptable tr[data-page]'], ['inventory', '#itable']]) {
-      await ops.click('a[data-path="' + path + '"]');
-      await ops.waitForSelector(selector);
-    }
-    assert.ok(opsBodies.filter((b) => b.action === 'response.part').length > partsBefore, 'large lists were fetched in parts');
-    assert.equal(await ops.locator('text=불러오지 못했습니다').count(), 0);
-    env.context.BO_POST_PART_CHARS_ = 40000;
-    await ops.click('a[data-path="home"]');
-    await ops.waitForSelector('.stats .stat');
-    await ops.reload();
-    await ops.waitForSelector('.stats .stat');
-    assert.equal(await ops.locator('.auth-overlay').count(), 0, 'sign-in survives a reload in the same tab');
-    await ops.click('#signOut');
-    await ops.waitForSelector('.auth-card #fakeGsi');
-    // A Google account that is not in BO_ADMIN_EMAILS signs in: the server refuses it.
-    await ops.evaluate((t) => { window.__ID_TOKEN = t; }, env.idToken('stranger@gmail.com'));
-    await ops.click('#fakeGsi');
-    await ops.waitForSelector('text=운영센터를 열 수 없습니다');
-    assert.match(await ops.textContent('#root'), /관리자로 등록되어 있지 않습니다/);
-    await ops.close();
-
-    /* ----- Bad token ----- */
-    const bad = await open(browser, base + '/partner'.replace('/partner', '/partner'), { width: 800, height: 600 });
-    await bad.close();
-
-    for (const pg of [a, p]) assert.equal(await pg.evaluate(() => window.__xss), undefined, 'no script injection');
-    await a.click('a[data-path="intake"]');
-    await a.waitForSelector('tr[data-code="BO-0099"]');
-    assert.match(await a.textContent('tr[data-code="BO-0099"]'), /<img src=x/);
-    assert.equal(await a.evaluate(() => window.__xss), undefined, 'no script injection from Notion text');
     assert.deepEqual(errors, [], 'no page errors');
     console.log('UI e2e passed. Screenshots in ' + OUT);
   } finally {

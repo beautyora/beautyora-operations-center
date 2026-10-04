@@ -80,20 +80,8 @@ function notionPage_(pageId) {
   return notionRequest_('get', '/pages/' + encodeURIComponent(pageId));
 }
 
-function notionCreate_(sourceId, properties, extra) {
-  return notionRequest_('post', '/pages', Object.assign({ parent: { type: 'data_source_id', data_source_id: sourceId }, properties: properties }, extra || {}));
-}
-
 function notionPatch_(pageId, properties) {
   return notionRequest_('patch', '/pages/' + encodeURIComponent(pageId), { properties: properties });
-}
-
-function notionAppend_(blockId, children) {
-  return notionRequest_('patch', '/blocks/' + encodeURIComponent(blockId) + '/children', { children: children });
-}
-
-function notionPatchBlock_(blockId, payload) {
-  return notionRequest_('patch', '/blocks/' + encodeURIComponent(blockId), payload);
 }
 
 /** 페이지 댓글. 통합에 댓글 권한이 없으면 조용히 넘어간다(기록 보조용). */
@@ -105,36 +93,6 @@ function notionComment_(pageId, text) {
     logError_('notionComment_', error);
     return false;
   }
-}
-
-/** 블록 목록(최대 깊이 2, 최대 300개). */
-function notionBlocks_(blockId, depth) {
-  depth = depth || 0;
-  const out = [];
-  let cursor = '';
-  do {
-    const path = '/blocks/' + encodeURIComponent(blockId) + '/children?page_size=100' + (cursor ? '&start_cursor=' + encodeURIComponent(cursor) : '');
-    const response = notionRequest_('get', path);
-    (response.results || []).forEach(function (block) {
-      const data = block[block.type] || {};
-      out.push({
-        id: block.id,
-        type: block.type,
-        text: notionRichPlain_(data.rich_text),
-        language: data.language || '',
-        checked: !!data.checked,
-        url: (data.external && data.external.url) || (data.file && data.file.url) || data.url || '',
-        editable: notionBodyEditable_(block.type),
-        children: block.has_children && depth < 2 ? notionBlocks_(block.id, depth + 1) : []
-      });
-    });
-    cursor = response.has_more ? response.next_cursor : '';
-  } while (cursor && out.length < 300);
-  return out;
-}
-
-function notionBodyEditable_(type) {
-  return ['paragraph', 'heading_1', 'heading_2', 'heading_3', 'bulleted_list_item', 'numbered_list_item', 'to_do', 'toggle', 'quote', 'callout'].indexOf(type) >= 0;
 }
 
 function notionRichPlain_(items) {
@@ -285,28 +243,6 @@ function notionRow_(page, schema) {
   return row;
 }
 
-/** 편집 화면용 속성 목록(Notion 보기 순서 대신 DB 정의 순서). */
-function notionEditableTypes_() {
-  return { title: true, rich_text: true, number: true, url: true, select: true, multi_select: true, checkbox: true, date: true, email: true, phone_number: true };
-}
-
-function notionPropertyList_(page, definitions, protectedIds) {
-  const editable = notionEditableTypes_();
-  return definitions.map(function (definition) {
-    const property = notionPropertyById_(page, definition.id) || { id: definition.id, type: definition.type };
-    const options = definition[definition.type] && definition[definition.type].options;
-    return {
-      id: definition.id,
-      name: definition.name,
-      type: definition.type,
-      value: notionValue_(property),
-      display: notionPlain_(property),
-      editable: !!editable[definition.type] && (protectedIds || []).indexOf(definition.id) < 0,
-      options: options ? options.map(function (option) { return option.name; }) : []
-    };
-  });
-}
-
 /** JS 값 → Notion 속성 쓰기 값. 선택지는 기존 선택지만 허용한다. */
 function notionWrite_(definition, value, options) {
   options = options || {};
@@ -373,77 +309,6 @@ function notionProps_(schema, values, options) {
     out[schema.ids[key]] = notionWrite_(schema.defs[key], values[key], options);
   });
   return out;
-}
-
-/** 쓰기 결과 확인용 비교 문자열. */
-function notionComparable_(property) {
-  const value = notionValue_(property);
-  if (Array.isArray(value)) return value.map(function (item) { return item && typeof item === 'object' ? item.id || item.name : String(item); }).join('|');
-  if (value === true || value === false) return value ? 'true' : 'false';
-  return value == null ? '' : String(value);
-}
-
-/** 입력값이 저장되었을 때 notionComparable_이 돌려줄 값. */
-function notionInputComparable_(definition, value) {
-  const payload = notionWrite_(definition, value);
-  const data = payload[definition.type];
-  switch (definition.type) {
-    case 'title':
-    case 'rich_text': return (data || []).map(function (item) { return item.text.content; }).join('');
-    case 'multi_select': return (data || []).map(function (item) { return item.name; }).join('|');
-    case 'select':
-    case 'status': return data ? data.name : '';
-    case 'checkbox': return data ? 'true' : 'false';
-    case 'date': return data ? data.start : '';
-    case 'number': return data == null ? '' : String(data);
-    default: return data == null ? '' : String(data);
-  }
-}
-
-/** 저장 후 응답 페이지에서 값이 반영됐는지 확인한다. */
-function notionVerify_(page, definitionsById, expected) {
-  Object.keys(expected).forEach(function (id) {
-    const definition = definitionsById[id] || {};
-    const normalize = function (text) {
-      const value = String(text == null ? '' : text).replace(/\r\n/g, '\n');
-      return definition.type === 'date' ? value.slice(0, 10) : value;
-    };
-    const actual = notionComparable_(notionPropertyById_(page, id));
-    if (normalize(actual) !== normalize(expected[id])) {
-      const name = definitionsById[id] ? definitionsById[id].name : id;
-      throw userError_('Notion에 "' + name + '" 값이 반영되지 않았습니다. 화면을 새로 고친 뒤 확인해 주세요.');
-    }
-  });
-}
-
-/* ---------- 필터 도우미 ---------- */
-function fRelation_(schema, key, pageId) { return { property: schema.ids[key], relation: { contains: pageId } }; }
-function fText_(schema, key, value) { return { property: schema.ids[key], rich_text: { equals: String(value) } }; }
-function fTitle_(schema, key, value) { return { property: schema.ids[key], title: { equals: String(value) } }; }
-function fSelect_(schema, key, value) { return { property: schema.ids[key], select: { equals: String(value) } }; }
-function fCheckbox_(schema, key, value) { return { property: schema.ids[key], checkbox: { equals: !!value } }; }
-
-/** Notion 사용자(이메일 → ID). 통합에 사용자 정보 권한이 없으면 빈 값. */
-function notionUserIdByEmail_(email) {
-  email = String(email || '').toLowerCase();
-  if (!email) return '';
-  const map = cached_('users', 'all', 21600, function () {
-    const out = {};
-    try {
-      let cursor = '';
-      do {
-        const response = notionRequest_('get', '/users?page_size=100' + (cursor ? '&start_cursor=' + encodeURIComponent(cursor) : ''));
-        (response.results || []).forEach(function (user) {
-          if (user.type === 'person' && user.person && user.person.email) out[String(user.person.email).toLowerCase()] = user.id;
-        });
-        cursor = response.has_more ? response.next_cursor : '';
-      } while (cursor);
-    } catch (error) {
-      logError_('notionUsers_', error);
-    }
-    return out;
-  });
-  return map[email] || '';
 }
 
 /* ---------- 목록 캐시 + 변경분 따라잡기 ---------- */
