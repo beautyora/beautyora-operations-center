@@ -163,3 +163,72 @@ test('ops.beautyora.kr page frames the staff web app and nothing else', () => {
   assert.throws(() => execFileSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'build-web.cjs'), 'admin', out], { stdio: 'ignore', env: Object.assign({}, process.env, { BO_OPS_APP_URL: 'https://evil.example/x' }) }));
   fs.rmSync(out, { recursive: true, force: true });
 });
+
+test('main product list: one tab with brand and vendor columns, thumbnails kept, links found in Notion and old workbooks', () => {
+  const { env, data } = setup();
+  const n = env.notion;
+  // Old Notion product DB (read only) with reference links.
+  const productDb = n.addSource('product', { properties: { '상품명': { type: 'title' }, '옵션명': { type: 'rich_text' }, '바코드(텍스트)': { type: 'rich_text' }, '브랜드': { type: 'relation', relation: data.ids.brandId }, '참고 링크': { type: 'url' } } });
+  env.props.BO_NOTION_PRODUCT_DATA_SOURCE_ID = productDb;
+  const product = (name, option, barcode, brandPage, url) => n.createPage(productDb, { '상품명': { title: [{ text: { content: name } }] }, '옵션명': { rich_text: [{ text: { content: option } }] }, '바코드(텍스트)': { rich_text: [{ text: { content: barcode } }] }, '브랜드': { relation: brandPage ? [{ id: brandPage.id }] : [] }, '참고 링크': { url } });
+  product('비비 크림', '', '8809555252672', null, 'https://shop.example/bb-cream');
+  product('시카 리페어 앰플', '30ml', '', data.b1, 'https://ruem.kr/');
+  product('수분 크림', '', '', data.b1, 'https://ruem.kr/products/cream');
+
+  // Old brand folder with a product-list workbook.
+  const legacyRoot = env.drive.folder('01_브랜드자료', null);
+  const brandFolder = env.drive.folder('[BO-0039] 에이트포인트원_벨라앤베카', legacyRoot);
+  const xlsx = env.drive.file({ name: '뷰티오라_입점 상품 리스트_벨라앤베카.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', parents: [brandFolder] });
+  xlsx.sheetValues = [['리스트', '담당자 이름', '홍길동'], ['', '브랜드명', '옵션명', '소비자가', '참고링크'], ['1', '벨라앤베카', 'Velra&Becca Active Daily Serum 50ml', '27000', 'https://velra.example/serum']];
+
+  // Integrated list ("벤더별 운영본") tab.
+  const header = ['브랜드', '이미지', '상품명', '구성', '카테고리', '바코드', '공유 매입용 공급가', '공유 위탁용 공급가', '권장판매가', '매입MOQ\n단위 : EA', '핵심포인트', '제품설명', '거래유형', '실제 공급사', '계산모드', '원본행 ID', '운영 출처시트'];
+  const row = (brand, name, barcode, supplier, sourceSheet, price) => [brand, '', name, '20mL', '스킨케어', barcode, price, '', 5000, 20, '포인트', '설명', '매입', supplier, '자동', 'r-' + name.length, sourceSheet];
+  const values = [header,
+    row('[EYENLIP]', '아이앤립 비비 크림 20ml', '8809555252672', '시온', '시온', 2409),
+    row('루엠', '루엠 시카 리페어 앰플 30ml', '', '주식회사 픽오라(뷰티오라)', '픽오라(매입) / 픽오라(위탁)', 9000),
+    ['', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+    row('벨라앤베카', 'Velra&Becca Active Daily Serum 50ml', '', '주식회사 픽오라(뷰티오라)', '픽오라(매입) / 픽오라(위탁)', 14100),
+    row('하이패브릭', '하이패브릭 섬유향수', '', '(주)한국무진유통', '무진', 3000)];
+  const srcId = 'src0000000000000000000000000';
+  env.sheets.addBook(srcId, '뷰티오라 통합 상품리스트 · 벤더별 운영본', { '뷰티오라': { values, images: { '2,2': 'img:bb', '3,2': 'img:ample', '5,2': 'img:serum', '6,2': 'img:perfume' } }, '무진': [['x']] });
+  const before = JSON.stringify(env.sheets.books[srcId]);
+
+  const r = ok(env.api('products.mainBuild', { sourceUrl: 'https://docs.google.com/spreadsheets/d/' + srcId + '/edit?gid=1', sheetName: '뷰티오라', legacyFolderUrl: 'https://drive.google.com/drive/folders/' + legacyRoot }));
+  assert.deepEqual(r.stats, { products: 4, vendor: 2, linkNotion: 2, linkWorkbook: 1, storeMain: 1, noLink: 1 });
+  assert.deepEqual(r.report, []);
+  assert.equal(JSON.stringify(env.sheets.books[srcId]), before, 'the integrated list is not changed');
+
+  const bookId = /\/d\/([^/]+)/.exec(r.url)[1];
+  const book = env.sheets.books[bookId];
+  assert.deepEqual(book.sheets.map((s) => s.name), ['상품', '가격 근거'], 'temporary copy removed');
+  const main = book.sheets[0];
+  const col = (name) => main.cells[0].indexOf(name);
+  assert.deepEqual(main.cells[0], ['상품 ID', '브랜드', '벤더', '이미지', '상품명', '구성', '카테고리', '바코드', '거래유형', '매입 공급가', '위탁 공급가', '권장판매가', '매입 MOQ', '핵심포인트', '제품설명', '제품 링크', '링크 출처', '원본행 ID']);
+  const rows = main.cells.slice(1);
+  assert.deepEqual(rows.map((x) => x[col('상품 ID')]), ['BP-00001', 'BP-00002', 'BP-00003', 'BP-00004']);
+  assert.deepEqual(rows.map((x) => x[col('벤더')]), ['시온', '', '', '(주)한국무진유통'], 'vendor only for vendor products');
+  assert.deepEqual(rows.map((x) => x[col('브랜드')]), ['[EYENLIP]', '루엠', '벨라앤베카', '하이패브릭']);
+  assert.equal(rows[0][col('제품 링크')], 'https://shop.example/bb-cream', 'matched by barcode');
+  assert.equal(rows[0][col('링크 출처')], 'Notion');
+  assert.equal(rows[1][col('제품 링크')], 'https://ruem.kr/', 'matched by brand + name');
+  assert.equal(rows[1][col('링크 출처')], 'Notion · 상품 개별 링크 아님');
+  assert.equal(rows[2][col('제품 링크')], 'https://velra.example/serum');
+  assert.equal(rows[2][col('링크 출처')], '기존 엑셀');
+  assert.equal(rows[3][col('제품 링크')], '');
+  assert.equal(rows[0][col('매입 MOQ')], 20);
+  // Thumbnails follow their product even across the skipped blank row.
+  const imageCol = col('이미지') + 1;
+  assert.deepEqual([2, 3, 4, 5, 6].map((rr) => main.images[rr + ',' + imageCol] || null), ['img:bb', 'img:ample', 'img:serum', 'img:perfume', null]);
+  const basis = book.sheets[1];
+  assert.deepEqual(basis.cells[0], ['상품 ID', '상품명', '실제 공급사', '계산모드', '운영 출처시트']);
+  assert.deepEqual(basis.cells[1], ['BP-00001', '아이앤립 비비 크림 20ml', '시온', '자동', '시온']);
+
+  assert.equal(env.drive.items[bookId].parents[0], env.drive.root, 'kept in the brand material root folder');
+  assert.equal(env.props.BO_MAIN_PRODUCT_SHEET_ID, bookId);
+  assert.equal(ok(env.api('products.main')).url, r.url);
+  assert.ok(Object.values(env.drive.items).filter((f) => /^\[임시\]/.test(f.name)).every((f) => f.trashed), 'temporary converted workbooks are trashed');
+
+  assert.match(env.api('products.mainBuild', { sourceUrl: 'not a sheet' }).message, /통합 상품리스트 주소/);
+  assert.match(env.api('products.mainBuild', { sourceUrl: srcId, sheetName: '없는탭' }).message, /"없는탭" 탭이 없습니다/);
+});

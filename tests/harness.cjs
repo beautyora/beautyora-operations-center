@@ -335,7 +335,11 @@ class FakeDrive {
     const byName = /name = '((?:[^'\\]|\\.)*)'/.exec(q);
     if (byName && file.name !== byName[1].replace(/\\'/g, "'")) return false;
     const parent = /'([^']+)' in parents/.exec(q);
-    if (parent) return (file.parents || []).indexOf(parent[1]) >= 0;
+    if (parent) {
+      if ((file.parents || []).indexOf(parent[1]) < 0) return false;
+      const mime = /mimeType = '([^']+)'/.exec(q);
+      return !mime || (mime[1] === 'application/vnd.google-apps.folder' ? !!file.folder : file.mimeType === mime[1]);
+    }
     if (file.folder) return false;
     const re = /appProperties has \{ key='([^']+)' and value='((?:[^'\\]|\\.)*)' \}/g;
     let m, ok = true;
@@ -363,9 +367,70 @@ class FakeDrive {
         remove: (id) => { delete self.items[id]; },
         copy: (resource, id) => {
           const src = self.items[id]; if (!src || src.folder) throw new Error('File not found: ' + id);
-          return JSON.parse(JSON.stringify(self.file(Object.assign({ name: src.name, mimeType: src.mimeType, md5Checksum: src.md5Checksum }, resource), null)));
+          const made = self.file(Object.assign({ name: src.name, mimeType: src.mimeType, md5Checksum: src.md5Checksum }, resource), null);
+          if (resource.mimeType === 'application/vnd.google-apps.spreadsheet' && self.sheets) self.sheets.addBook(made.id, made.name, { Sheet1: src.sheetValues || [] });
+          return JSON.parse(JSON.stringify(made));
         }
       }
+    };
+  }
+}
+
+/* ------------------------------------------------------------------ Google Sheets fake */
+/** In-memory spreadsheets. Cell images are kept apart from values ("img:<name>") so tests can see where they went. */
+class FakeSheets {
+  constructor(drive) { this.drive = drive; this.books = {}; }
+  addBook(id, name, tabs) {
+    const book = { id, name, sheets: [] };
+    Object.keys(tabs).forEach((tab) => book.sheets.push(Array.isArray(tabs[tab]) ? this.sheet(tab, tabs[tab], {}) : this.sheet(tab, tabs[tab].values, tabs[tab].images)));
+    this.books[id] = book;
+    return book;
+  }
+  sheet(name, values, images) { return { name, cells: (values || []).map((r) => r.slice()), images: Object.assign({}, images), formats: {}, frozenRows: 0, deleted: false }; }
+  api() {
+    const self = this;
+    const rangeApi = (book, sh, row, col, nr, nc) => {
+      const r = {
+        getValues: () => { const out = []; for (let i = 0; i < nr; i++) { const line = []; for (let j = 0; j < nc; j++) { const v = (sh.cells[row - 1 + i] || [])[col - 1 + j]; line.push(v == null ? '' : v); } out.push(line); } return out; },
+        getDisplayValues: () => r.getValues().map((line) => line.map((v) => String(v))),
+        setValues: (vals) => {
+          if (vals.length !== nr || vals.some((line) => line.length !== nc)) throw new Error('setValues: size mismatch');
+          vals.forEach((line, i) => { sh.cells[row - 1 + i] = sh.cells[row - 1 + i] || []; line.forEach((v, j) => { sh.cells[row - 1 + i][col - 1 + j] = v; }); });
+          return r;
+        },
+        copyTo: (dest) => {
+          if (dest.__book !== book) throw new Error('copyTo: only within the same spreadsheet');
+          for (let i = 0; i < nr; i++) for (let j = 0; j < nc; j++) {
+            const img = sh.images[(row + i) + ',' + (col + j)];
+            const key = (dest.__row + i) + ',' + (dest.__col + j);
+            if (img) dest.__sheet.images[key] = img; else delete dest.__sheet.images[key];
+          }
+        },
+        setNumberFormat: (f) => { sh.formats[col] = f; return r; },
+        setFontWeight: () => r, setBackground: () => r, setWrap: () => r,
+        __book: book, __sheet: sh, __row: row, __col: col
+      };
+      return r;
+    };
+    const sheetApi = (book, sh) => ({
+      getName: () => sh.name, setName: (n) => { sh.name = n; },
+      getLastRow: () => sh.cells.length, getLastColumn: () => Math.max(0, ...sh.cells.map((r) => r.length)),
+      getRange: (row, col, nr, nc) => rangeApi(book, sh, row, col, nr || 1, nc || 1),
+      getDataRange: () => rangeApi(book, sh, 1, 1, sh.cells.length, Math.max(0, ...sh.cells.map((r) => r.length))),
+      copyTo: (dest) => { const target = self.books[dest.getId()]; const c = self.sheet('Copy of ' + sh.name, sh.cells, sh.images); target.sheets.push(c); return sheetApi(target, c); },
+      setFrozenRows: (n) => { sh.frozenRows = n; }, setFrozenColumns: () => {}, setRowHeights: () => {}, setColumnWidth: () => {},
+      __sheet: sh
+    });
+    const bookApi = (book) => ({
+      getId: () => book.id, getName: () => book.name, getUrl: () => 'https://docs.google.com/spreadsheets/d/' + book.id + '/edit',
+      getSheets: () => book.sheets.map((sh) => sheetApi(book, sh)),
+      getSheetByName: (n) => { const sh = book.sheets.find((x) => x.name === n); return sh ? sheetApi(book, sh) : null; },
+      insertSheet: (n) => { const sh = self.sheet(n, [], {}); book.sheets.push(sh); return sheetApi(book, sh); },
+      deleteSheet: (s) => { book.sheets = book.sheets.filter((x) => x !== s.__sheet); }
+    });
+    return {
+      openById: (id) => { const b = self.books[id]; if (!b) throw new Error('Spreadsheet not found: ' + id); return bookApi(b); },
+      create: (name) => { const id = self.drive.nextId('sheet'); self.drive.items[id] = { id, name, mimeType: 'application/vnd.google-apps.spreadsheet', parents: [], trashed: false }; return bookApi(self.addBook(id, name, { 'Sheet1': [] })); }
     };
   }
 }
@@ -387,6 +452,8 @@ function createEnv(options) {
   options = options || {};
   const notion = new FakeNotion();
   const drive = new FakeDrive();
+  const sheets = new FakeSheets(drive);
+  drive.sheets = sheets;
   const props = {};
   const cache = new Map();
   const triggers = [];
@@ -437,7 +504,11 @@ function createEnv(options) {
       if (url.indexOf('https://thumb.test/') === 0) return { getResponseCode: () => 200, getBlob: () => blob(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'), 'image/png'), getHeaders: () => ({}) };
       throw new Error('Unexpected fetch ' + url);
     } },
-    DriveApp: { getFolderById: (id) => drive.folderApi(id) },
+    DriveApp: {
+      getFolderById: (id) => drive.folderApi(id),
+      getFileById: (id) => { const f = drive.items[id]; if (!f) throw new Error('File not found: ' + id); return { getId: () => id, moveTo: (folder) => { f.parents = [folder.getId()]; }, setTrashed: (t) => { f.trashed = !!t; } }; }
+    },
+    SpreadsheetApp: sheets.api(),
     Drive: drive.api(),
     ScriptApp: {
       getProjectTriggers: () => triggers.slice(),
@@ -468,7 +539,7 @@ function createEnv(options) {
   vm.runInContext(code + '\n;this.__run = function (name, args) { return eval(name).apply(null, args || []); };', context, { filename: 'apps-script.js' });
 
   const env = {
-    context, notion, drive, props, cache, triggers, mail, user,
+    context, notion, drive, sheets, props, cache, triggers, mail, user,
     call: (name, ...args) => context.__run(name, args),
     api: (action, payload, token) => context.__run('api', [{ action, payload: payload || {}, token }]),
     setUser: (email) => { user.active = email; },
@@ -538,4 +609,4 @@ function seed(env) {
   return { ids: { brandId, activityId }, b1, b2, b3 };
 }
 
-module.exports = { createEnv, seed, FakeNotion, FakeDrive };
+module.exports = { createEnv, seed, FakeNotion, FakeDrive, FakeSheets };

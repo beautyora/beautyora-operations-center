@@ -86,6 +86,8 @@ const shot = async (page, name) => { await page.waitForTimeout(600); return page
 
     await a.click('a[data-path="settings"]');
     await a.waitForSelector('#sHealthBox table');
+    await a.waitForSelector('#mBuild');
+    assert.match(await a.textContent('#mBox'), /아직 만들지 않았습니다/);
     await a.click('#sSetup');
     await a.click('#modal [data-ok]');
     await a.waitForSelector('#modal:has-text("초기 설정 결과")');
