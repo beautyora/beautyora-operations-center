@@ -18,7 +18,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: node --test tests/server.test.cjs
+      - run: node --test tests/*.test.cjs
 
   ui:
     name: 화면 (Chromium)

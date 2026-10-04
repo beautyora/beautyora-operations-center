@@ -25,6 +25,7 @@ function adminActions_() {
     'brands.list': apiBrandsList_,
     'brands.folder': apiBrandFolder_,
     'brands.foldersSync': apiBrandFoldersSync_,
+    'intake.sync': syncBrandIntake_,
     'products.main': apiMainProductsStatus_,
     'products.mainBuild': apiMainProductsBuild_,
     'products.mainImages': apiMainProductsImages_,

@@ -10,7 +10,7 @@ Notion으로 하기 어려운 일을 맡는 **내부 직원 전용** Google Apps
 | 연락·진행 기록 | Notion `연락 · 진행 이력` | (예정) 변경 이력 |
 | 상품 | Google 시트 `메인 상품목록` | 설정 → 메인 상품목록에서 통합 상품리스트로 한 번 생성. (예정) 브랜드 자료 반영 |
 | 브랜드 자료(엑셀·사진·서류) | 브랜드 전용 Google Drive 폴더 | 초기 설정 이후 신규 Notion 브랜드의 BO ID 확정 감지(1분 주기) → 폴더·하위 폴더·취합 엑셀 양식 생성, `구글 드라이브`에 주소 입력. 기존 브랜드는 개별 버튼으로만 처리 |
-| 입점 신청 폼 → Notion | 별도 Apps Script 프로젝트 | 다루지 않음 |
+| 입점 신청 폼 → Notion | 원본 Google Form·연결 응답 시트 | 명시적 활성화 후 원본 응답을 1분 폴링하여 신규 브랜드 등록·Drive 준비. 기존 브랜드 영업값 보존 |
 | 설정값·토큰 | Apps Script 스크립트 속성 | 코드·저장소에 넣지 않음 |
 
 Notion `상품 · SKU` DB는 그대로 두며 운영센터에서 쓰지 않습니다.
@@ -31,6 +31,7 @@ src/
   15_Files.gs       Drive 루트 폴더
   16_BrandFolders.gs 신규 브랜드 폴더 자동 준비·개별 복구
   30_MainProducts.gs 메인 상품목록 만들기(통합리스트 → 새 시트, 제품 링크 찾기)
+  18_BrandIntake.gs 신규 Form 응답 폴링·중복 방지·등록 복구
   19_Dashboard.gs   홈 화면
   20_Setup.gs       초기 설정·연결 점검·트리거
   90_Main.gs        doGet, 단일 API 진입점 api()
@@ -40,6 +41,7 @@ scripts/
 tests/
   harness.cjs       가짜 Notion·Drive·Apps Script 환경
   server.test.cjs   서버 흐름·보안 테스트
+  intake.test.cjs   bridge→응답→Notion→Drive 모의 회귀 테스트
   ui.e2e.cjs        Chromium 화면 테스트 + 스크린샷
 ```
 
@@ -79,7 +81,7 @@ tests/
 | `BO_ALLOW_EMBED` | ops 주소 | `true`면 ops.beautyora.kr 안에 표시 허용 |
 | `BO_NOTION_ACTIVITY_DATA_SOURCE_ID` | 권장 | 연락 · 진행 이력 (변경 이력에 사용 예정) |
 
-v2에서 쓰던 속성(`BO_NOTION_LINK_…`, `BO_NOTION_BILLING_…`, `BO_NOTION_INVENTORY_/MOVEMENT_/STORE_/TERMS_…`, `BO_GOOGLE_FORM_ID`, `BO_PARTNER_WEBAPP_URL`, `BO_GOOGLE_CLIENT_ID`, `BO_SPREADSHEET_ID`, `BO_MIGRATION_STATE`)은 더 이상 읽지 않습니다. 남아 있어도 문제는 없습니다. `BO_NOTION_PRODUCT_DATA_SOURCE_ID`는 메인 상품목록을 만들 때 제품 링크를 찾는 데만 읽습니다.
+v2에서 쓰던 속성(`BO_NOTION_LINK_…`, `BO_NOTION_BILLING_…`, `BO_NOTION_INVENTORY_/MOVEMENT_/STORE_/TERMS_…`, `BO_PARTNER_WEBAPP_URL`, `BO_GOOGLE_CLIENT_ID`, `BO_SPREADSHEET_ID`, `BO_MIGRATION_STATE`)은 더 이상 읽지 않습니다. 남아 있어도 문제는 없습니다. `BO_NOTION_PRODUCT_DATA_SOURCE_ID`는 메인 상품목록을 만들 때 제품 링크를 찾는 데만 읽습니다.
 
 ## 처음 설정(환경마다 한 번)
 
@@ -90,7 +92,7 @@ v2에서 쓰던 속성(`BO_NOTION_LINK_…`, `BO_NOTION_BILLING_…`, `BO_NOTION
 ## 테스트
 
 ```sh
-node --test tests/server.test.cjs                     # 서버 흐름·보안 (의존성 없음)
+node --test tests/*.test.cjs                     # 서버 흐름·보안 (의존성 없음)
 npm install --no-save playwright && npx playwright install chromium
 node tests/ui.e2e.cjs .ui-shots                       # 화면 테스트 + 스크린샷
 ```
@@ -98,3 +100,5 @@ node tests/ui.e2e.cjs .ui-shots                       # 화면 테스트 + 스�
 배포 방법은 `docs/APPS_SCRIPT_DEPLOYMENT_GUIDE.md`를 봅니다.
 
 신규 브랜드 폴더 전환·검증·롤백 절차는 [전환 가이드](docs/AUTOMATIC_BRAND_FOLDERS.md)를 참고하세요.
+
+입점 등록 복구는 별도 `setupBrandIntake` 활성화가 필요합니다. 원본 연결 설정·기준점·실제 폼 TEST1건 검증 순서는 [등록 복구 가이드](docs/BRAND_INTAKE_RECOVERY.md)를 따릅니다.
