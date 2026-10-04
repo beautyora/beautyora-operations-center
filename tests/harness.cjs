@@ -391,11 +391,32 @@ class FakeSheets {
     const self = this;
     const rangeApi = (book, sh, row, col, nr, nc) => {
       const r = {
-        getValues: () => { const out = []; for (let i = 0; i < nr; i++) { const line = []; for (let j = 0; j < nc; j++) { const v = (sh.cells[row - 1 + i] || [])[col - 1 + j]; line.push(v == null ? '' : v); } out.push(line); } return out; },
+        getValues: () => {
+          const out = [];
+          for (let i = 0; i < nr; i++) {
+            const line = [];
+            for (let j = 0; j < nc; j++) {
+              const img = sh.images[(row + i) + ',' + (col + j)];
+              // Like Apps Script, an in-cell image reads as a CellImage object.
+              if (img) { line.push({ getContentUrl: () => 'https://lh3.googleusercontent.test/' + img, getUrl: () => null, getAltTextTitle: () => '' }); continue; }
+              const v = (sh.cells[row - 1 + i] || [])[col - 1 + j]; line.push(v == null ? '' : v);
+            }
+            out.push(line);
+          }
+          return out;
+        },
         getDisplayValues: () => r.getValues().map((line) => line.map((v) => String(v))),
         setValues: (vals) => {
           if (vals.length !== nr || vals.some((line) => line.length !== nc)) throw new Error('setValues: size mismatch');
-          vals.forEach((line, i) => { sh.cells[row - 1 + i] = sh.cells[row - 1 + i] || []; line.forEach((v, j) => { sh.cells[row - 1 + i][col - 1 + j] = v; delete sh.images[(row + i) + ',' + (col + j)]; }); });
+          vals.forEach((line, i) => {
+            sh.cells[row - 1 + i] = sh.cells[row - 1 + i] || [];
+            line.forEach((v, j) => {
+              const key = (row + i) + ',' + (col + j);
+              if (v && typeof v === 'object' && v.__cellImage) { sh.images[key] = v.__cellImage; sh.cells[row - 1 + i][col - 1 + j] = ''; return; }
+              if (v && typeof v === 'object' && !(v instanceof Date)) throw new Error('setValues: unsupported object value');
+              sh.cells[row - 1 + i][col - 1 + j] = v; delete sh.images[key];
+            });
+          });
           return r;
         },
         copyTo: (dest) => {
@@ -456,6 +477,11 @@ class FakeSheets {
     });
     return {
       openById: (id) => { const b = self.books[id]; if (!b) throw new Error('Spreadsheet not found: ' + id); return bookApi(b); },
+      newCellImage: () => {
+        let url = '';
+        const b = { setSourceUrl: (u) => { url = u; return b; }, setAltTextTitle: () => b, build: () => ({ __cellImage: String(url).split('/').pop() }) };
+        return b;
+      },
       create: (name) => { const id = self.drive.nextId('sheet'); self.drive.items[id] = { id, name, mimeType: 'application/vnd.google-apps.spreadsheet', parents: [], trashed: false }; return bookApi(self.addBook(id, name, { 'Sheet1': [] })); }
     };
   }
