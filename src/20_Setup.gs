@@ -21,8 +21,8 @@ function installTriggers_(report) {
     report.push('설치: 6시간마다 연결 점검 트리거');
   }
   if (!has(BO_FOLDER_TRIGGER)) {
-    ScriptApp.newTrigger(BO_FOLDER_TRIGGER).timeBased().everyMinutes(5).create();
-    report.push('설치: 5분마다 브랜드 드라이브 폴더 만들기 트리거');
+    ScriptApp.newTrigger(BO_FOLDER_TRIGGER).timeBased().everyMinutes(1).create();
+    report.push('설치: 1분마다 브랜드 드라이브 폴더 만들기 트리거');
   }
 }
 

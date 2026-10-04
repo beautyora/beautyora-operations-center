@@ -156,7 +156,7 @@ async function pageSettings(view) {
     '<section class="card"><div class="card-head"><h2>연결 상태</h2><div class="row"><button class="btn btn-sm" id="sHealth">' + icon('refresh') + '다시 점검</button><button class="btn btn-sm btn-primary" id="sSetup">초기 설정 실행</button></div></div><div class="card-body" id="sHealthBox">' + UI.skeleton(4) + '</div></section>';
   view.insertAdjacentHTML('beforeend', '<section class="card"><div class="card-head"><h2>메인 상품목록</h2><span class="small muted">상품의 원본(Google 시트)</span></div><div class="card-body stack" id="mBox">' + UI.skeleton(2) + '</div></section>');
   mainProductsCard();
-  view.insertAdjacentHTML('beforeend', '<section class="card"><div class="card-head"><h2>브랜드 드라이브 폴더</h2><button class="btn btn-sm" id="fSync">지금 처리</button></div><div class="card-body stack"><p class="small muted">Notion 브랜드 목록에서 "드라이브 폴더 만들기"를 체크하면 5분 안에 폴더가 만들어지고 "구글 드라이브"에 주소가 들어갑니다. 브랜드 화면의 "폴더 만들기" 버튼으로 바로 만들 수도 있습니다.</p><div id="fOut"></div></div></section>');
+  view.insertAdjacentHTML('beforeend', '<section class="card"><div class="card-head"><h2>브랜드 드라이브 폴더</h2><button class="btn btn-sm" id="fSync">지금 처리</button></div><div class="card-body stack"><p class="small muted">Notion 브랜드 목록에서 "드라이브 폴더 만들기"를 체크하면 1분 안에 폴더가 만들어지고(링크가 있는 사용자 누구나 업로드 가능) "구글 드라이브"에 주소가 들어갑니다. 브랜드 화면의 "폴더 만들기" 버튼으로 바로 만들 수도 있습니다.</p><div id="fOut"></div></div></section>');
   $('#fSync').addEventListener('click', (e) => busy(e.currentTarget, async () => {
     try {
       const r = await Api.call('brands.foldersSync', {}, { noRetry: true });

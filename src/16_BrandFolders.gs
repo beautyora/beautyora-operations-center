@@ -1,6 +1,7 @@
 /**
  * 브랜드 자료 폴더: Notion 브랜드의 '드라이브 폴더 만들기'를 체크하거나 운영센터에서 버튼을 누르면
  * 루트 폴더 아래에 브랜드 폴더(하위 폴더 + 취합 엑셀 양식)를 만들고 그 주소를 Notion '구글 드라이브'에 넣는다.
+ * 폴더는 '링크가 있는 사용자 누구나 편집'으로 공유한다. 영업 담당자가 이 주소를 브랜드에 전달하면 브랜드가 바로 올릴 수 있다.
  * '구글 드라이브'가 이미 채워진 브랜드는 건드리지 않는다.
  */
 const BO_BRAND_SUBFOLDERS = Object.freeze(['01_상품 이미지', '02_상세페이지', '03_서류']);
@@ -14,6 +15,7 @@ function brandFolderName_(brand) {
 /** 폴더(이미 있으면 그대로), 하위 폴더, 엑셀 양식 사본을 준비하고 폴더 주소를 돌려준다. */
 function ensureBrandFolder_(brand) {
   const folder = childFolder_(driveRoot_(), brandFolderName_(brand));
+  folder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.EDIT);
   BO_BRAND_SUBFOLDERS.forEach(function (name) { childFolder_(folder, name); });
   const templateId = prop_(BO.PROPS.TEMPLATE_FILE_ID);
   if (templateId) {
@@ -68,7 +70,7 @@ function apiBrandFoldersSync_() {
   return syncBrandFolders_();
 }
 
-/** 5분마다: Notion에서 체크된 브랜드의 폴더를 만든다. */
+/** 1분마다(Apps Script 트리거의 최소 간격): Notion에서 체크된 브랜드의 폴더를 만든다. */
 function scheduledBrandFolders(e) {
   if (!isProjectTrigger_(e)) throw new Error('트리거에서만 실행할 수 있습니다.');
   const result = syncBrandFolders_();

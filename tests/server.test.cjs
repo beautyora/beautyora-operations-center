@@ -294,6 +294,7 @@ test('brand folders: Notion checkbox (trigger) or the button creates the folder 
   const folder = Object.values(env.drive.items).find((x) => x.folder && x.name === '루엠 (BO-0001)');
   assert.ok(folder && folder.parents[0] === env.drive.root, 'folder under the root');
   assert.equal(driveOf(data.b1), 'https://drive.google.com/drive/folders/' + folder.id);
+  assert.equal(folder.sharing, 'ANYONE_WITH_LINK:EDIT', 'brands upload through the link');
   assert.deepEqual(children(folder.id), ['01_상품 이미지', '02_상세페이지', '03_서류', '루엠_매입정보_취합파일.xlsx']);
   assert.equal(driveOf(data.b2), null, 'unchecked brand untouched');
   // 다시 돌려도 새로 만들지 않는다(구글 드라이브가 채워져 있음).

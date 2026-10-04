@@ -320,7 +320,8 @@ class FakeDrive {
       getFiles: () => iter(Object.values(self.items).filter((x) => !x.folder && !x.trashed && x.parents[0] === id).map((f) => ({ getId: () => f.id, getName: () => f.name, getMimeType: () => f.mimeType, getLastUpdated: () => new Date(f.modifiedTime || f.createdTime) }))),
       getFoldersByName: (name) => iter(children().filter((c) => c.name === name).map((c) => self.folderApi(c.id))),
       getFilesByName: (name) => iter(Object.values(self.items).filter((x) => !x.folder && !x.trashed && x.parents[0] === id && x.name === name).map((f) => self.fileApi(f.id))),
-      createFolder: (name) => self.folderApi(self.folder(name, id))
+      createFolder: (name) => self.folderApi(self.folder(name, id)),
+      setSharing: (access, perm) => { item.sharing = access + ':' + perm; }
     };
   }
   fileApi(id) {
@@ -565,7 +566,7 @@ function createEnv(options) {
       throw new Error('Unexpected fetch ' + url);
     } },
     DriveApp: {
-      Access: { ANYONE_WITH_LINK: 'ANYONE_WITH_LINK' }, Permission: { VIEW: 'VIEW' },
+      Access: { ANYONE_WITH_LINK: 'ANYONE_WITH_LINK' }, Permission: { VIEW: 'VIEW', EDIT: 'EDIT' },
       getFolderById: (id) => drive.folderApi(id),
       getFileById: (id) => {
         const f = drive.items[id]; if (!f) throw new Error('File not found: ' + id);
