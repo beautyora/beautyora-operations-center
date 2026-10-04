@@ -3,6 +3,48 @@ const BO_BRAND_SUBFOLDERS = Object.freeze(['01_섬네일', '02_상세페이지',
 const BO_FOLDER_TRIGGER = 'scheduledBrandFolders';
 const BO_FOLDER_START = 'BO_BRAND_FOLDERS_START_AT';
 
+const BO_FOLDER_BASELINE = 'BO_BRAND_FOLDERS_BASELINE';
+const BO_FOLDER_EXCLUDED = 'BO_BRAND_FOLDERS_EXCLUDED_';
+
+/** 완료 manifest를 마지막에 저장한다. 미완료 스냅샷은 자동 처리에 사용하지 않는다. */
+function initializeBrandFolderBaseline_(report) {
+  if (prop_(BO_FOLDER_BASELINE)) { brandFolderBaseline_(); return; }
+  const started = new Date();
+  const since = new Date(Math.floor(started.getTime() / 60000) * 60000).toISOString();
+  const schema = notionSchema_('brand');
+  const pages = notionQueryAll_(schema.sourceId, {});
+  const ids = Array.from(new Set(pages.map(function (page) { return page.id; })));
+  // ID는 ASCII UUID. 한 값당 100개(<4KB), 전체 5,000개 상한으로 저장 제한을 방어한다.
+  if (ids.length > 5000 || ids.some(function (id) { return !/^[a-f0-9-]{32,36}$/i.test(id); })) throw userError_('브랜드 기준 스냅샷 크기/ID를 확인해 주세요. 자동 처리를 시작하지 않았습니다.');
+  const chunks = [];
+  for (let i = 0; i < ids.length; i += 100) chunks.push(JSON.stringify(ids.slice(i, i + 100)));
+  const store = props_(), existing = store.getProperties();
+  // 실패한 초기화의 조각은 기준으로 사용된 적이 없으므로 다시 작성할 수 있다.
+  Object.keys(existing).forEach(function (key) { if (key.indexOf(BO_FOLDER_EXCLUDED) === 0) { store.deleteProperty(key); delete existing[key]; } });
+  const estimatedBytes = JSON.stringify(existing).length * 3 + chunks.join('').length + 10000;
+  if (estimatedBytes > 400000) throw userError_('스크립트 속성 저장 공간이 부족합니다. 자동 처리를 시작하지 않았습니다.');
+  chunks.forEach(function (chunk, i) { store.setProperty(BO_FOLDER_EXCLUDED + i, chunk); });
+  const activatedAt = new Date().toISOString();
+  store.setProperty(BO_FOLDER_START, activatedAt);
+  store.setProperty(BO_FOLDER_BASELINE, JSON.stringify({ since: since, activatedAt: activatedAt, chunks: chunks.length, count: ids.length }));
+  report.push('신규 브랜드 자동 처리 시작: ' + activatedAt + ' (기존 페이지 ' + ids.length + '개 제외)');
+}
+
+function brandFolderBaseline_() {
+  const raw = prop_(BO_FOLDER_BASELINE);
+  if (!raw) return null;
+  const baseline = JSON.parse(raw);
+  if (!Number.isInteger(baseline.count) || baseline.count < 0 || baseline.count > 5000 || !Number.isFinite(Date.parse(baseline.since)) || !Number.isInteger(baseline.chunks) || baseline.chunks < 0 || baseline.chunks > 50) throw userError_('브랜드 기준 스냅샷을 확인해 주세요.');
+  const excluded = new Set();
+  for (let i = 0; i < baseline.chunks; i++) {
+    const chunk = JSON.parse(prop_(BO_FOLDER_EXCLUDED + i) || 'null');
+    if (!Array.isArray(chunk) || chunk.some(function (id) { return typeof id !== 'string'; })) throw userError_('브랜드 기준 스냅샷이 누락되었습니다.');
+    chunk.forEach(function (id) { excluded.add(id); });
+  }
+  if (excluded.size !== baseline.count) throw userError_('브랜드 기준 스냅샷 개수가 맞지 않습니다.');
+  return { since: baseline.since, excluded: excluded };
+}
+
 function brandFolderName_(brand) {
   const name = String(brand.name || '').replace(/[\\/:*?"<>|]/g, ' ').replace(/\s+/g, ' ').trim() || '이름 없음';
   return brand.code ? name + ' (' + brand.code + ')' : name;
@@ -65,18 +107,18 @@ function createBrandFolder_(brand, schema) {
 /** 전환 이후 생성된 브랜드만 처리. ID 발급 지연/실패는 다음 실행에서 재시도한다. */
 function syncBrandFolders_() {
   return withLock_(function () {
-    const since = prop_(BO_FOLDER_START);
-    if (!since) return { created: [], failed: [], skipped: '초기 설정을 실행하여 신규 브랜드 자동 처리를 시작해 주세요.' };
-    if (!Number.isFinite(Date.parse(since))) throw userError_('브랜드 폴더 전환 시각이 올바르지 않습니다.');
+    const baseline = brandFolderBaseline_();
+    if (!baseline) return { created: [], failed: [], skipped: '초기 설정을 실행하여 신규 브랜드 자동 처리를 시작해 주세요.' };
     const schema = notionSchema_('brand');
     if (!schema.ids.drive) throw userError_('Notion 브랜드 목록에 구글 드라이브 URL 속성이 필요합니다.');
     const pages = notionQueryAll_(schema.sourceId, { filter: { and: [
-      { timestamp: 'created_time', created_time: { on_or_after: since } },
+      { timestamp: 'created_time', created_time: { on_or_after: baseline.since } },
       { property: schema.ids.drive, url: { is_empty: true } }
     ] } });
     const created = [], failed = [], started = Date.now();
     for (const page of pages) {
       if (Date.now() - started > 240000) break;
+      if (baseline.excluded.has(page.id)) continue;
       const brand = brandSummary_(notionRow_(page, schema));
       if (!/^BO-\d{4,}$/.test(brand.code) || !String(brand.name || '').trim()) continue;
       try { created.push(createBrandFolder_(brand, schema)); } catch (error) {

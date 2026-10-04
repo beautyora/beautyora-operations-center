@@ -16,17 +16,26 @@ function ok(result) {
   return JSON.parse(JSON.stringify(result.data));
 }
 
-test('setup installs the health-check trigger and removes leftover triggers such as the old form trigger', () => {
+test('setup preserves unrelated triggers and normalizes only owned triggers', () => {
   const { env } = setup();
-  // 예전 버전이 설치한 입점 신청 폼 트리거(지금은 별도 프로젝트가 담당).
+  // 관계없는 등록/외부 동기화 트리거는 객체와 ID까지 그대로 보존한다.
   env.call('(function () { ScriptApp.newTrigger("onBrandFormSubmit").forForm("form-1").onFormSubmit().create(); })');
   const res = ok(env.api('system.setup'));
   assert.equal(res.ok, true, res.report.join('\n'));
-  assert.ok(res.report.includes('삭제: 예전 트리거 onBrandFormSubmit'), res.report.join('\n'));
-  assert.deepEqual(env.triggers.map((t) => t.getHandlerFunction()), ['scheduledHealthCheck', 'scheduledBrandFolders']);
+  const unrelated = env.triggers.find(t => t.getHandlerFunction() === 'onBrandFormSubmit');
+  assert.deepEqual(env.triggers.map(t => t.getHandlerFunction()), ['onBrandFormSubmit', 'scheduledHealthCheck', 'scheduledBrandFolders']);
+  env.call('(function () { ScriptApp.newTrigger("scheduledBrandFolders").timeBased().everyHours(12).create(); ScriptApp.newTrigger("externalSync").timeBased().everyHours(1).create(); })');
+  const external = env.triggers.find(t => t.getHandlerFunction() === 'externalSync');
   const again = ok(env.api('system.setup'));
-  assert.deepEqual(again.report, ['변경할 설정이 없습니다. 이미 준비되어 있습니다.']);
   assert.equal(again.health.ok, true, JSON.stringify(again.health.results));
+  assert.ok(env.triggers.includes(unrelated));
+  assert.ok(env.triggers.includes(external));
+  for (const [handler, cadence] of [['scheduledHealthCheck', { hours: 6 }], ['scheduledBrandFolders', { minutes: 1 }]]) {
+    const owned = env.triggers.filter(t => t.getHandlerFunction() === handler);
+    assert.equal(owned.length, 1);
+    assert.deepEqual(owned[0].cadence, cadence);
+  }
+  assert.equal(again.health.results.find(r => r.target === '트리거').status, '정상');
 });
 
 test('setup keeps going when one step fails and says how to fix it', () => {
@@ -286,13 +295,14 @@ test('brand folders: automatic processing starts at migration, without a checkbo
   const since = env.props.BO_BRAND_FOLDERS_START_AT;
   env.call('setupBeautyora');
   assert.equal(env.props.BO_BRAND_FOLDERS_START_AT, since);
-  const page = env.notion.pages[data.b1.id];
-  page.created_time = new Date(Date.parse(since) + 1000).toISOString();
+  const added = env.notion.createPage(data.ids.brandId, { '브랜드명': { title: [{ text: { content: '신규' } }] }, '브랜드 ID': { rich_text: [{ text: { content: 'BO-0004' } }] } });
+  const page = env.notion.pages[added.id];
+  page.created_time = new Date(Math.floor(Date.parse(since) / 60000) * 60000).toISOString();
   [data.b2, data.b3].forEach(b => { env.notion.pages[b.id].created_time = '2020-01-01T00:00:00.000Z'; });
   const r = ok(env.api('brands.foldersSync'));
-  assert.deepEqual(r.created.map(c => c.code), ['BO-0001']);
+  assert.deepEqual(r.created.map(c => c.code), ['BO-0004']);
   assert.deepEqual(r.failed, []);
-  const folder = Object.values(env.drive.items).find(x => x.name === '루엠 (BO-0001)');
+  const folder = Object.values(env.drive.items).find(x => x.name === '신규 (BO-0004)');
   assert.equal(folder.sharing, undefined);
   assert.deepEqual(Object.values(env.drive.items).filter(x => x.parents[0] === folder.id).map(x => x.name).sort(), ['01_섬네일', '02_상세페이지', '03_서류']);
   assert.equal(page.properties['구글 드라이브'].url, 'https://drive.google.com/drive/folders/' + folder.id);
@@ -302,7 +312,7 @@ test('brand folders: automatic processing starts at migration, without a checkbo
 
 test('brand folders: ID assignment can lag registration and duplicate IDs fail closed', () => {
   const { env, data } = setup();
-  env.props.BO_BRAND_FOLDERS_START_AT = '2000-01-01T00:00:00.000Z';
+  env.props.BO_BRAND_FOLDERS_BASELINE = JSON.stringify({ since: '2000-01-01T00:00:00.000Z', chunks: 0, count: 0 });
   const page = env.notion.pages[data.b1.id], original = page.properties['브랜드 ID'];
   page.properties['브랜드 ID'] = { type: 'rich_text', rich_text: [] };
   assert.ok(!ok(env.api('brands.foldersSync')).created.some(c => c.code === 'BO-0001'));
@@ -314,7 +324,7 @@ test('brand folders: ID assignment can lag registration and duplicate IDs fail c
 
 test('brand folders: partial failure and renamed brand reuse pending folder, files, and legacy image directory', () => {
   const { env, data } = setup();
-  env.props.BO_BRAND_FOLDERS_START_AT = '2000-01-01T00:00:00.000Z';
+  env.props.BO_BRAND_FOLDERS_BASELINE = JSON.stringify({ since: '2000-01-01T00:00:00.000Z', chunks: 0, count: 0 });
   const old = env.drive.folder('[BO-0001] 루엠', env.drive.root);
   env.drive.items[old].sharing = 'PRIVATE:EDIT';
   const images = env.drive.folder('01_상품 이미지', old);
@@ -387,9 +397,105 @@ test('brand folders: interrupted child creation resumes under the same parent', 
 test('brand folders: installed trigger remains usable after migration and foreign trigger is rejected', () => {
   const { env } = setup();
   env.call('setupBeautyora');
-  const uid = env.triggers.find(t => t.getHandlerFunction() === 'scheduledBrandFolders').getUniqueId();
   env.call('setupBeautyora');
+  const uid = env.triggers.find(t => t.getHandlerFunction() === 'scheduledBrandFolders').getUniqueId();
   assert.equal(env.triggers.filter(t => t.getHandlerFunction() === 'scheduledBrandFolders').length, 1);
   assert.doesNotThrow(() => env.call('scheduledBrandFolders', { triggerUid: uid }));
   assert.throws(() => env.call('scheduledBrandFolders', { triggerUid: 'foreign' }));
+});
+
+
+test('setup retains existing triggers if a replacement cannot be created', () => {
+  const { env } = setup();
+  env.call('setupBeautyora');
+  const original = env.triggers.slice();
+  env.context.ScriptApp.newTrigger = () => { throw new Error('trigger quota exceeded'); };
+  const result = ok(env.api('system.setup'));
+  assert.equal(result.ok, false);
+  assert.deepEqual(env.triggers, original);
+});
+
+function addFolderTestBrand(env, data, code, created) {
+  const page = env.notion.createPage(data.ids.brandId, {
+    '브랜드명': { title: [{ text: { content: code } }] },
+    '브랜드 ID': { rich_text: [{ text: { content: code } }] }
+  });
+  if (created) env.notion.pages[page.id].created_time = created;
+  return page;
+}
+
+test('baseline: same-minute old pages are excluded and registrations during/after activation are processed', () => {
+  const { env, data } = setup();
+  const minute = '2026-10-04T13:52:00.000Z';
+  env.context.Date = class extends Date {
+    constructor(...args) { super(...(args.length ? args : ['2026-10-04T13:52:30.000Z'])); }
+    static now() { return Date.parse('2026-10-04T13:52:30.000Z'); }
+  };
+  Object.values(env.notion.pages).forEach(p => { p.created_time = minute; });
+  // New registration after the snapshot read but before manifest commit must not be lost.
+  const query = env.context.notionQueryAll_;
+  let concurrent;
+  env.context.notionQueryAll_ = (...args) => {
+    const result = query(...args);
+    if (!concurrent && !args[1].filter) concurrent = addFolderTestBrand(env, data, 'BO-0100', minute);
+    return result;
+  };
+  env.call('setupBeautyora');
+  env.context.notionQueryAll_ = query;
+  addFolderTestBrand(env, data, 'BO-0101', minute);
+  addFolderTestBrand(env, data, 'BO-0102', '2026-10-04T13:53:00.000Z');
+  const baseline = env.props.BO_BRAND_FOLDERS_BASELINE;
+  env.call('setupBeautyora');
+  assert.equal(env.props.BO_BRAND_FOLDERS_BASELINE, baseline, 'rerun never re-snapshots new registrations');
+  assert.deepEqual(ok(env.api('brands.foldersSync')).created.map(x => x.code).sort(), ['BO-0100', 'BO-0101', 'BO-0102']);
+  for (const old of [data.b1, data.b2, data.b3]) assert.ok(!(env.notion.pages[old.id].properties['구글 드라이브'] || {}).url);
+});
+
+test('baseline: paginated existing brands are chunked and never backfilled', () => {
+  const { env, data } = setup();
+  for (let i = 4; i <= 132; i++) addFolderTestBrand(env, data, 'BO-' + String(i).padStart(4, '0'));
+  env.call('setupBeautyora');
+  const baseline = JSON.parse(env.props.BO_BRAND_FOLDERS_BASELINE);
+  assert.equal(baseline.count, 132);
+  assert.equal(baseline.chunks, 2);
+  for (let i = 0; i < baseline.chunks; i++) assert.ok(Buffer.byteLength(env.props['BO_BRAND_FOLDERS_EXCLUDED_' + i]) < 9000);
+  assert.deepEqual(ok(env.api('brands.foldersSync')).created, []);
+});
+
+test('baseline: query failure or interrupted snapshot save leaves automatic processing disabled', () => {
+  const { env } = setup();
+  const query = env.context.notionQueryAll_;
+  env.context.notionQueryAll_ = () => { throw new Error('snapshot unavailable'); };
+  assert.equal(ok(env.api('system.setup')).ok, false);
+  assert.equal(env.props.BO_BRAND_FOLDERS_BASELINE, undefined);
+  assert.ok(ok(env.api('brands.foldersSync')).skipped);
+  env.context.notionQueryAll_ = query;
+  const properties = env.context.PropertiesService.getScriptProperties;
+  env.context.PropertiesService.getScriptProperties = () => {
+    const store = properties(), save = store.setProperty;
+    store.setProperty = (key, value) => {
+      if (key === 'BO_BRAND_FOLDERS_BASELINE') throw new Error('interrupted manifest save');
+      save(key, value);
+    };
+    return store;
+  };
+  assert.equal(ok(env.api('system.setup')).ok, false);
+  assert.ok(env.props.BO_BRAND_FOLDERS_EXCLUDED_0, 'partial snapshot exists');
+  assert.ok(ok(env.api('brands.foldersSync')).skipped);
+  env.context.PropertiesService.getScriptProperties = properties;
+  assert.equal(ok(env.api('system.setup')).ok, true);
+  assert.deepEqual(ok(env.api('brands.foldersSync')).created, []);
+  delete env.props.BO_BRAND_FOLDERS_EXCLUDED_0;
+  assert.equal(env.api('brands.foldersSync').ok, false, 'missing snapshot never permits backfill');
+  assert.equal(ok(env.api('system.setup')).ok, false, 'corrupt committed baseline is never silently replaced');
+});
+
+test('baseline: property capacity exhaustion fails closed before activation', () => {
+  const { env } = setup();
+  for (let i = 0; i < 20; i++) env.props['UNRELATED_CONFIGURATION_' + i] = 'x'.repeat(7000);
+  const result = ok(env.api('system.setup'));
+  assert.equal(result.ok, false);
+  assert.equal(env.props.BO_BRAND_FOLDERS_BASELINE, undefined);
+  assert.ok(ok(env.api('brands.foldersSync')).skipped);
+  assert.equal(env.props.UNRELATED_CONFIGURATION_0.length, 7000);
 });

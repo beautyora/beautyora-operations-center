@@ -518,6 +518,7 @@ function createEnv(options) {
   const props = {};
   const cache = new Map();
   const triggers = [];
+  let triggerSequence = 0;
   const mail = [];
   const user = { active: options.user || 'admin@beautyora.test', effective: 'owner@beautyora.test' };
 
@@ -525,6 +526,7 @@ function createEnv(options) {
     console: options.quiet === false ? console : { log() {}, error() {}, warn() {} },
     JSON, Math, Date, Object, Array, String, Number, Boolean, RegExp, Error, Map, Set, isFinite, isNaN, encodeURIComponent, decodeURIComponent, Intl,
     PropertiesService: { getScriptProperties: () => ({
+      getProperties: () => ({ ...props }),
       getProperty: (k) => (Object.prototype.hasOwnProperty.call(props, k) ? props[k] : null),
       setProperty: (k, v) => { props[k] = String(v); },
       deleteProperty: (k) => { delete props[k]; }
@@ -589,7 +591,8 @@ function createEnv(options) {
       getProjectTriggers: () => triggers.slice(),
       deleteTrigger: (t) => { const i = triggers.indexOf(t); if (i >= 0) triggers.splice(i, 1); },
       newTrigger: (handler) => {
-        const b = { forForm: () => b, onFormSubmit: () => b, timeBased: () => b, everyHours: () => b, everyMinutes: () => b, create: () => { const uid = 't' + triggers.length + 1; const t = { getHandlerFunction: () => handler, getUniqueId: () => uid }; triggers.push(t); return t; } };
+        let cadence;
+        const b = { forForm: () => b, onFormSubmit: () => b, timeBased: () => b, everyHours: n => { cadence = { hours: n }; return b; }, everyMinutes: n => { cadence = { minutes: n }; return b; }, create: () => { const uid = 't' + ++triggerSequence; const t = { cadence, getHandlerFunction: () => handler, getUniqueId: () => uid }; triggers.push(t); return t; } };
         return b;
       },
       getService: () => ({ getUrl: () => 'https://script.google.com/macros/s/TEST/exec' }),
