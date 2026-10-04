@@ -23,6 +23,8 @@ function adminActions_() {
     'admin.bootstrap': function () { return { user: { email: activeEmail_() }, version: BO.VERSION, dashboard: apiDashboard_() }; },
     'dashboard': apiDashboard_,
     'brands.list': apiBrandsList_,
+    'brands.folder': apiBrandFolder_,
+    'brands.foldersSync': apiBrandFoldersSync_,
     'products.main': apiMainProductsStatus_,
     'products.mainBuild': apiMainProductsBuild_,
     'products.mainImages': apiMainProductsImages_,

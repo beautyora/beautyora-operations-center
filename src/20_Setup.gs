@@ -1,7 +1,7 @@
 /** 초기 설정, 트리거, 연결 점검, 관리자 알림. */
 
 /** 이 프로젝트가 설치하는 트리거. 목록에 없는 트리거(예전 입점 신청 폼 트리거 등)는 초기 설정이 지운다. */
-const BO_TRIGGER_HANDLERS = Object.freeze(['scheduledHealthCheck']);
+const BO_TRIGGER_HANDLERS = Object.freeze(['scheduledHealthCheck', 'scheduledBrandFolders']);
 
 function clearSchemaMemo_() {
   Object.keys(BO_MEMO_).forEach(function (key) { if (key.indexOf('schema:') === 0) delete BO_MEMO_[key]; });
@@ -19,6 +19,10 @@ function installTriggers_(report) {
   if (!has('scheduledHealthCheck')) {
     ScriptApp.newTrigger('scheduledHealthCheck').timeBased().everyHours(6).create();
     report.push('설치: 6시간마다 연결 점검 트리거');
+  }
+  if (!has(BO_FOLDER_TRIGGER)) {
+    ScriptApp.newTrigger(BO_FOLDER_TRIGGER).timeBased().everyMinutes(1).create();
+    report.push('설치: 1분마다 브랜드 드라이브 폴더 만들기 트리거');
   }
 }
 
@@ -82,7 +86,7 @@ function healthCheck_() {
   const handlers = ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction(); });
   const legacy = handlers.filter(function (h) { return BO_TRIGGER_HANDLERS.indexOf(h) < 0; });
   if (legacy.length) add('트리거', '주의', '예전 트리거가 남아 있습니다: ' + legacy.join(', ') + ' (초기 설정을 실행하면 정리됩니다)');
-  else if (handlers.indexOf('scheduledHealthCheck') < 0) add('트리거', '주의', '정기 연결 점검 트리거가 없습니다. 초기 설정을 실행해 주세요.');
+  else if (BO_TRIGGER_HANDLERS.some(function (h) { return handlers.indexOf(h) < 0; })) add('트리거', '주의', '빠진 트리거가 있습니다. 초기 설정을 실행해 주세요.');
   else add('트리거', '정상', handlers.length + '개 설치됨');
   return { checkedAt: now_(), results: results, ok: !results.some(function (r) { return r.status === '오류'; }) };
 }
