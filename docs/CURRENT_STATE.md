@@ -2,7 +2,7 @@
 
 운영센터와 브랜드 랜딩의 현재 상태를 기록하는 **단일 원본**입니다. 다른 저장소에는 이 문서의 링크만 둡니다. 문서 자체는 자동으로 최신화되지 않으므로 작업 시작과 세션 재개 때 최신 main 및 실제 배포 상태를 다시 확인하세요.
 
-- 마지막 코드·배포 상태 확인: **2026-10-05 10:08 UTC**
+- 마지막 코드·배포 상태 확인: **2026-10-05 11:33 UTC**
 - 이 확인은 저장소와 배포 기록의 읽기 확인입니다. 실제 신규 신청을 제출하거나 Google·Notion·Drive 업무 데이터를 재검증하지 않았습니다.
 - main 반영, 배포 성공, 실제 운영 동작 검증은 별개입니다.
 
@@ -22,16 +22,14 @@
 
 ### 운영센터
 
-- 확인한 main은 [PR35](https://github.com/beautyora/beautyora-operations-center/pull/35)의 회사·브랜드 공동 폴더 명명 및 안전한 재사용 변경입니다.
-- [운영 배포 실행](https://github.com/beautyora/beautyora-operations-center/actions/runs/37286431706)에서 **v110** 기존 운영 웹앱 갱신을 확인했습니다. 배포 시각은 2026-10-05 08:53 UTC입니다.
-- 같은 코드의 [서버·Chromium CI](https://github.com/beautyora/beautyora-operations-center/actions/runs/37286213426)는 성공했습니다. 별도 외부 배포 검사 실패도 존재하므로 모든 검사가 성공했다고 표현하지 않습니다.
+- 확인한 main은 [PR37](https://github.com/beautyora/beautyora-operations-center/pull/37)(커밋 `3d83c41`)의 ops.beautyora.kr Google 로그인 복구, 브랜드 자료 현황, 운영진·브랜드 Drive 공유 변경입니다.
+- [운영 배포 실행](https://github.com/beautyora/beautyora-operations-center/actions/runs/37303552833)에서 **v111** 기존 운영 웹앱 갱신을 확인했습니다(로그 `Deployed … @111`). 배포 시각은 2026-10-05 11:32 UTC입니다. 이 버전부터 웹앱 실행 방식은 `USER_DEPLOYING`·`ANYONE_ANONYMOUS`입니다.
+- 같은 커밋의 PR [서버·Chromium CI](https://github.com/beautyora/beautyora-operations-center/actions/runs/37303361380)는 성공했습니다. `Cloudflare Pages: beautyora-partner` 검사는 v3에서 제거된 브랜드용 페이지라 계속 실패하며 운영센터와 무관합니다.
+- Cloudflare Pages `beautyora-ops`는 main 반영 시 자동 빌드되는 것으로 보이며(PR 미리보기 빌드 성공), main 커밋의 운영 빌드 결과는 이 문서 작업에서 확인하지 못했습니다.
 - 배포 대상은 scripts/verify-deploy-target.cjs의 승인된 운영 대상과 대조합니다. 옛 미사용 프로젝트로 바꾸지 않습니다.
 - **미검증:** v110 규칙으로 다음 실제 신규 신청의 폴더가 생성되는 전체 운영 흐름. 모의 테스트나 배포 성공으로 대체하지 않습니다.
-- **미배포(브랜치 `claude/dazzling-gates-pgd8gv`, main 미반영):** 아래는 모의 Notion·Drive 테스트와 Chromium 화면 테스트만 통과했고, 실제 운영 데이터·Google 로그인으로 확인하지 않았습니다. v110에는 없습니다.
-  - 홈의 브랜드 자료 현황(src/17_BrandActivity.gs, 읽기 전용, 홈을 열어 둔 동안 1분 주기 확인).
-  - ops.beautyora.kr Google 로그인 복구: 웹앱을 iframe으로 띄우던 방식을 정적 화면 + `doPost`로 바꾸고, 요청마다 Google ID 토큰을 확인해 `BO_ADMIN_EMAILS`와 비교. 매니페스트 실행 방식이 `USER_DEPLOYING`·`ANYONE_ANONYMOUS`로 바뀌므로 Apps Script 배포와 Cloudflare Pages 재빌드를 잇달아 해야 합니다([배포 가이드](APPS_SCRIPT_DEPLOYMENT_GUIDE.md)).
-  - 첫 화면 깨짐 원인 두 가지를 반영: v3 정리 때 빠진 `.boot` 시작 화면 스타일, iframe 안에서 막히던 Google 로그인.
-  - Drive 공유: 운영진 ↔ 최상위 폴더 편집자(설정 → 운영진 계정), Notion `자료 공유 이메일` ↔ 브랜드 폴더 편집자(미리보기 후 반영). Notion에 `자료 공유 이메일` 속성을 만들어야 합니다.
+- **미검증(v111):** 실제 ops.beautyora.kr Google 로그인(운영진 통과·미등록 계정 거절), 홈의 브랜드 자료 현황 실제 폴더 집계, 운영진 `권한 맞추기`와 브랜드 `공유` 실제 반영. 모의 Notion·Drive 테스트와 Chromium 화면 테스트만 통과했습니다.
+- v111 변경 요약: 첫 화면 깨짐 원인 두 가지(v3 정리 때 빠진 `.boot` 시작 화면 스타일, iframe 안에서 막히던 Google 로그인)를 고침. ops 주소는 정적 화면 + `doPost`, 요청마다 Google ID 토큰 확인 후 `BO_ADMIN_EMAILS`와 비교. 홈 브랜드 자료 현황(읽기 전용, 홈을 열어 둔 동안 1분 주기). Drive 공유: 운영진 ↔ 최상위 폴더 편집자, Notion `자료 공유 이메일` ↔ 브랜드 폴더 편집자(미리보기 후 반영).
 - **확인한 Drive 공유 상태(2026-10-05, 읽기만):** 최상위 `뷰티오라` 폴더와 확인한 브랜드 폴더 두 곳은 '링크가 있는 모든 사용자: 뷰어'라 브랜드가 업로드·편집할 수 없고 서류가 링크로 열립니다. 두 폴더의 사용자 권한은 소유 계정과 편집자 한 명뿐입니다(그 밖의 운영진 계정은 링크 뷰어로만 열 수 있음). 권한은 바꾸지 않았습니다.
 
 ### 브랜드 랜딩과 브릿지
