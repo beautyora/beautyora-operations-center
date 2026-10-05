@@ -132,14 +132,25 @@ const shot = async (page, name) => { await page.waitForTimeout(600); return page
     assert.equal(await a.getAttribute('tr[data-code="BO-0001"] .cell-title a', 'target'), '_blank');
     await shot(a, '02-brands');
 
-    // 브랜드 폴더 공유: 미리보기 → 반영. Drive 편집자로 추가되고 오타는 건너뛴다.
+    // 브랜드 폴더 공유: 창에서 Notion '자료 공유 이메일'을 보고 고친 뒤 저장 → Notion과 Drive 편집자가 그 목록이 된다.
     await a.click('[data-share="BO-0001"]');
     await a.waitForSelector('#modal:has-text("브랜드 폴더 공유")');
-    assert.match(await a.textContent('#modal'), /ceo@brand\.example[\s\S]*이메일 형식이 아니어서 건너뜀: 오타/);
+    assert.equal(await a.inputValue('#shareEmails'), 'ceo@brand.example');
+    assert.match(await a.textContent('#modal'), /이메일이 아닌 부분은 저장하면 빠집니다: 오타/);
+    assert.match(await a.textContent('#shareStatus'), /ceo@brand\.example\s*저장하면 공유/);
+    assert.equal(await a.locator('#modal :text("알림 메일 보내기")').count(), 0, 'no notification option');
+    await a.fill('#shareEmails', 'ceo@brand.example\nwrong@');
+    assert.match(await a.textContent('#shareStatus'), /wrong@\s*이메일 형식 확인/);
+    assert.equal(await a.isDisabled('#modal [data-save]'), true, 'cannot save with a typo');
+    await a.fill('#shareEmails', 'ceo@brand.example, md@brand.example');
     await shot(a, '02b-share');
-    await a.click('#modal [data-apply]');
-    await a.waitForSelector('.toast:has-text("공유를 반영했습니다")');
-    assert.ok(env.drive.permissionsOf(Object.keys(env.drive.items).find((id) => env.drive.items[id].name === '루엠 주식회사 | 루엠 [BO-0001]')).some((p) => p.emailAddress === 'ceo@brand.example' && p.role === 'writer'));
+    await a.click('#modal [data-save]');
+    await a.waitForSelector('.toast:has-text("저장했습니다")');
+    const ruemFolder = Object.keys(env.drive.items).find((id) => env.drive.items[id].name === '루엠 주식회사 | 루엠 [BO-0001]');
+    const shared = env.drive.permissionsOf(ruemFolder).filter((p) => p.role === 'writer' && /brand\.example/.test(p.emailAddress)).map((p) => p.emailAddress).sort();
+    assert.deepEqual(shared, ['ceo@brand.example', 'md@brand.example']);
+    assert.ok((env.drive.notifications || []).every((n) => !n.notify), 'no Google share mail');
+    assert.equal(env.notion.pages[data.b1.id].properties['자료 공유 이메일'].rich_text.map((t) => t.plain_text || t.text.content).join(''), 'ceo@brand.example, md@brand.example');
 
     // Notion text is shown as text; unsafe links are not rendered as links.
     assert.match(await a.textContent('tr[data-code="BO-0099"]'), /<img src=x/);
