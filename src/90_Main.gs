@@ -81,15 +81,20 @@ function api(request) {
   const action = String(request.action || '');
   const payload = request.payload && typeof request.payload === 'object' && !Array.isArray(request.payload) ? request.payload : {};
   const pub = publicActions_(), admin = adminActions_();
+  const started = Date.now();
   try {
     if (hasOwn_(pub, action)) return { ok: true, data: pub[action](payload) };
     if (!hasOwn_(admin, action)) throw userError_('지원하지 않는 요청입니다.');
     BO_SIGNED_IN_EMAIL_ = verifyGoogleIdToken_(request.idToken);
     assertSignedInAdmin_();
-    return { ok: true, data: admin[action](payload) };
+    const data = admin[action](payload);
+    const ms = Date.now() - started;
+    // 느린 요청은 실행 기록(Apps Script → 실행)에 남겨 원인을 찾을 수 있게 한다.
+    if (ms > 5000) logInfo_('api.slow', { action: action, ms: ms });
+    return { ok: true, data: data, ms: ms };
   } catch (error) {
     const reference = uuid_('E').slice(0, 9);
-    if (error.code !== 'NEED_LOGIN' && error.code !== 'NOT_ADMIN') logError_('api:' + action + ':' + reference, error);
+    if (error.code !== 'NEED_LOGIN' && error.code !== 'NOT_ADMIN') logError_('api:' + action + ':' + reference + ':' + (Date.now() - started) + 'ms', error);
     return { ok: false, message: errorMessage_(error), code: error.code || '', reference: reference };
   } finally {
     BO_SIGNED_IN_EMAIL_ = '';

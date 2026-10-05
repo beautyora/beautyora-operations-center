@@ -58,18 +58,23 @@ function notionError_(code, json, method, path) {
   return error;
 }
 
-function notionQuery_(sourceId, body) {
-  return notionRequest_('post', '/data_sources/' + encodeURIComponent(sourceId) + '/query', body || {});
+/**
+ * propertyIds를 주면 그 속성만 받는다(filter_properties). 관계·롤업·수식처럼 Notion이 계산해야 하는
+ * 속성을 빼서 응답이 훨씬 빠르고 작아진다. 속성 ID는 Notion이 준 그대로(이미 URL 인코딩됨) 붙인다.
+ */
+function notionQuery_(sourceId, body, propertyIds) {
+  const query = (propertyIds || []).filter(Boolean).map(function (id) { return 'filter_properties=' + String(id).replace(/[^A-Za-z0-9%_.~-]/g, encodeURIComponent); }).join('&');
+  return notionRequest_('post', '/data_sources/' + encodeURIComponent(sourceId) + '/query' + (query ? '?' + query : ''), body || {});
 }
 
-/** 조건에 맞는 모든 페이지(휴지통 제외). max로 상한을 둘 수 있다. */
-function notionQueryAll_(sourceId, body, max) {
+/** 조건에 맞는 모든 페이지(휴지통 제외). max로 상한을 둘 수 있다. propertyIds는 notionQuery_ 참고. */
+function notionQueryAll_(sourceId, body, max, propertyIds) {
   const pages = [];
   let cursor = '';
   do {
     const request = Object.assign({ page_size: 100 }, body || {});
     if (cursor) request.start_cursor = cursor;
-    const response = notionQuery_(sourceId, request);
+    const response = notionQuery_(sourceId, request, propertyIds);
     (response.results || []).forEach(function (page) { if (!page.archived && !page.in_trash) pages.push(page); });
     cursor = response.has_more ? response.next_cursor : '';
   } while (cursor && (!max || pages.length < max));
@@ -313,8 +318,11 @@ function notionProps_(schema, values, options) {
 
 /* ---------- 목록 캐시 + 변경분 따라잡기 ---------- */
 
-/** 목록 전체를 다시 읽는 간격(초)과, 그 사이 Notion에 '바뀐 페이지'를 물어보는 최소 간격(밀리초). */
-var BO_LIST_FULL_TTL_ = 600;
+/**
+ * 목록 전체를 다시 읽는 간격(초)과, 그 사이 Notion에 '바뀐 페이지'를 물어보는 최소 간격(밀리초).
+ * 수정·추가는 바뀐 페이지 질의로 바로 반영되므로 전체 다시 읽기는 삭제(휴지통) 정리용이다. 새로 고침 버튼은 바로 다시 읽는다.
+ */
+var BO_LIST_FULL_TTL_ = 1800;
 var BO_LIST_SYNC_GAP_MS_ = 10000;
 
 function notionMaxEdited_(pages, start) {
@@ -328,6 +336,20 @@ function notionMaxEdited_(pages, start) {
  * - 기준 시각은 Notion이 준 last_edited_time을 쓰므로 서버 시계와 어긋나도 빠뜨리지 않는다(Notion은 분 단위라 1분 겹쳐 묻는다).
  * view(row, page)는 한 페이지를 목록 항목으로 바꾼다. 항목에는 pageId·createdAt이 있어야 한다.
  */
+/** 목록에 쓰는 속성만 받는다. Notion이 filter_properties를 거절하면(400) 한 번 전체 속성으로 다시 묻고 6시간 동안 그렇게 한다. */
+function syncedQuery_(schema, body, max) {
+  const ids = Object.keys(schema.ids).map(function (key) { return schema.ids[key]; }).filter(Boolean);
+  if (!ids.length || cache_().get(cacheKey_('noFilterProps'))) return notionQueryAll_(schema.sourceId, body, max);
+  try {
+    return notionQueryAll_(schema.sourceId, body, max, ids);
+  } catch (error) {
+    if (error.status !== 400) throw error;
+    logError_('syncedQuery_ filter_properties', error);
+    cache_().put(cacheKey_('noFilterProps'), '1', 21600);
+    return notionQueryAll_(schema.sourceId, body, max);
+  }
+}
+
 function syncedList_(namespace, kind, view) {
   const schema = notionSchema_(kind, true);
   if (!schema) return [];
@@ -335,7 +357,7 @@ function syncedList_(namespace, kind, view) {
   const sortItems = function (items) { return items.sort(function (a, b) { return String(b.createdAt).localeCompare(String(a.createdAt)); }); };
   let entry = cacheGetJson_(namespace, 'synced');
   if (!entry || !Array.isArray(entry.items) || now - entry.fullAt > BO_LIST_FULL_TTL_ * 1000) {
-    const pages = notionQueryAll_(schema.sourceId, { sorts: [{ timestamp: 'created_time', direction: 'descending' }] });
+    const pages = syncedQuery_(schema, { sorts: [{ timestamp: 'created_time', direction: 'descending' }] });
     entry = { fullAt: now, checkedAt: now, mark: notionMaxEdited_(pages), items: pages.map(function (page) { return view(notionRow_(page, schema), page); }) };
     return cachePutJson_(namespace, 'synced', entry, BO_LIST_FULL_TTL_).items;
   }
@@ -343,7 +365,7 @@ function syncedList_(namespace, kind, view) {
   const since = new Date(Date.parse(entry.mark) - 60000).toISOString();
   let pages = [];
   try {
-    pages = notionQueryAll_(schema.sourceId, { filter: { timestamp: 'last_edited_time', last_edited_time: { on_or_after: since } }, sorts: [{ timestamp: 'last_edited_time', direction: 'descending' }] }, 200);
+    pages = syncedQuery_(schema, { filter: { timestamp: 'last_edited_time', last_edited_time: { on_or_after: since } }, sorts: [{ timestamp: 'last_edited_time', direction: 'descending' }] }, 200);
   } catch (error) {
     logError_('syncedList_ ' + kind, error);
     return entry.items;

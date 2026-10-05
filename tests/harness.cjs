@@ -232,7 +232,17 @@ class FakeNotion {
         return JSON.parse(JSON.stringify(source));
       }
     }
-    if ((m = p.match(/^\/data_sources\/([^/]+)\/query$/)) && method === 'post') return this.query(decodeURIComponent(m[1]), body || {});
+    if ((m = p.match(/^\/data_sources\/([^/]+)\/query$/)) && method === 'post') {
+      const only = u.searchParams.getAll('filter_properties');
+      if (only.length && this.rejectFilterProperties) { this.rejectedFilters = (this.rejectedFilters || 0) + 1; throw this.error(400, 'validation_error', 'filter_properties is not supported'); }
+      const res = this.query(decodeURIComponent(m[1]), body || {});
+      // filter_properties: 고른 속성만 돌려준다(실제 Notion과 같음). 기록해 두어 테스트가 확인할 수 있게 한다.
+      if (only.length) {
+        this.filteredQueries = (this.filteredQueries || 0) + 1;
+        res.results.forEach((page) => Object.keys(page.properties).forEach((name) => { if (only.indexOf(page.properties[name].id) < 0) delete page.properties[name]; }));
+      }
+      return res;
+    }
     if (p === '/pages' && method === 'post') return this.materialize(this.createPage(body.parent.data_source_id, body.properties, body));
     if ((m = p.match(/^\/pages\/([^/]+)$/))) {
       const page = this.pages[decodeURIComponent(m[1])];

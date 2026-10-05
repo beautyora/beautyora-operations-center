@@ -16,6 +16,7 @@ const safeUrl = (u) => { const s = String(u || ''); return /^https?:\/\//i.test(
  * 요청마다 Google 로그인(ID 토큰)을 함께 보내고, 서버가 Google에 확인한 뒤 운영진 목록과 비교한다. */
 const Api = {
   cache: new Map(),
+  TIMEOUT_MS: 90000,
   call(action, payload, options) {
     options = options || {};
     const run = () => Api.signedPost(action, payload);
@@ -36,11 +37,19 @@ const Api = {
   post(action, payload) {
     const network = (m) => { const e = new Error(m); e.network = true; return e; };
     if (!App.apiUrl) return Promise.reject(new Error('운영센터는 ops.beautyora.kr 주소에서 열어 주세요.'));
+    // 서버가 오래 답하지 않으면 끝없이 기다리지 않고 알려 준다(다시 보내지는 않는다).
+    const controller = window.AbortController ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), Api.TIMEOUT_MS) : 0;
     return fetch(App.apiUrl, {
-      method: 'POST', redirect: 'follow', credentials: 'omit',
+      method: 'POST', redirect: 'follow', credentials: 'omit', signal: controller ? controller.signal : undefined,
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ action, payload: payload || {}, idToken: Auth.token || undefined })
-    }).catch(() => Promise.reject(network('인터넷 연결이 불안정합니다. 잠시 후 다시 시도해 주세요.')))
+    }).catch((e) => {
+      clearTimeout(timer);
+      if (e && e.name === 'AbortError') { const t = new Error('서버 응답이 ' + Math.round(Api.TIMEOUT_MS / 1000) + '초 넘게 없어 멈췄습니다. 잠시 후 다시 시도해 주세요.'); t.timeout = true; return Promise.reject(t); }
+      return Promise.reject(network('인터넷 연결이 불안정합니다. 잠시 후 다시 시도해 주세요.'));
+    })
+      .then((r) => { clearTimeout(timer); return r; })
       .then((r) => r.json().catch(() => Promise.reject(network('서버 응답을 읽지 못했습니다. 잠시 후 다시 시도해 주세요.'))))
       .then((res) => {
         if (res && res.ok) return res.data;
