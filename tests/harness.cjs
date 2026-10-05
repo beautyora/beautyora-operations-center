@@ -30,10 +30,13 @@ class FakeNotion {
   addSource(key, spec) {
     const id = spec.id || this.id();
     const properties = {};
+    // 속성 ID는 데이터 소스 안에서 겹치지 않아야 한다(실제 Notion과 같음). 겹치면 한 속성의 값이 다른 속성에 덮인다.
+    const used = new Set(Object.values(spec.properties).map((d) => d.id).filter(Boolean));
+    const uniqueId = (name) => { let id; do { id = name.slice(0, 2) + crypto.randomBytes(2).toString('hex'); } while (used.has(id)); used.add(id); return id; };
     Object.keys(spec.properties).forEach((name) => {
       const def = spec.properties[name];
       const type = def.type;
-      const prop = { id: def.id || name.slice(0, 2) + crypto.randomBytes(2).toString('hex'), name, type };
+      const prop = { id: def.id || uniqueId(name), name, type };
       prop[type] = {};
       if (def.options) prop[type].options = def.options.map((o) => ({ id: crypto.randomBytes(3).toString('hex'), name: o, color: 'default' }));
       if (def.relation) prop.relation = { data_source_id: def.relation, type: 'dual_property' };
@@ -223,7 +226,9 @@ class FakeNotion {
           const type = Object.keys(spec)[0];
           if (existing) { if (spec[type] && spec[type].options) existing[type].options = spec[type].options.map((o) => ({ id: o.id || crypto.randomBytes(3).toString('hex'), name: o.name, color: o.color || 'default' })); }
           else {
-            const prop = { id: crypto.randomBytes(2).toString('hex'), name: key, type };
+            const taken = new Set(Object.values(source.properties).map((x) => x.id));
+            let pid; do { pid = crypto.randomBytes(2).toString('hex'); } while (taken.has(pid));
+            const prop = { id: pid, name: key, type };
             prop[type] = spec[type] || {};
             if (prop[type].options) prop[type].options = prop[type].options.map((o) => ({ id: crypto.randomBytes(3).toString('hex'), name: o.name, color: o.color || 'default' }));
             source.properties[key] = prop;
