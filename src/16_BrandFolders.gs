@@ -232,7 +232,7 @@ function apiBrandFolder_(payload) {
   const brand = brandByCode_(payload.code);
   if (!brand) throw userError_('브랜드를 찾을 수 없습니다: ' + (payload.code || '(빈 값)'));
   const result = withLock_(function () { return createBrandFolder_(brand, notionSchema_('brand')); }, 20000);
-  bumpCache_('brand');
+  if (!result.skipped) refreshBrand_(brand.pageId);
   return result;
 }
 

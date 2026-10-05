@@ -198,7 +198,8 @@ function driveDirectUserPermissions_(fileId) {
 }
 
 function apiBrandShareGet_(payload) {
-  bumpCache_('brand'); // Notion에서 방금 고친 값도 보이도록 새로 읽는다.
+  // Notion에서 방금 고친 값도 보이도록 이 브랜드만 다시 읽는다(목록 전체를 지우지 않는다).
+  refreshBrand_(requireBrand_(payload && payload.code).pageId);
   return brandShareState_(payload && payload.code);
 }
 
@@ -211,8 +212,8 @@ function apiBrandShareSave_(payload) {
   const parsed = shareParseEmails_(payload.emails);
   if (parsed.invalid.length) throw userError_('이메일 형식을 확인해 주세요: ' + parsed.invalid.join(', '), 'BAD_EMAIL');
   return withLock_(function () {
-    bumpCache_('brand');
     const schema = notionSchema_('brand');
+    refreshBrand_(requireBrand_(payload.code).pageId);
     if (!schema.ids.shareEmails) throw userError_('Notion 브랜드 목록에 "자료 공유 이메일"(텍스트) 속성이 없습니다.');
     const state = brandShareState_(payload.code);
     if (String(payload.before == null ? '' : payload.before) !== String(state.notionText)) {
@@ -220,8 +221,7 @@ function apiBrandShareSave_(payload) {
     }
     const text = parsed.valid.join(', ');
     const brand = requireBrand_(payload.code);
-    if (text !== String(state.notionText).trim()) notionPatch_(brand.pageId, notionProps_(schema, { shareEmails: text }));
-    bumpCache_('brand');
+    if (text !== String(state.notionText).trim()) refreshBrand_(brand.pageId, notionPatch_(brand.pageId, notionProps_(schema, { shareEmails: text })));
 
     const protectedEmails = shareProtectedEmails_();
     const desired = parsed.valid.slice();
@@ -247,7 +247,6 @@ function apiBrandShareSave_(payload) {
       }
     });
     logInfo_('brands.share', { folder: state.folderId, added: results.filter(function (r) { return r.result === 'added' || r.result === 'upgraded'; }).length, removed: results.filter(function (r) { return r.result === 'removed'; }).length, failed: results.filter(function (r) { return r.result === 'failed'; }).length });
-    bumpCache_('driveActivity');
     return { results: results, state: brandShareState_(payload.code) };
   }, 20000);
 }

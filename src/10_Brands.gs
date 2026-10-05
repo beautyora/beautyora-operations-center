@@ -21,6 +21,11 @@ function listBrands_(fresh) {
   return syncedList_('brand', 'brand', brandSummary_);
 }
 
+/** 브랜드 한 곳만 Notion에서 다시 읽어 목록 캐시에 반영한다(page를 주면 그 값을 쓴다). */
+function refreshBrand_(pageId, page) {
+  return syncedRefreshPage_('brand', 'brand', brandSummary_, pageId, page);
+}
+
 function brandMapByPageId_() {
   const map = {};
   listBrands_().forEach(function (brand) { map[String(brand.pageId).replace(/-/g, '')] = brand; });
@@ -37,8 +42,7 @@ function brandByCode_(code) {
   const pages = notionQueryAll_(schema.sourceId, { filter: { property: schema.ids.code, rich_text: { equals: code } } }, 2);
   if (pages.length > 1) throw userError_('Notion에 같은 브랜드 ID가 두 개 있습니다: ' + code);
   if (!pages.length) return null;
-  bumpCache_('brand');
-  return brandSummary_(notionRow_(pages[0], schema));
+  return refreshBrand_(pages[0].id, pages[0]);
 }
 
 function requireBrand_(code) {
