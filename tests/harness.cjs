@@ -174,7 +174,7 @@ class FakeNotion {
   query(sourceId, body) {
     const source = this.sources[sourceId];
     if (!source) throw this.error(404, 'object_not_found', 'data source not found');
-    let list = Object.values(this.pages).filter((p) => p.parent.data_source_id === sourceId && !p.archived);
+    let list = Object.values(this.pages).filter((p) => p.parent.data_source_id === sourceId && !p.archived && !p.in_trash);
     list = list.filter((p) => this.matches(p, body.filter, source));
     (body.sorts || []).slice().reverse().forEach((sort) => {
       const dir = sort.direction === 'descending' ? -1 : 1;
@@ -305,7 +305,7 @@ class FakeDrive {
   nextId(prefix) { this.seq++; return prefix + String(this.seq).padStart(26, '0'); }
   folder(name, parent) {
     const id = this.nextId('fold');
-    this.items[id] = { id, name, folder: true, parents: parent ? [parent] : [] };
+    this.items[id] = { id, name, folder: true, parents: parent ? [parent] : [], trashed: false };
     return id;
   }
   folderApi(id) {
@@ -313,9 +313,11 @@ class FakeDrive {
     const item = this.items[id];
     if (!item || !item.folder) throw new Error('Drive 폴더 없음: ' + id);
     const iter = (list) => { let i = 0; return { hasNext: () => i < list.length, next: () => list[i++] }; };
-    const children = () => Object.values(self.items).filter((x) => x.folder && x.parents[0] === id);
+    const children = () => Object.values(self.items).filter((x) => x.folder && !x.trashed && x.parents[0] === id);
     return {
       getId: () => id, getName: () => item.name, getUrl: () => 'https://drive.google.com/drive/folders/' + id,
+      setName: (name) => { item.name = String(name); return self.folderApi(id); },
+      isTrashed: () => !!item.trashed,
       getFolders: () => iter(children().map((c) => self.folderApi(c.id))),
       getFiles: () => iter(Object.values(self.items).filter((x) => !x.folder && !x.trashed && x.parents[0] === id).map((f) => ({ getId: () => f.id, getName: () => f.name, getMimeType: () => f.mimeType, getLastUpdated: () => new Date(f.modifiedTime || f.createdTime) }))),
       getFoldersByName: (name) => iter(children().filter((c) => c.name === name).map((c) => self.folderApi(c.id))),

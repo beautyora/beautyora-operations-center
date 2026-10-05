@@ -155,7 +155,7 @@ test('intake: Drive failure and two repeated trigger calls do not duplicate Noti
   env.call('scheduledBrandIntake', { triggerUid: uid });
   env.call('scheduledBrandIntake', { triggerUid: uid });
   assert.equal(rows().length, 4);
-  assert.equal(Object.values(env.drive.items).filter(x => x.name === '폴더복구 (BO-0004)').length, 1);
+  assert.equal(Object.values(env.drive.items).filter(x => x.name === '테스트회사 | 폴더복구 [BO-0004]').length, 1);
   assert.throws(() => env.call('scheduledBrandIntake', { triggerUid: 'fake' }));
 });
 
@@ -410,7 +410,7 @@ test('recovery: shared lock blocks writes and partial Drive failure resumes with
   assert.equal(s.rows().length, before + 2);
   for (const t of s.config.targets) {
     const b = s.rows().find(b => b.name === t.brand);
-    assert.equal(Object.values(env.drive.items).filter(x => x.name === t.brand + ' (' + b.code + ')').length, 1);
+    assert.equal(Object.values(env.drive.items).filter(x => x.folder && x.name.includes(t.brand) && x.name.includes(b.code)).length, 1);
   }
 });
 

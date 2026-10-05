@@ -302,7 +302,7 @@ test('brand folders: automatic processing starts at migration, without a checkbo
   const r = ok(env.api('brands.foldersSync'));
   assert.deepEqual(r.created.map(c => c.code), ['BO-0004']);
   assert.deepEqual(r.failed, []);
-  const folder = Object.values(env.drive.items).find(x => x.name === '신규 (BO-0004)');
+  const folder = Object.values(env.drive.items).find(x => x.name === '회사 미확인 | 신규 [BO-0004]');
   assert.equal(folder.sharing, undefined);
   assert.deepEqual(Object.values(env.drive.items).filter(x => x.parents[0] === folder.id).map(x => x.name).sort(), ['01_섬네일', '02_상세페이지', '03_서류']);
   assert.equal(page.properties['구글 드라이브'].url, 'https://drive.google.com/drive/folders/' + folder.id);
@@ -376,7 +376,9 @@ test('brand folders: linked folders repair only missing children, invalid links 
 });
 
 test('brand folders: interrupted child creation resumes under the same parent', () => {
-  const { env } = setup();
+  const { env, data } = setup();
+  // This test isolates interruption recovery from shared-business grouping.
+  env.notion.pages[data.b3.id].properties['사업자 번호'] = { type: 'rich_text', rich_text: [] };
   const folderApi = env.drive.folderApi.bind(env.drive);
   let fail = true;
   env.drive.folderApi = id => {
@@ -389,7 +391,7 @@ test('brand folders: interrupted child creation resumes under the same parent', 
   };
   assert.equal(env.api('brands.folder', { code: 'BO-0001' }).ok, false);
   ok(env.api('brands.folder', { code: 'BO-0001' }));
-  const parents = Object.values(env.drive.items).filter(x => x.name === '루엠 (BO-0001)');
+  const parents = Object.values(env.drive.items).filter(x => x.name === '루엠 주식회사 | 루엠 [BO-0001]');
   assert.equal(parents.length, 1);
   assert.deepEqual(Object.values(env.drive.items).filter(x => x.parents[0] === parents[0].id).map(x => x.name).sort(), ['01_섬네일', '02_상세페이지', '03_서류']);
 });
