@@ -262,7 +262,11 @@ test('folder reuse: BO-0032 and BO-0033 without URLs are excluded from automatic
   const baseline = JSON.parse(env.props.BO_BRAND_FOLDERS_BASELINE);
   const own = ['BO-0032', 'BO-0033'].map((code, i) => add(env, data, code, '자사' + i, '뷰티오라'));
   own.forEach(page => { page.created_time = baseline.since; });
-  for (const code of ['BO-0032', 'BO-0033']) assert.equal(create(env, code).created, false);
+  for (const code of ['BO-0032', 'BO-0033']) {
+    const r = create(env, code);
+    assert.equal(r.created, false);
+    assert.match(r.skipped, /자사 브랜드는 새 폴더를 만들지 않습니다/);
+  }
   const result = ok(env.api('brands.foldersSync'));
   assert.deepEqual(result.created, []);
   assert.deepEqual(result.failed, []);

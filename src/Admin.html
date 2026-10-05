@@ -241,6 +241,7 @@ async function pageBrands(view) {
       if (!await Modal.confirm('드라이브 폴더 만들기', brand.name + ' 폴더를 만들고(하위 폴더·취합 엑셀 양식 포함) Notion "구글 드라이브"에 주소를 넣습니다.', '만들기')) return;
       try {
         const r = await Api.call('brands.folder', { code: brand.code }, { noRetry: true });
+        if (r.skipped) { Toast.error(brand.name + ': ' + r.skipped); return; }
         brand.drive = r.url;
         Api.invalidate();
         paint();
@@ -273,12 +274,10 @@ async function shareDialog(code) {
     '<p class="small muted">' + esc(st.brand.name + ' (' + st.brand.code + ')') + (safeUrl(st.url) ? ' · <a href="' + esc(st.url) + '" target="_blank" rel="noopener">Drive 폴더 열기</a>' : '') + '</p>' +
     '<div class="field"><label for="shareEmails">자료 공유 이메일 <span class="small muted">· Notion</span></label>' +
       '<textarea class="textarea" id="shareEmails" rows="4" placeholder="name@gmail.com (한 줄에 하나, 또는 쉼표로 구분)">' + esc(st.emails.concat(st.driveOnly).join('\n')) + '</textarea></div>' +
-    '<p class="small muted">여기 있는 Google 계정은 이 폴더를 편집할 수 있고, 지우면 권한이 빠집니다. 저장하면 Notion에도 그대로 기록됩니다. Google 알림 메일은 보내지 않으니 브랜드에는 직접 안내해 주세요.</p>' +
-    (st.driveOnly.length ? '<p class="small muted">Notion에는 없지만 이 폴더에 공유돼 있던 계정도 목록에 넣었습니다: ' + esc(st.driveOnly.join(', ')) + '</p>' : '') +
-    (st.invalid.length ? '<p class="small" style="color:var(--warn)">Notion 값 중 이메일이 아닌 부분은 저장하면 빠집니다: ' + esc(st.invalid.join(', ')) + '</p>' : '') +
+    '<p class="small muted">목록에 있는 계정만 이 폴더를 편집할 수 있습니다. 알림 메일은 보내지 않습니다.</p>' +
+    (st.invalid.length ? '<p class="small" style="color:var(--warn)">이메일이 아닌 값은 저장하면 빠집니다: ' + esc(st.invalid.join(', ')) + '</p>' : '') +
     '<ul class="share-status" id="shareStatus" aria-live="polite"></ul>' +
-    (st.others.length ? '<p class="small muted">같은 폴더를 쓰는 브랜드의 공유 이메일도 이 폴더에 접근합니다: ' + esc(st.others.map((b) => b.name + ' (' + b.code + ')' + (b.emails.length ? ': ' + b.emails.join(', ') : ': 없음')).join(' / ')) + '</p>' : '') +
-    '<p class="small muted">운영진과 직원 계정은 상위 폴더 권한으로 항상 접근합니다.</p>';
+    (st.others.length ? '<p class="small muted">같은 폴더 사용: ' + esc(st.others.map((b) => b.name + (b.emails.length ? ' (' + b.emails.join(', ') + ')' : '')).join(', ')) + '</p>' : '');
   const m = Modal.open({ title: '브랜드 폴더 공유', wide: true, body, foot: '<button class="btn" data-close>닫기</button><button class="btn btn-primary" data-save' + (st.missingProperty ? ' disabled' : '') + '>저장</button>' });
   const area = $('#shareEmails', m), status = $('#shareStatus', m), save = m.querySelector('[data-save]');
   const paintStatus = (failed) => {
@@ -289,8 +288,8 @@ async function shareDialog(code) {
       if (st.staff.includes(e)) return '<li>' + esc(e) + ' ' + pill('운영진·직원', '') + '</li>';
       return '<li>' + esc(e) + ' ' + (st.access[e] === 'editor' ? pill('공유됨', 'ok') : pill('저장하면 공유', 'info')) + '</li>';
     }).concat(p.invalid.map((e) => '<li>' + esc(e) + ' ' + pill('이메일 형식 확인', 'bad') + '</li>'))
-      .concat(hadAccess.filter((e) => !p.valid.includes(e)).map((e) => '<li class="muted">' + esc(e) + ' ' + pill('저장하면 권한 빠짐', 'warn') + '</li>'));
-    status.innerHTML = rows.join('') || '<li class="muted">공유할 이메일이 없습니다. 이 폴더는 운영진만 접근합니다.</li>';
+      .concat(hadAccess.filter((e) => !p.valid.includes(e)).map((e) => '<li class="muted">' + esc(e) + ' ' + pill('저장하면 해제', 'warn') + '</li>'));
+    status.innerHTML = rows.join('') || '<li class="muted">공유된 계정 없음 · 운영진만 접근</li>';
     save.disabled = st.missingProperty || p.invalid.length > 0;
   };
   area.addEventListener('input', () => paintStatus());
