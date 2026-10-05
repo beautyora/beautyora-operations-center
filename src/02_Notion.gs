@@ -350,11 +350,33 @@ function syncedQuery_(schema, body, max) {
   }
 }
 
+function syncedSort_(items) {
+  return items.sort(function (a, b) { return String(b.createdAt).localeCompare(String(a.createdAt)); });
+}
+
+/**
+ * 페이지 하나만 Notion에서 바로 읽어(또는 수정 응답 page를 받아) 목록 캐시의 그 항목만 바꾼다.
+ * 목록 전체를 지우면 다음 요청이 Notion 전체를 다시 읽느라 느려지므로, 한 곳만 고친 뒤에는 이것을 쓴다.
+ */
+function syncedRefreshPage_(namespace, kind, view, pageId, page) {
+  const schema = notionSchema_(kind);
+  page = page || notionRequest_('get', '/pages/' + encodeURIComponent(pageId));
+  const item = view(notionRow_(page, schema), page);
+  const entry = cacheGetJson_(namespace, 'synced');
+  if (entry && Array.isArray(entry.items)) {
+    const id = String(page.id).replace(/-/g, '');
+    const kept = entry.items.filter(function (i) { return String(i.pageId).replace(/-/g, '') !== id; });
+    entry.items = syncedSort_(page.archived || page.in_trash ? kept : kept.concat([item]));
+    const remaining = Math.max(30, BO_LIST_FULL_TTL_ - Math.floor((Date.now() - entry.fullAt) / 1000));
+    cachePutJson_(namespace, 'synced', entry, remaining);
+  }
+  return item;
+}
+
 function syncedList_(namespace, kind, view) {
   const schema = notionSchema_(kind, true);
   if (!schema) return [];
   const now = Date.now();
-  const sortItems = function (items) { return items.sort(function (a, b) { return String(b.createdAt).localeCompare(String(a.createdAt)); }); };
   let entry = cacheGetJson_(namespace, 'synced');
   if (!entry || !Array.isArray(entry.items) || now - entry.fullAt > BO_LIST_FULL_TTL_ * 1000) {
     const pages = syncedQuery_(schema, { sorts: [{ timestamp: 'created_time', direction: 'descending' }] });
@@ -375,7 +397,7 @@ function syncedList_(namespace, kind, view) {
     const byId = {};
     pages.forEach(function (page) { byId[String(page.id).replace(/-/g, '')] = view(notionRow_(page, schema), page); });
     const kept = entry.items.filter(function (item) { return !byId[String(item.pageId).replace(/-/g, '')]; });
-    entry.items = sortItems(kept.concat(Object.keys(byId).map(function (key) { return byId[key]; })));
+    entry.items = syncedSort_(kept.concat(Object.keys(byId).map(function (key) { return byId[key]; })));
     entry.mark = notionMaxEdited_(pages, entry.mark);
   }
   entry.checkedAt = now;

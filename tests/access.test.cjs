@@ -208,6 +208,19 @@ test('brand share: saving writes Notion and makes Drive match the list, with no 
   assert.ok(env.drive.items[env.drive.root].permissions.some((p) => p.role === 'owner'), 'owner untouched');
 });
 
+test('brand share: opening and saving re-read only that brand, never the whole Notion list (keeps home and brands fast)', () => {
+  const { env, data, patch } = shareSetup();
+  ok(env.api('brands.list'));
+  const query = 'POST /data_sources/' + data.ids.brandId + '/query';
+  const before = env.notion.calls.filter((c) => c === query).length;
+  patch(data.b1, { '자료 공유 이메일': 'fresh@brand.example' });
+  const st = ok(env.api('brands.share', { code: 'BO-0001' }));
+  assert.equal(st.notionText, 'fresh@brand.example', 'a value just typed in Notion shows up');
+  ok(env.api('brands.shareSave', { code: 'BO-0001', before: st.notionText, emails: 'fresh@brand.example, md@brand.example' }));
+  assert.equal(ok(env.api('brands.list')).brands.find((b) => b.code === 'BO-0001').shareEmails, 'fresh@brand.example, md@brand.example');
+  assert.equal(env.notion.calls.filter((c) => c === query).length, before, 'no Notion list query');
+});
+
 test('brand share: a stale dialog, a typo or a non-Google address never half-saves silently', () => {
   const { env, data, patch, perms } = shareSetup();
   const st = ok(env.api('brands.share', { code: 'BO-0001' }));
