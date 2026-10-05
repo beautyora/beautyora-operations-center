@@ -20,7 +20,9 @@ const BO = Object.freeze({
     GOOGLE_FORM_ID: 'BO_GOOGLE_FORM_ID',
     INTAKE_SHEET_ID: 'BO_INTAKE_RESPONSE_SHEET_ID',
     TEMPLATE_FILE_ID: 'BO_TEMPLATE_FILE_ID',
-    ALLOW_EMBED: 'BO_ALLOW_EMBED',
+    GOOGLE_CLIENT_ID: 'BO_GOOGLE_CLIENT_ID',
+    OPS_URL: 'BO_OPS_URL',
+    STAFF_EMAILS: 'BO_STAFF_EMAILS',
     SCHEMA_IDS: 'BO_SCHEMA_IDS'
   })
 });
@@ -63,7 +65,8 @@ const BO_SCHEMAS = Object.freeze({
       bizNo: ['rich_text', ['사업자 번호']],
       received: ['date', ['접수일']],
       issue: ['select', ['이슈 여부']],
-      owner: ['people', ['소통 담당자']]
+      owner: ['people', ['소통 담당자']],
+      shareEmails: ['rich_text', ['자료 공유 이메일']]
     }
   },
   activity: {

@@ -9,7 +9,8 @@ function brandSummary_(row) {
     category: row.category || [], trade: row.trade || [],
     memo: row.memo || '', next: row.next || '', drive: row.drive || '', bizNo: row.bizNo || '',
     received: row.received || '', issue: row.issue || '',
-    owners: (row.owner || []).map(function (p) { return p.name; }).filter(Boolean)
+    owners: (row.owner || []).map(function (p) { return p.name; }).filter(Boolean),
+    shareEmails: row.shareEmails || ''
   };
 }
 

@@ -4,7 +4,7 @@
 const Admin = { user: null, route: { path: 'home', query: {} }, state: {} };
 
 const NAV = [
-  { path: 'home', label: '홈', icon: 'home', title: '홈', sub: 'Notion 브랜드 목록의 진행 현황과 최근 수정입니다.' },
+  { path: 'home', label: '홈', icon: 'home', title: '홈', sub: '브랜드 진행 현황, 브랜드 자료 현황(Drive), 최근 수정입니다.' },
   { path: 'brands', label: '브랜드', icon: 'store', title: '브랜드', sub: 'Notion 브랜드 목록을 찾아봅니다. 이름을 누르면 Notion 페이지가 열립니다.' },
   { path: 'settings', label: '설정', icon: 'settings', title: '설정', sub: '연결 상태, 초기 설정, 메인 상품목록.' }
 ];
@@ -20,11 +20,7 @@ const Nav = {
     return { path: NAV.some((n) => n.path === parts[0]) ? parts[0] : 'home', query };
   },
   go(hash) {
-    const target = '#/' + String(hash).replace(/^#?\/?/, '');
-    if (window.google && google.script && google.script.history) {
-      google.script.history.push(null, null, target.slice(1));
-      Nav.apply(target);
-    } else { location.hash = target; }
+    location.hash = '#/' + String(hash).replace(/^#?\/?/, '');
   },
   apply(hash) {
     Admin.route = Nav.parse(hash);
@@ -40,7 +36,7 @@ function renderShell() {
       '<aside class="sidebar" id="sidebar" aria-label="메뉴">' +
         '<div class="logo">' + LOGO_SVG + '<span>운영센터</span></div>' +
         '<nav class="nav" id="nav"></nav>' +
-        '<div class="sidebar-foot"><span class="ellipsis" title="' + esc(Admin.user.email) + '">' + esc(Admin.user.email) + '</span><span>v' + esc(App.version) + ' · 브랜드 원본: Notion</span></div>' +
+        '<div class="sidebar-foot"><span class="ellipsis" title="' + esc(Admin.user.email) + '">' + esc(Admin.user.email) + '</span><span>v' + esc(App.version) + ' · 브랜드 원본: Notion</span><button class="btn btn-ghost btn-sm" id="signOut" type="button">로그아웃</button></div>' +
       '</aside>' +
       '<div class="main">' +
         '<header class="topbar"><button class="btn btn-ghost btn-icon menu-toggle" id="menuToggle" aria-label="메뉴 열기">' + icon('menu') + '</button>' +
@@ -51,6 +47,7 @@ function renderShell() {
       '</div>' +
     '</div>';
   $('#menuToggle').addEventListener('click', () => $('#sidebar').classList.toggle('open'));
+  $('#signOut').addEventListener('click', () => Auth.signOut());
   $('#refreshBtn').addEventListener('click', (e) => busy(e.currentTarget, async () => {
     await Api.call('system.refresh');
     Api.invalidate();
@@ -77,6 +74,7 @@ function renderNav() {
 const PAGES = { home: pageHome, brands: pageBrands, settings: pageSettings };
 
 function renderPage() {
+  Live.stop();
   Admin.state = { page: Admin.route.path };
   // 화면마다 새 컨테이너를 써서 이전 화면의 이벤트 처리기가 남지 않게 한다.
   const old = $('#view');
@@ -105,10 +103,96 @@ async function pageHome(view) {
   view.innerHTML =
     (d.warnings && d.warnings.length ? '<div class="notice warn">' + icon('alert') + '<div>일부 정보를 불러오지 못했습니다: ' + esc(d.warnings.join(' / ')) + ' <a href="#/settings" data-link="/settings">연결 상태 확인</a></div></div>' : '') +
     '<section class="stats" aria-label="진행 단계별 브랜드">' + (d.stages.length ? d.stages.map(tile).join('') : '') + '</section>' +
+    '<section class="card" id="actCard" aria-labelledby="actTitle"><div class="card-head"><div class="grow"><h2 id="actTitle">브랜드 자료 현황</h2><div class="small muted live-line"><span class="live-dot" aria-hidden="true"></span><span id="actStamp">불러오는 중</span></div></div><button class="btn btn-sm" id="actRefresh" title="Drive에서 지금 다시 확인">' + icon('refresh') + '<span class="hide-sm">지금 확인</span></button></div><div id="actBody">' + UI.skeleton(4) + '</div></section>' +
     '<section class="card"><div class="card-head"><h2>최근 수정된 브랜드</h2><span class="small muted">Notion 기준</span></div><div class="list">' +
       (d.recent.length ? d.recent.map((r) => '<div class="list-item"><div class="grow"><div class="cell-title ellipsis">' + notionLink(r.url, r.name || '(이름 없음)') + '</div><div class="cell-sub">' + esc([r.code, r.company].filter(Boolean).join(' · ') || '—') + '</div></div>' + pill(r.stage) + '<span class="small muted nowrap">' + esc(Fmt.ago(r.edited)) + '</span></div>').join('') : UI.empty('브랜드가 없습니다')) +
     '</div></section>' +
     '<p class="small muted">브랜드 ' + Fmt.num(d.totals.brands) + '곳 · ' + esc(Fmt.datetime(d.generatedAt)) + ' 기준</p>';
+  brandActivityCard(view);
+}
+
+/* ---------- 홈: 브랜드 자료 현황(Drive) ----------
+ * 화면을 열어 둔 동안 1분마다 다시 확인한다. 다른 화면으로 가거나 창이 숨겨지면 멈춘다. */
+const Live = {
+  timer: null,
+  stop() { if (Live.timer) clearInterval(Live.timer); Live.timer = null; }
+};
+const ACT_STATUS = {
+  review: { label: '확인 필요', tone: 'ok', hint: '필수 칸을 모두 채웠습니다' },
+  writing: { label: '작성 중', tone: 'info', hint: '브랜드가 기준 시트를 고치고 있습니다' },
+  uploaded: { label: '파일 올림', tone: 'brand', hint: '브랜드가 파일을 올렸습니다' },
+  waiting: { label: '활동 없음', tone: '', hint: '기준 시트는 있지만 브랜드 활동이 없습니다' },
+  no_sheet: { label: '기준 시트 없음', tone: 'warn', hint: '통화 후 기준 시트를 넣어 주세요' },
+  no_folder: { label: '폴더 없음', tone: '', hint: 'Notion에 구글 드라이브 주소가 없습니다' }
+};
+const ACT_INTERVAL = 60000;
+
+function activitySheetCell(r) {
+  const s = r.sheet;
+  if (!s) return '<span class="muted">—</span>';
+  const link = (text) => (safeUrl(s.url) ? '<a href="' + esc(s.url) + '" target="_blank" rel="noopener">' + esc(text) + '</a>' : esc(text));
+  if (!s.byBrand) return link(s.editedByStaff ? '직원이 수정' : '받음') + (s.count > 1 ? ' <span class="small muted">· ' + s.count + '개</span>' : '');
+  if (s.pending) return link('작성 중') + ' <span class="small muted">· 내용 확인 중</span>';
+  if (s.unreadable) return link('작성 중') + ' <span class="small muted">· 양식을 읽지 못함</span>';
+  const missing = Object.keys(s.missing || {}).map((k) => k + ' ' + s.missing[k]).join(', ');
+  return link('상품 ' + Fmt.num(s.rows) + '행') + (s.incomplete ? ' <span class="small" style="color:var(--warn)" title="' + esc(missing) + '">· 필수 누락 ' + Fmt.num(s.incomplete) + '행</span>' : (s.rows ? ' <span class="small" style="color:var(--ok)">· 필수 완료</span>' : ''));
+}
+
+function activityRow(r) {
+  const st = ACT_STATUS[r.status] || { label: r.status, tone: '' };
+  const names = r.brands.map((b) => esc(b.name || '(이름 없음)')).join(' · ');
+  const codes = r.brands.map((b) => b.code).filter(Boolean).join(' · ');
+  const title = safeUrl(r.url) ? '<a href="' + esc(r.url) + '" target="_blank" rel="noopener" title="Drive 폴더 열기">' + names + '</a>' : names;
+  const last = r.lastActivityAt ? '<span title="' + esc(Fmt.datetime(r.lastActivityAt)) + '">' + esc(Fmt.ago(r.lastActivityAt)) + '</span><div class="cell-sub">' + esc([r.lastActor, r.lastAction].filter(Boolean).join(' · ')) + '</div>' : '<span class="muted">—</span>';
+  return '<tr data-status="' + esc(r.status) + '"><td><div class="cell-title">' + title + '</div><div class="cell-sub">' + esc([codes, r.company].filter(Boolean).join(' · ')) + '</div></td>' +
+    '<td>' + pill(st.label, st.tone) + '</td><td class="small">' + activitySheetCell(r) + '</td>' +
+    '<td class="hide-sm num">' + (r.uploads ? Fmt.num(r.uploads) + '개' : '<span class="muted">0</span>') + '</td><td class="hide-sm small nowrap">' + last + '</td></tr>';
+}
+
+async function brandActivityCard(view) {
+  const body = $('#actBody', view), stamp = $('#actStamp', view);
+  if (!body) return;
+  const state = { filter: 'active', data: null, at: 0, loading: false };
+  const paint = () => {
+    const d = state.data;
+    const total = d.rows.filter((r) => r.status !== 'no_folder').length;
+    const chips = [{ key: 'active', label: '폴더 있는 곳', count: total }].concat(Object.keys(ACT_STATUS).map((k) => ({ key: k, label: ACT_STATUS[k].label, count: d.counts[k] || 0 })));
+    const list = d.rows.filter((r) => (state.filter === 'active' ? r.status !== 'no_folder' : r.status === state.filter));
+    body.innerHTML = '<div class="card-body stack" style="padding-top:4px">' +
+      '<div class="act-filters" role="group" aria-label="상태로 거르기">' + chips.map((c) => '<button type="button" class="act-chip" data-filter="' + c.key + '" aria-pressed="' + (state.filter === c.key) + '"' + (ACT_STATUS[c.key] ? ' title="' + esc(ACT_STATUS[c.key].hint) + '"' : '') + '>' + esc(c.label) + ' <b class="num">' + Fmt.num(c.count) + '</b></button>').join('') + '</div>' +
+      (d.pending ? '<p class="small muted">기준 시트 ' + Fmt.num(d.pending) + '개는 내용을 확인하는 중입니다. 잠시 뒤 자동으로 채워집니다.</p>' : '') +
+      '</div>' +
+      (list.length ? '<div class="table-wrap"><table class="table"><thead><tr><th>브랜드(폴더)</th><th>상태</th><th>기준 시트</th><th class="hide-sm">올린 파일</th><th class="hide-sm">마지막 활동</th></tr></thead><tbody>' + list.slice(0, 300).map(activityRow).join('') + '</tbody></table></div>' : UI.empty('해당하는 브랜드가 없습니다')) +
+      '<p class="small muted act-note">폴더를 열어 보기만 한 것은 Google이 알려 주지 않아 표시되지 않습니다. 직원 계정(운영진·BO_STAFF_EMAILS)의 변경은 브랜드 활동으로 세지 않습니다.</p>';
+  };
+  const tick = () => { if (state.at) stamp.textContent = '실시간 · 1분마다 확인 · ' + Fmt.ago(new Date(state.at).toISOString()) + ' 갱신'; };
+  const load = async (fresh) => {
+    if (state.loading) return;
+    state.loading = true;
+    try {
+      state.data = await Api.call('brands.activity', fresh ? { fresh: true } : {}, { noRetry: true });
+      state.at = Date.now();
+      if (!body.isConnected) return;
+      paint(); tick();
+    } catch (e) {
+      if (!body.isConnected) return;
+      if (state.data) { stamp.textContent = '갱신 실패 · ' + (e.message || '') + ' (다음 확인 때 다시 시도)'; }
+      else body.innerHTML = UI.error(e, true);
+    } finally { state.loading = false; }
+  };
+  body.addEventListener('click', (e) => {
+    const chip = e.target.closest('[data-filter]');
+    if (chip) { state.filter = chip.dataset.filter; paint(); return; }
+    if (e.target.closest('[data-retry]')) load(true);
+  });
+  $('#actRefresh', view).addEventListener('click', (e) => busy(e.currentTarget, () => load(true)));
+  await load(false);
+  Live.stop();
+  Live.timer = setInterval(() => {
+    if (!body.isConnected) { Live.stop(); return; }
+    if (document.visibilityState !== 'visible') return;
+    if (Date.now() - state.at >= ACT_INTERVAL - 1000) load(false); else tick();
+  }, 15000);
 }
 
 /* ---------- 브랜드 ---------- */
@@ -128,11 +212,13 @@ async function pageBrands(view) {
     const list = data.brands.filter((b) => (!text || [b.name, b.company, b.code, b.contactName, b.email].join(' ').toLowerCase().includes(text)) && (!stage || b.stage === stage) && (!priority || b.priority === priority));
     $('#bcount').textContent = list.length + ' / ' + data.brands.length + '곳';
     $('#btable').innerHTML = list.length ? '<table class="table"><thead><tr><th>브랜드</th><th>진행 단계</th><th class="hide-sm">우선순위</th><th class="hide-sm">담당자</th><th class="hide-sm">구글 드라이브</th><th class="hide-sm">최근 수정</th></tr></thead><tbody>' +
-      list.slice(0, 500).map((b) => '<tr data-code="' + esc(b.code) + '"><td><div class="cell-title">' + notionLink(b.url, b.name || '(이름 없음)') + (b.issue ? ' ' + pill(b.issue, 'bad') : '') + '</div><div class="cell-sub">' + esc(b.code) + (b.company ? ' · ' + esc(b.company) : '') + '</div></td><td>' + pill(b.stage) + '</td><td class="hide-sm">' + esc(b.priority || '—') + '</td><td class="hide-sm small">' + esc([b.contactName, b.email].filter(Boolean).join(' · ') || '—') + '</td><td class="hide-sm">' + (safeUrl(b.drive) ? '<a class="btn btn-sm" href="' + esc(b.drive) + '" target="_blank" rel="noopener">' + icon('external') + '열기</a>' : '<button class="btn btn-sm" data-folder="' + esc(b.code) + '">폴더 만들기</button>') + '</td><td class="hide-sm small muted nowrap">' + esc(Fmt.ago(b.edited)) + '</td></tr>').join('') +
+      list.slice(0, 500).map((b) => '<tr data-code="' + esc(b.code) + '"><td><div class="cell-title">' + notionLink(b.url, b.name || '(이름 없음)') + (b.issue ? ' ' + pill(b.issue, 'bad') : '') + '</div><div class="cell-sub">' + esc(b.code) + (b.company ? ' · ' + esc(b.company) : '') + '</div></td><td>' + pill(b.stage) + '</td><td class="hide-sm">' + esc(b.priority || '—') + '</td><td class="hide-sm small">' + esc([b.contactName, b.email].filter(Boolean).join(' · ') || '—') + '</td><td class="hide-sm">' + (safeUrl(b.drive) ? '<span class="row"><a class="btn btn-sm" href="' + esc(b.drive) + '" target="_blank" rel="noopener">' + icon('external') + '열기</a><button class="btn btn-sm" data-share="' + esc(b.code) + '" type="button">공유</button></span>' : '<button class="btn btn-sm" data-folder="' + esc(b.code) + '">폴더 만들기</button>') + '</td><td class="hide-sm small muted nowrap">' + esc(Fmt.ago(b.edited)) + '</td></tr>').join('') +
       '</tbody></table>' : UI.empty('조건에 맞는 브랜드가 없습니다');
   };
   ['bq', 'bstage', 'bpriority'].forEach((id) => $('#' + id).addEventListener(id === 'bq' ? 'input' : 'change', paint));
   $('#btable').addEventListener('click', (e) => {
+    const share = e.target.closest('[data-share]');
+    if (share) { busy(share, () => shareDialog(share.dataset.share)); return; }
     const button = e.target.closest('[data-folder]');
     if (!button) return;
     const brand = data.brands.find((b) => b.code === button.dataset.folder);
@@ -150,10 +236,44 @@ async function pageBrands(view) {
   paint();
 }
 
+/** 브랜드 폴더 공유: Notion '자료 공유 이메일'을 그 브랜드 폴더의 편집자로. 미리보기 → 확인 후 실행. */
+async function shareDialog(code) {
+  let plan;
+  try { plan = await Api.call('brands.sharePreview', { code }, { noRetry: true }); } catch (e) { Toast.error(e); return; }
+  const role = (r) => (r ? ' <span class="small muted">(지금 ' + esc(ROLE_LABEL[r] || r) + ')</span>' : '');
+  const list = (items, render) => (items.length ? '<ul>' + items.map(render).join('') + '</ul>' : '<p class="small muted">없음</p>');
+  const nothing = !plan.add.length && !plan.remove.length;
+  const body =
+    (plan.missingProperty ? '<div class="notice warn">' + icon('alert') + '<div>Notion 브랜드 목록에 <b>자료 공유 이메일</b>(텍스트) 속성이 없습니다. 속성을 만들고 Google 계정 이메일을 쉼표로 넣어 주세요.</div></div>' : '') +
+    '<p class="small muted">폴더: ' + esc(plan.brands.map((b) => b.name + ' (' + b.code + ')').join(' · ')) + (plan.brands.length > 1 ? ' — 같은 폴더를 쓰는 브랜드의 이메일을 합칩니다.' : '') + '</p>' +
+    '<h3 class="section-title">편집자로 추가</h3>' + list(plan.add, (a) => '<li>' + esc(a.email) + role(a.current) + '</li>') +
+    '<h3 class="section-title">권한 빼기 <span class="small muted">(Notion에서 지워진, 운영센터가 추가했던 이메일)</span></h3>' + list(plan.remove, (e) => '<li>' + esc(e) + '</li>') +
+    (plan.keep.length ? '<p class="small muted">이미 편집자: ' + esc(plan.keep.join(', ')) + '</p>' : '') +
+    (plan.staff.length ? '<p class="small muted">운영진은 최상위 폴더로 이미 접근합니다: ' + esc(plan.staff.join(', ')) + '</p>' : '') +
+    (plan.invalid.length ? '<div class="notice warn">' + icon('alert') + '<div>이메일 형식이 아니어서 건너뜀: ' + esc(plan.invalid.join(', ')) + '</div></div>' : '') +
+    '<label class="row small" style="margin-top:12px"><input type="checkbox" id="shareNotify" checked> 추가하는 분께 Google 공유 알림 메일 보내기 (Google 계정이 없는 이메일은 알림 메일로 초대해야 합니다)</label>';
+  const m = Modal.open({ title: '브랜드 폴더 공유', wide: true, body, foot: '<button class="btn" data-close>닫기</button><button class="btn btn-primary" data-apply' + (nothing ? ' disabled' : '') + '>' + (nothing ? '바꿀 것이 없습니다' : '공유 반영') + '</button>' });
+  const apply = m.querySelector('[data-apply]');
+  apply.addEventListener('click', () => busy(apply, async () => {
+    try {
+      const r = await Api.call('brands.shareApply', { code, hash: plan.hash, notify: $('#shareNotify').checked }, { noRetry: true });
+      const failed = r.results.filter((x) => x.result === 'failed');
+      Modal.close();
+      if (failed.length) Toast.error('일부 실패: ' + failed.map((x) => x.email + ' — ' + x.message).join(' / '));
+      else Toast.ok('공유를 반영했습니다: 추가 ' + r.results.filter((x) => x.result === 'added' || x.result === 'upgraded').length + '명, 제외 ' + r.results.filter((x) => x.result === 'removed').length + '명');
+    } catch (err) {
+      Toast.error(err);
+      if (err.code === 'PLAN_CHANGED') { Modal.close(); shareDialog(code); }
+    }
+  }));
+}
+
 /* ---------- 설정 ---------- */
 async function pageSettings(view) {
   view.innerHTML =
     '<section class="card"><div class="card-head"><h2>연결 상태</h2><div class="row"><button class="btn btn-sm" id="sHealth">' + icon('refresh') + '다시 점검</button><button class="btn btn-sm btn-primary" id="sSetup">초기 설정 실행</button></div></div><div class="card-body" id="sHealthBox">' + UI.skeleton(4) + '</div></section>';
+  view.insertAdjacentHTML('beforeend', '<section class="card" id="aCard"><div class="card-head"><div class="grow"><h2>운영진 계정</h2><div class="small muted">여기 등록된 Google 계정만 운영센터에 로그인할 수 있고, 브랜드 자료 최상위 폴더의 편집자가 됩니다(하위 브랜드 폴더 전체에 적용).</div></div></div><div class="card-body stack" id="aBox">' + UI.skeleton(3) + '</div></section>');
+  adminsCard();
   view.insertAdjacentHTML('beforeend', '<section class="card"><div class="card-head"><h2>메인 상품목록</h2><span class="small muted">상품의 원본(Google 시트)</span></div><div class="card-body stack" id="mBox">' + UI.skeleton(2) + '</div></section>');
   mainProductsCard();
   view.insertAdjacentHTML('beforeend', '<section class="card"><div class="card-head"><h2>브랜드 드라이브 폴더</h2><button class="btn btn-sm" id="fSync">지금 처리</button></div><div class="card-body stack"><p class="small muted">초기 설정 이후 새로 등록된 브랜드는 BO ID가 확정되면 1분 주기로 자료 폴더를 준비하고 "구글 드라이브"에 주소를 기록합니다. 기존 브랜드는 자동 생성하지 않습니다. 기존 폴더와 공유 설정을 유지하며, 브랜드 화면의 "폴더 만들기" 버튼으로 개별 처리할 수 있습니다.</p><div id="fOut"></div></div></section>');
@@ -178,6 +298,64 @@ async function pageSettings(view) {
       Api.invalidate();
     } catch (err) { Toast.error(err); }
   }));
+}
+
+/** 설정 → 운영진 계정: 로그인 허용 목록(BO_ADMIN_EMAILS)과 최상위 폴더 편집 권한을 함께 관리한다. */
+const ROLE_LABEL = { owner: '소유자', writer: '편집자', fileOrganizer: '편집자', organizer: '관리자', commenter: '댓글 작성자', reader: '뷰어' };
+async function adminsCard() {
+  const box = $('#aBox');
+  let data;
+  try { data = await Api.call('admins.list'); } catch (e) { box.innerHTML = UI.error(e); return; }
+  const paint = (d) => {
+    data = d;
+    const missing = d.admins.filter((a) => !a.canEdit && !a.unknown);
+    box.innerHTML =
+      (d.driveError ? '<div class="notice warn">' + icon('alert') + '<div>최상위 폴더 공유 권한을 읽지 못했습니다: ' + esc(d.driveError) + '</div></div>' : '') +
+      (missing.length ? '<div class="notice warn">' + icon('alert') + '<div class="grow">최상위 폴더 편집 권한이 없는 운영진 ' + missing.length + '명: ' + esc(missing.map((a) => a.email).join(', ')) + '</div><button class="btn btn-sm" id="aSync" type="button">권한 맞추기</button></div>' : '') +
+      '<div class="table-wrap"><table class="table"><thead><tr><th>Google 계정</th><th>최상위 폴더 권한</th><th></th></tr></thead><tbody>' +
+      d.admins.map((a) => '<tr data-admin="' + esc(a.email) + '"><td class="cell-title">' + esc(a.email) + (a.email === d.me ? ' <span class="pill pill-brand">나</span>' : '') + '</td><td>' + (a.unknown ? '<span class="muted">확인 못 함</span>' : a.role ? pill(ROLE_LABEL[a.role] || a.role, a.canEdit ? 'ok' : 'warn') : pill('권한 없음', 'warn')) + '</td><td class="right">' + (a.email === d.me ? '' : '<button class="btn btn-sm btn-danger" data-remove="' + esc(a.email) + '" type="button">제외</button>') + '</td></tr>').join('') +
+      '</tbody></table></div>' +
+      '<form class="row wrap" id="aForm"><input class="input grow" id="aEmail" type="email" placeholder="추가할 Google 계정 (예: name@gmail.com)" aria-label="추가할 Google 계정" required><button class="btn btn-primary" type="submit">운영진 추가</button></form>' +
+      '<p class="small muted">추가하면 최상위 폴더 편집자로도 추가됩니다(Google 알림 메일 없음). 제외하면 최상위 폴더 권한도 뺍니다. 소유자 권한과 브랜드 폴더에 따로 준 권한은 그대로 둡니다.</p>';
+  };
+  paint(data);
+  const report = (r) => {
+    paint(r);
+    if (r.driveActionError) Toast.error('Drive 권한은 바꾸지 못했습니다: ' + r.driveActionError);
+  };
+  box.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const email = $('#aEmail').value.trim().toLowerCase();
+    if (!email) return;
+    busy(e.target.querySelector('button[type=submit]'), async () => {
+      if (!await Modal.confirm('운영진 추가', email + ' 계정을 운영진으로 등록하고 브랜드 자료 최상위 폴더 편집자로 추가합니다. 이 계정은 운영센터에 로그인하고 모든 브랜드 폴더를 편집할 수 있게 됩니다.', '추가')) return;
+      try { report(await Api.call('admins.update', { op: 'add', email }, { noRetry: true })); Toast.ok('운영진을 추가했습니다.'); } catch (err) { Toast.error(err); }
+    });
+  });
+  box.addEventListener('click', (e) => {
+    const remove = e.target.closest('[data-remove]');
+    if (remove) {
+      busy(remove, async () => {
+        const email = remove.dataset.remove;
+        if (!await Modal.confirm('운영진 제외', email + ' 계정을 운영진에서 빼고 최상위 폴더 편집 권한도 뺍니다. 이 계정은 더 이상 운영센터에 로그인할 수 없습니다.', '제외', 'btn-danger')) return;
+        try { report(await Api.call('admins.update', { op: 'remove', email }, { noRetry: true })); Toast.ok('운영진에서 제외했습니다.'); } catch (err) { Toast.error(err); }
+      });
+      return;
+    }
+    const sync = e.target.closest('#aSync');
+    if (sync) {
+      busy(sync, async () => {
+        if (!await Modal.confirm('권한 맞추기', '최상위 폴더 편집 권한이 없는 운영진을 편집자로 추가합니다(Google 알림 메일 없음).', '추가')) return;
+        try {
+          const r = await Api.call('admins.driveSync', { apply: true }, { noRetry: true });
+          const failed = r.results.filter((x) => x.result === 'failed');
+          if (failed.length) Toast.error('일부 실패: ' + failed.map((x) => x.email + ' — ' + x.message).join(' / '));
+          else Toast.ok('권한을 맞췄습니다.');
+          paint(await Api.call('admins.list'));
+        } catch (err) { Toast.error(err); }
+      });
+    }
+  });
 }
 
 /** 설정 → 메인 상품목록: 통합 상품리스트에서 한 번 만든다. 다시 만들면 새 파일이 생기고 이전 파일은 그대로 남는다. */
@@ -232,16 +410,14 @@ async function bootAdmin() {
     Admin.user = data.user;
     renderShell();
     Api.cache.set('dashboard{}', { at: Date.now(), promise: Promise.resolve(data.dashboard) });
-    const start = (hash) => Nav.apply(hash || '#/home');
-    if (window.google && google.script && google.script.url) {
-      google.script.url.getLocation((loc) => start(loc.hash ? '#' + loc.hash.replace(/^#/, '') : ''));
-      if (google.script.history) google.script.history.setChangeHandler((ev) => Nav.apply(ev.location.hash ? '#' + ev.location.hash.replace(/^#/, '') : '#/home'));
-    } else {
-      start(location.hash);
-      window.addEventListener('hashchange', () => Nav.apply(location.hash));
-    }
+    Nav.apply(location.hash || '#/home');
+    window.addEventListener('hashchange', () => Nav.apply(location.hash));
   } catch (e) {
-    $('#root').innerHTML = '<div class="boot"><strong style="color:var(--ink);font-size:17px">운영센터를 열 수 없습니다</strong><p>' + esc(e.message) + '</p>' + (e.code === 'NOT_ADMIN' || e.code === 'NO_EMAIL' ? '<p class="small">관리자 이메일은 Apps Script 스크립트 속성 BO_ADMIN_EMAILS에서 관리합니다.</p>' : '') + '<button class="btn" onclick="location.reload()">다시 시도</button></div>';
+    const notAdmin = e.code === 'NOT_ADMIN';
+    $('#root').innerHTML = '<div class="boot"><strong style="color:var(--ink);font-size:17px">운영센터를 열 수 없습니다</strong><p>' + esc(e.message) + '</p>' +
+      '<div class="row">' + (notAdmin ? '<button class="btn btn-primary" id="switchAccount" type="button">다른 Google 계정으로 로그인</button>' : '') + '<button class="btn" id="retryBoot" type="button">다시 시도</button></div></div>';
+    if (notAdmin) $('#switchAccount').addEventListener('click', () => Auth.switchAccount());
+    $('#retryBoot').addEventListener('click', () => location.reload());
   }
 }
 bootAdmin();

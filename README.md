@@ -15,9 +15,36 @@ Notion으로 하기 어려운 일을 맡는 **내부 직원 전용** Google Apps
 
 Notion `상품 · SKU` DB는 그대로 두며 운영센터에서 쓰지 않습니다.
 
-주소: **https://ops.beautyora.kr** — Cloudflare Pages `beautyora-ops`가 운영센터 웹앱을 화면 전체에 띄웁니다(`scripts/build-web.cjs admin`). 속도는 Apps Script 주소와 같고, Google 안내 문구가 보이지 않습니다. 웹앱 스크립트 속성 `BO_ALLOW_EMBED=true`가 필요합니다.
+주소: **https://ops.beautyora.kr** — Cloudflare Pages `beautyora-ops`에 `scripts/build-web.cjs admin`으로 만든 운영센터 화면이 올라갑니다. 처음 열면 **Google 로그인** 화면이 나오고, 설정 → 운영진 계정(`BO_ADMIN_EMAILS`)에 등록된 계정만 들어옵니다. 화면은 Apps Script 웹앱(소유자 권한·익명 접근)의 `doPost`를 부르고, 서버가 요청마다 Google 로그인 토큰을 확인합니다. Apps Script 주소를 직접 열면 ops 주소 안내만 나옵니다.
 
-화면: **홈**(진행 단계별 브랜드 수, 최근 수정) · **브랜드**(검색·필터, 이름을 누르면 Notion 페이지) · **설정**(연결 상태, 초기 설정)
+- 빌드: `node scripts/build-web.cjs admin dist/ops` (선택 환경변수 `BO_OPS_APP_URL`, `BO_GOOGLE_CLIENT_ID` — 없으면 화면이 서버의 `BO_GOOGLE_CLIENT_ID`를 받아 씀)
+- Google Cloud OAuth 클라이언트(웹)의 **승인된 JavaScript 원본**에 `https://ops.beautyora.kr`이 있어야 합니다.
+
+화면: **홈**(진행 단계별 브랜드 수, 브랜드 자료 현황, 최근 수정) · **브랜드**(검색·필터, 이름을 누르면 Notion 페이지) · **설정**(연결 상태, 초기 설정)
+
+## 브랜드 자료 현황(홈)
+
+Notion `구글 드라이브` 주소가 있는 브랜드 폴더(하위 폴더 한 단계까지)를 읽어 브랜드별 상태를 보여 줍니다. **Drive·Notion에는 아무것도 쓰지 않습니다.** 같은 폴더를 쓰는 공동 브랜드는 한 줄입니다.
+
+| 상태 | 뜻 |
+|---|---|
+| 확인 필요 | 브랜드가 기준 시트(`…상품정보목록`)의 상품 행을 필수 칸까지 모두 채움 |
+| 작성 중 | 브랜드가 기준 시트를 고침. 작성된 상품 행 수와 필수 칸(상품명·바코드·거래 유형·온라인 최저가·거래 유형별 공급가) 누락 행 수 표시 |
+| 파일 올림 | 브랜드가 폴더에 파일을 올림(기준 시트는 아직 안 고침) |
+| 활동 없음 / 기준 시트 없음 / 폴더 없음 | 기준 시트만 있음 / 폴더에 기준 시트가 없음 / Notion에 폴더 주소가 없음 |
+
+- 직원 판단: 운영진(`BO_ADMIN_EMAILS`), `BO_STAFF_EMAILS`(선택), 지금 보고 있는 계정. 그 밖의 계정과 익명 편집은 브랜드 활동으로 셉니다.
+- 폴더를 **열어 보기만 한 것**은 Google이 알려 주지 않아 표시할 수 없습니다. 첫 활동 시각으로 대신합니다.
+- 실시간: 홈을 열어 둔 동안 1분마다 다시 확인합니다(서버는 45초 동안 결과를 나눠 씀, `지금 확인`은 바로 다시 읽음). 시간 트리거를 쓰지 않아 하루 트리거 실행 한도를 쓰지 않습니다.
+- 기준 시트가 엑셀이면 내 드라이브에 임시 Google 시트로 바꿔 읽고 바로 휴지통으로 보냅니다(브랜드 폴더에는 아무것도 생기지 않음). 같은 수정본은 6시간 동안 다시 읽지 않고, 한 번에 4개까지만 읽고 나머지는 다음 확인 때 이어서 읽습니다.
+
+## Drive 공유 권한
+
+모두 **Google Drive 자체 공유 권한(편집자)**입니다. 운영센터는 공유 창에서 하는 일을 대신 누르고, 바뀐 권한은 Drive 공유 창에서도 그대로 보이고 고칠 수 있습니다.
+
+- **운영진** — 설정 → 운영진 계정에서 추가/제외하면 로그인 허용 목록(`BO_ADMIN_EMAILS`)과 브랜드 자료 최상위 폴더(`BO_ROOT_FOLDER_ID`) 편집자를 함께 바꿉니다(알림 메일 없음). 최상위 폴더 권한은 모든 브랜드 폴더(앞으로 생길 폴더 포함)에 그대로 적용됩니다. `권한 맞추기`는 편집 권한이 없는 운영진만 추가합니다. 소유자·배포 계정 권한, 브랜드 폴더에 따로 준 권한은 건드리지 않고, 자기 자신은 제외할 수 없습니다.
+- **브랜드** — Notion 브랜드 목록의 `자료 공유 이메일`(텍스트, 쉼표로 여러 개)에 적힌 Google 계정을 그 브랜드 폴더의 편집자로 만듭니다. 브랜드 화면의 `공유` 버튼 → 미리보기(추가/빼기/건너뜀) → `공유 반영`. 공동 회사 폴더는 소속 브랜드 이메일을 합칩니다. 운영진 이메일과 형식이 틀린 값은 건너뜁니다. 빼기는 **운영센터가 추가했던 권한만**(스크립트 속성 `BO_SHARE_ADDED_<폴더 ID>`에 기록), 소유자·운영진·직접 준 권한은 그대로입니다. 미리보기 이후 Notion·Drive가 바뀌면 반영하지 않고 다시 확인하게 합니다. 자동 공유는 하지 않습니다.
+- 공유받는 사람은 그 이메일의 Google 계정으로 로그인해야 합니다. Google 계정이 없는 주소는 알림 메일(기본 켜짐)로만 초대할 수 있습니다.
 
 ## 디렉터리
 
@@ -28,8 +55,10 @@ src/
   02_Notion.gs      Notion API(재시도 포함)·스키마 해석·값 변환·목록 캐시
   03_Auth.gs        관리자·소유자·트리거 확인
   10_Brands.gs      브랜드 목록(읽기)
+  14_DriveAccess.gs 운영진 ↔ 최상위 폴더, 브랜드 '자료 공유 이메일' ↔ 브랜드 폴더 공유(Drive 편집자)
   15_Files.gs       Drive 루트 폴더
   16_BrandFolders.gs 신규 브랜드 폴더 자동 준비·개별 복구
+  17_BrandActivity.gs 홈의 브랜드 자료 현황(Drive 폴더·기준 시트 읽기 전용)
   30_MainProducts.gs 메인 상품목록 만들기(통합리스트 → 새 시트, 제품 링크 찾기)
   18_BrandIntake.gs 신규 Form 응답 폴링·중복 방지·등록 복구
   19_Dashboard.gs   홈 화면
@@ -37,11 +66,13 @@ src/
   90_Main.gs        doGet, 단일 API 진입점 api()
   Index.html / Styles.html / Common.html / Admin.html
 scripts/
-  build-web.cjs     ops.beautyora.kr 페이지(운영센터를 화면 전체에 띄움)
+  build-web.cjs     ops.beautyora.kr 페이지(운영센터 화면 + Google 로그인, 서버는 doPost)
 tests/
   harness.cjs       가짜 Notion·Drive·Apps Script 환경
   server.test.cjs   서버 흐름·보안 테스트
   intake.test.cjs   bridge→응답→Notion→Drive 모의 회귀 테스트
+  brand-activity.test.cjs 브랜드 자료 현황(업로드·시트 진행·공동 폴더·읽기 전용)
+  access.test.cjs   Google 로그인 토큰 확인, 운영진·브랜드 Drive 공유
   ui.e2e.cjs        Chromium 화면 테스트 + 스크린샷
 ```
 
@@ -63,11 +94,12 @@ tests/
 
 ## 보안 원칙
 
-- 웹앱은 **접속한 사용자 권한**으로 실행되고, `BO_ADMIN_EMAILS`에 있는 Google 계정만 사용할 수 있습니다.
+- 웹앱은 **배포한 계정(소유자) 권한·익명 접근**으로 실행됩니다. 관리자 요청은 매번 Google 로그인(ID 토큰)을 Google에 확인하고(클라이언트 ID·발급자·이메일 인증·만료), 그 이메일이 `BO_ADMIN_EMAILS`에 있어야 합니다. 브라우저 쿠키나 Session 계정은 웹 요청에 쓰지 않습니다.
+- 배포 계정(clasp 인증 계정)이 브랜드 자료 최상위 폴더의 소유자 또는 편집자여야 합니다. 운영센터의 Drive 작업은 이 계정으로 실행됩니다.
 - 화면에서 부를 수 있는 서버 함수는 `api()` 하나이며, 요청마다 관리자를 확인합니다.
 - 편집기·트리거 전용 함수(`setupBeautyora`, `runHealthCheck`, `scheduledHealthCheck`)는 소유자 실행이나 설치된 트리거에서만 동작합니다.
 - 테스트(`only the audited entry points…`)가 새 공개 함수가 생기면 실패하도록 막습니다.
-- 다른 페이지 안에 넣는(iframe) 표시는 기본으로 막혀 있습니다. 필요하면 `BO_ALLOW_EMBED=true`.
+- 편집기 실행 함수(`setupBrandIntake` 등)는 편집기를 실행한 계정이 `BO_ADMIN_EMAILS`에 있어야 합니다(웹 익명 방문자는 거절).
 
 ## 스크립트 속성
 
@@ -78,10 +110,12 @@ tests/
 | `BO_NOTION_BRAND_DATA_SOURCE_ID` | ✅ | 브랜드 목록 데이터 소스 ID |
 | `BO_ROOT_FOLDER_ID` | ✅ | 브랜드 자료 루트 Drive 폴더 |
 | `BO_TEMPLATE_FILE_ID` | | 브랜드 폴더에 복사할 취합 엑셀 양식 파일 ID (없으면 양식 없이 폴더만) |
-| `BO_ALLOW_EMBED` | ops 주소 | `true`면 ops.beautyora.kr 안에 표시 허용 |
+| `BO_GOOGLE_CLIENT_ID` | ✅ | ops.beautyora.kr Google 로그인 OAuth 클라이언트 ID(공개값) |
+| `BO_OPS_URL` | | Apps Script 주소를 직접 열었을 때 안내할 주소(기본 `https://ops.beautyora.kr`) |
 | `BO_NOTION_ACTIVITY_DATA_SOURCE_ID` | 권장 | 연락 · 진행 이력 (변경 이력에 사용 예정) |
+| `BO_STAFF_EMAILS` | | 운영진이 아니지만 브랜드 폴더에 파일을 넣는 직원 Google 계정(쉼표 구분). 브랜드 자료 현황에서 직원 활동으로 셉니다 |
 
-v2에서 쓰던 속성(`BO_NOTION_LINK_…`, `BO_NOTION_BILLING_…`, `BO_NOTION_INVENTORY_/MOVEMENT_/STORE_/TERMS_…`, `BO_PARTNER_WEBAPP_URL`, `BO_GOOGLE_CLIENT_ID`, `BO_SPREADSHEET_ID`, `BO_MIGRATION_STATE`)은 더 이상 읽지 않습니다. 남아 있어도 문제는 없습니다. `BO_NOTION_PRODUCT_DATA_SOURCE_ID`는 메인 상품목록을 만들 때 제품 링크를 찾는 데만 읽습니다.
+v2에서 쓰던 속성(`BO_NOTION_LINK_…`, `BO_NOTION_BILLING_…`, `BO_NOTION_INVENTORY_/MOVEMENT_/STORE_/TERMS_…`, `BO_PARTNER_WEBAPP_URL`, `BO_ALLOW_EMBED`, `BO_SPREADSHEET_ID`, `BO_MIGRATION_STATE`)은 더 이상 읽지 않습니다. 남아 있어도 문제는 없습니다. `BO_NOTION_PRODUCT_DATA_SOURCE_ID`는 메인 상품목록을 만들 때 제품 링크를 찾는 데만 읽습니다.
 
 ## 처음 설정(환경마다 한 번)
 
