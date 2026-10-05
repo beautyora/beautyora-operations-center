@@ -169,60 +169,61 @@ function shareSetup() {
   return { env, data, folder, patch, perms };
 }
 
-test('brand share: preview merges the shared folder, skips staff and typos, changes nothing', () => {
+test('brand share: the dialog shows the Notion emails, folder access, the shared folder, and changes nothing', () => {
   const { env, folder, perms } = shareSetup();
-  const plan = ok(env.api('brands.sharePreview', { code: 'BO-0001' }));
-  assert.equal(plan.folderId, folder);
-  assert.deepEqual(plan.brands.map((b) => b.code), ['BO-0001', 'BO-0002']);
-  assert.deepEqual(plan.add.map((a) => a.email), ['ceo@brand.example', 'md@brand.example', 'cs@cellybon.example']);
-  assert.deepEqual(plan.staff, ['admin@beautyora.test'], 'admins already reach every folder through the top folder');
-  assert.deepEqual(plan.invalid, ['담당자']);
-  assert.deepEqual(plan.remove, []);
-  assert.equal(plan.missingProperty, false);
-  assert.deepEqual(perms(), [], 'preview only');
-  assert.match(env.api('brands.sharePreview', { code: 'BO-0003' }).message, /구글 드라이브 폴더 주소가 없습니다/);
-  assert.equal(env.api('brands.sharePreview', { code: 'BO-0001' }, env.idToken('stranger@gmail.com')).code, 'NOT_ADMIN');
+  env.drive.items[folder].permissions = [{ id: 'manual', type: 'user', role: 'writer', emailAddress: 'manual@partner.example' }, { id: 'v', type: 'user', role: 'reader', emailAddress: 'md@brand.example' }];
+  const st = ok(env.api('brands.share', { code: 'BO-0001' }));
+  assert.equal(st.folderId, folder);
+  assert.equal(st.notionText, 'CEO@brand.example, admin@beautyora.test; 담당자, md@brand.example');
+  assert.deepEqual(st.emails, ['ceo@brand.example', 'admin@beautyora.test', 'md@brand.example']);
+  assert.deepEqual(st.invalid, ['담당자']);
+  assert.deepEqual(st.driveOnly, ['manual@partner.example'], 'shared in Drive but not in Notion: shown so saving does not surprise');
+  assert.deepEqual(st.others, [{ code: 'BO-0002', name: '셀리본', emails: ['cs@cellybon.example'] }]);
+  assert.equal(st.access['md@brand.example'], 'viewer');
+  assert.equal(st.access['manual@partner.example'], 'editor');
+  assert.equal(st.missingProperty, false);
+  assert.deepEqual(perms(), ['manual@partner.example:writer', 'md@brand.example:reader'], 'opening changes nothing');
+  assert.match(env.api('brands.share', { code: 'BO-0003' }).message, /구글 드라이브 폴더 주소가 없습니다/);
+  assert.equal(env.api('brands.share', { code: 'BO-0001' }, env.idToken('stranger@gmail.com')).code, 'NOT_ADMIN');
 });
 
-test('brand share: apply adds editors with the share mail, removes only what the ops center added', () => {
-  const { env, data, folder, patch, perms } = shareSetup();
-  // 직원이 Drive에서 직접 준 권한과, 이미 뷰어인 브랜드 이메일.
-  env.drive.items[folder].permissions = [{ id: 'manual', type: 'user', role: 'writer', emailAddress: 'manual@partner.example' }, { id: 'viewer', type: 'user', role: 'reader', emailAddress: 'md@brand.example' }];
-  const plan = ok(env.api('brands.sharePreview', { code: 'BO-0002' }));
-  assert.deepEqual(plan.add.find((a) => a.email === 'md@brand.example'), { email: 'md@brand.example', current: 'reader' });
-  const done = ok(env.api('brands.shareApply', { code: 'BO-0002', hash: plan.hash }));
-  assert.deepEqual(done.results.map((r) => r.email + ':' + r.result), ['ceo@brand.example:added', 'md@brand.example:upgraded', 'cs@cellybon.example:added']);
-  assert.deepEqual(perms(), ['ceo@brand.example:writer', 'cs@cellybon.example:writer', 'manual@partner.example:writer', 'md@brand.example:writer']);
-  assert.ok(env.drive.notifications.every((n) => n.notify && /뷰티오라 입점 자료 폴더/.test(n.message)));
-  assert.deepEqual(done.plan.add, [], 'nothing left to do');
+test('brand share: saving writes Notion and makes Drive match the list, with no notification mail', () => {
+  const { env, data, folder, perms } = shareSetup();
+  env.drive.items[folder].permissions = [{ id: 'manual', type: 'user', role: 'writer', emailAddress: 'manual@partner.example' }, { id: 'v', type: 'user', role: 'reader', emailAddress: 'md@brand.example' }];
+  const st = ok(env.api('brands.share', { code: 'BO-0001' }));
+  // 직원이 창에서 manual 계정을 지우고 새 이메일을 더한다(운영진 이메일은 남아 있어도 건드리지 않음).
+  const r = ok(env.api('brands.shareSave', { code: 'BO-0001', before: st.notionText, emails: 'ceo@brand.example\nmd@brand.example\nadmin@beautyora.test\nNew@Brand.example' }));
+  assert.deepEqual(r.results.map((x) => x.email + ':' + x.result).sort(), ['ceo@brand.example:added', 'cs@cellybon.example:added', 'manual@partner.example:removed', 'md@brand.example:upgraded', 'new@brand.example:added']);
+  assert.deepEqual(perms(), ['ceo@brand.example:writer', 'cs@cellybon.example:writer', 'md@brand.example:writer', 'new@brand.example:writer'], 'the other brand in the same folder keeps access');
+  assert.ok(env.drive.notifications.every((n) => n.notify === false), 'no Google share mail');
+  const notion = ok(env.api('brands.list')).brands.find((b) => b.code === 'BO-0001').shareEmails;
+  assert.equal(notion, 'ceo@brand.example, md@brand.example, admin@beautyora.test, new@brand.example', 'Notion now holds the list as saved');
+  assert.deepEqual(r.state.driveOnly, []);
 
-  // Notion에서 이메일을 지우면 운영센터가 추가했던 권한만 뺀다(직접 준 권한은 그대로).
-  patch(data.b1, { '자료 공유 이메일': 'md@brand.example' });
-  env.api('system.refresh');
-  const next = ok(env.api('brands.sharePreview', { code: 'BO-0001' }));
-  assert.deepEqual(next.remove, ['ceo@brand.example']);
-  ok(env.api('brands.shareApply', { code: 'BO-0001', hash: next.hash }));
-  assert.deepEqual(perms(), ['cs@cellybon.example:writer', 'manual@partner.example:writer', 'md@brand.example:writer']);
-  assert.equal(env.call('shareAddedList_', folder).join(','), 'md@brand.example,cs@cellybon.example');
+  // 목록에서 지우면 권한이 빠진다. 빈 목록이면 이 브랜드 이메일은 모두 빠지고 같은 폴더의 다른 브랜드 이메일은 남는다.
+  const again = ok(env.api('brands.shareSave', { code: 'BO-0001', before: notion, emails: '' }));
+  assert.deepEqual(again.results.map((x) => x.result), ['removed', 'removed', 'removed']);
+  assert.deepEqual(perms(), ['cs@cellybon.example:writer']);
+  assert.equal(ok(env.api('brands.list')).brands.find((b) => b.code === 'BO-0001').shareEmails, '');
+  assert.ok(env.drive.items[env.drive.root].permissions.some((p) => p.role === 'owner'), 'owner untouched');
 });
 
-test('brand share: a stale preview is refused, mail-less invites to non-Google addresses are reported', () => {
+test('brand share: a stale dialog, a typo or a non-Google address never half-saves silently', () => {
   const { env, data, patch, perms } = shareSetup();
-  const plan = ok(env.api('brands.sharePreview', { code: 'BO-0001' }));
-  patch(data.b2, { '자료 공유 이메일': 'cs@cellybon.example, new@cellybon.example' });
-  env.api('system.refresh');
-  const stale = env.api('brands.shareApply', { code: 'BO-0001', hash: plan.hash });
-  assert.equal(stale.code, 'PLAN_CHANGED');
-  assert.deepEqual(perms(), []);
+  const st = ok(env.api('brands.share', { code: 'BO-0001' }));
+  patch(data.b1, { '자료 공유 이메일': 'someone.else@brand.example' });
+  const stale = env.api('brands.shareSave', { code: 'BO-0001', before: st.notionText, emails: 'ceo@brand.example' });
+  assert.equal(stale.code, 'CHANGED');
+  assert.deepEqual(perms(), [], 'nothing changed in Drive');
 
-  patch(data.b2, { '자료 공유 이메일': 'someone@nogoogle.test' });
-  patch(data.b1, { '자료 공유 이메일': '' });
-  env.api('system.refresh');
-  const fresh = ok(env.api('brands.sharePreview', { code: 'BO-0001' }));
-  const r = ok(env.api('brands.shareApply', { code: 'BO-0001', hash: fresh.hash, notify: false }));
-  assert.equal(r.results[0].result, 'failed');
-  assert.match(r.results[0].message, /Notify people/);
-  assert.deepEqual(perms(), []);
-  ok(env.api('brands.shareApply', { code: 'BO-0001', hash: fresh.hash, notify: true }));
-  assert.deepEqual(perms(), ['someone@nogoogle.test:writer']);
+  const typo = env.api('brands.shareSave', { code: 'BO-0001', before: 'someone.else@brand.example', emails: 'ceo@brand, ok@brand.example' });
+  assert.equal(typo.code, 'BAD_EMAIL');
+  assert.match(typo.message, /ceo@brand/);
+  assert.equal(ok(env.api('brands.list')).brands.find((b) => b.code === 'BO-0001').shareEmails, 'someone.else@brand.example', 'Notion untouched on a typo');
+
+  const r = ok(env.api('brands.shareSave', { code: 'BO-0001', before: 'someone.else@brand.example', emails: 'friend@nogoogle.test, ok@brand.example' }));
+  const failed = r.results.find((x) => x.email === 'friend@nogoogle.test');
+  assert.equal(failed.result, 'failed');
+  assert.match(failed.message, /Google 계정이 아닌 이메일/);
+  assert.deepEqual(perms(), ['cs@cellybon.example:writer', 'ok@brand.example:writer']);
 });

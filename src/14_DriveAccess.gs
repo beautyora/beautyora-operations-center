@@ -1,14 +1,11 @@
 /**
  * Drive 공유 권한. Google Drive 자체 공유 권한(편집자)만 쓰며, 운영센터는 공유 창에서 하는 일을 대신 누른다.
  * - 운영진: 브랜드 자료 최상위 폴더(BO_ROOT_FOLDER_ID)의 편집자. 하위 브랜드 폴더 전체에 그대로 적용된다.
- * - 브랜드: Notion '자료 공유 이메일'에 적힌 Google 계정을 그 브랜드 폴더의 편집자로. 공동 폴더는 소속 브랜드 이메일을 합친다.
- * 권한을 넓히거나 줄이는 일은 미리보기를 보고 관리자가 확인했을 때만 한다(자동 실행 없음).
- * 브랜드 권한을 뺄 때는 운영센터가 추가했던 권한만 뺀다. 소유자·운영진·실행 계정 권한은 건드리지 않는다.
+ * - 브랜드: Notion '자료 공유 이메일'에 있으면 그 브랜드 폴더의 편집자, 없으면 권한 없음(공유 창에서 저장할 때 맞춘다).
+ * 권한은 관리자가 화면에서 저장할 때만 바뀐다(자동 실행 없음). 소유자·운영진·직원·배포 계정 권한은 건드리지 않는다.
  */
 const BO_SHARE = Object.freeze({
-  ADDED_PREFIX: 'BO_SHARE_ADDED_',
-  RANK: { reader: 1, commenter: 2, writer: 3, fileOrganizer: 4, organizer: 5, owner: 6 },
-  BRAND_MESSAGE: '뷰티오라 입점 자료 폴더를 공유드립니다. 기준 시트 작성과 자료 업로드를 이 폴더에서 해 주세요.'
+  RANK: { reader: 1, commenter: 2, writer: 3, fileOrganizer: 4, organizer: 5, owner: 6 }
 });
 
 function driveRootId_() {
@@ -128,90 +125,129 @@ function apiAdminsDriveSync_(payload) {
 }
 
 /* ---------- 브랜드 '자료 공유 이메일' ↔ 브랜드 폴더 ---------- */
+/*
+ * 규칙은 하나: Notion '자료 공유 이메일'에 있는 Google 계정은 그 브랜드 폴더의 편집자, 없으면 권한 없음.
+ * 공유 창에서 이메일을 고치고 저장하면 Notion에 쓰고 Drive를 그 목록에 맞춘다. 알림 메일은 보내지 않는다(영업 직원이 직접 안내).
+ * 같은 폴더를 쓰는 브랜드(공동 회사 폴더)의 이메일도 그 폴더에 접근한다.
+ * 건드리지 않는 권한: 소유자, 운영진, BO_STAFF_EMAILS 직원, 배포 계정, 상위 폴더에서 물려받은 권한, 링크 공유.
+ */
 
-function shareAddedList_(folderId) {
-  try {
-    const list = JSON.parse(prop_(BO_SHARE.ADDED_PREFIX + folderId) || '[]');
-    return Array.isArray(list) ? list.filter(isEmail_) : [];
-  } catch (ignored) { return []; }
+function shareParseEmails_(text) {
+  const valid = [], invalid = [];
+  String(text || '').split(/[,\s;]+/).map(function (v) { return v.trim().toLowerCase(); }).filter(Boolean).forEach(function (email) {
+    const list = isEmail_(email) ? valid : invalid;
+    if (list.indexOf(email) < 0) list.push(email);
+  });
+  return { valid: valid, invalid: invalid };
 }
 
-function brandSharePlan_(code) {
+/**
+ * 공유 창이 건드리지 않는 계정: 운영진, BO_STAFF_EMAILS 직원, 배포 계정, 최상위 폴더에 공유된 계정.
+ * 최상위 폴더 권한은 모든 브랜드 폴더가 물려받는데, 내 드라이브에서는 물려받은 권한인지 Drive가 알려 주지 않으므로 이렇게 거른다.
+ */
+function shareProtectedEmails_() {
+  let inherited = [];
+  try { inherited = Object.keys(driveUserPermissions_(driveRootId_())); } catch (error) { logError_('share:root', error); }
+  return adminEmails_().concat(parseEmails_(prop_(BO.PROPS.STAFF_EMAILS)), [effectiveEmail_()], inherited).filter(Boolean)
+    .filter(function (v, i, all) { return all.indexOf(v) === i; });
+}
+
+/** 브랜드 폴더 공유 상태. 이 폴더에 직접 공유된 계정과 inherited 표시를 함께 본다. */
+function brandShareState_(code) {
   const schema = notionSchema_('brand');
   const brand = requireBrand_(code);
   const folderId = brandFolderUrlId_(brand.drive);
   if (!folderId) throw userError_('Notion에 구글 드라이브 폴더 주소가 없습니다: ' + brand.code);
-  const members = listBrands_().filter(function (b) { return brandFolderUrlId_(b.drive) === folderId; });
-  if (!members.some(function (b) { return b.code === brand.code; })) members.push(brand);
-  // 브랜드 ID 순으로 읽어 결과(그리고 미리보기 확인값)가 항상 같게 한다.
-  members.sort(function (a, b) { return String(a.code).localeCompare(String(b.code)); });
-  const admins = adminEmails_(), executor = effectiveEmail_();
-  const invalid = [], staff = [], desired = [];
-  members.forEach(function (b) {
-    String(b.shareEmails || '').split(/[,\s;]+/).map(function (v) { return v.trim().toLowerCase(); }).filter(Boolean).forEach(function (email) {
-      if (!isEmail_(email)) { if (invalid.indexOf(email) < 0) invalid.push(email); return; }
-      if (admins.indexOf(email) >= 0 || email === executor) { if (staff.indexOf(email) < 0) staff.push(email); return; }
-      if (desired.indexOf(email) < 0) desired.push(email);
-    });
-  });
+  const others = listBrands_().filter(function (b) { return b.code !== brand.code && brandFolderUrlId_(b.drive) === folderId; })
+    .sort(function (a, b) { return String(a.code).localeCompare(String(b.code)); });
   const perms = driveUserPermissions_(folderId);
-  const added = shareAddedList_(folderId);
-  const add = desired.filter(function (e) { return !driveCanEdit_(perms[e]); }).map(function (e) { return { email: e, current: perms[e] ? perms[e].role : '' }; });
-  const keep = desired.filter(function (e) { return driveCanEdit_(perms[e]); });
-  const remove = added.filter(function (e) {
-    return desired.indexOf(e) < 0 && perms[e] && perms[e].role !== 'owner' && admins.indexOf(e) < 0 && e !== executor;
-  });
-  const plan = {
-    folderId: folderId, url: brand.drive,
-    brands: members.map(function (b) { return { code: b.code, name: b.name }; }),
-    add: add, remove: remove, keep: keep, invalid: invalid, staff: staff,
+  const direct = driveDirectUserPermissions_(folderId);
+  const protectedEmails = shareProtectedEmails_();
+  const mine = shareParseEmails_(brand.shareEmails);
+  const otherEmails = [];
+  others.forEach(function (b) { shareParseEmails_(b.shareEmails).valid.forEach(function (e) { if (otherEmails.indexOf(e) < 0) otherEmails.push(e); }); });
+  // Notion에는 없지만 이 폴더에 직접 공유돼 있는 계정. 저장하면 목록에 없는 계정은 권한이 빠지므로 처음부터 목록에 보여 준다.
+  const driveOnly = Object.keys(direct).filter(function (e) {
+    return direct[e].role !== 'owner' && protectedEmails.indexOf(e) < 0 && mine.valid.indexOf(e) < 0 && otherEmails.indexOf(e) < 0;
+  }).sort();
+  const access = {};
+  Object.keys(perms).forEach(function (e) { access[e] = driveCanEdit_(perms[e]) ? 'editor' : 'viewer'; });
+  return {
+    brand: { code: brand.code, name: brand.name }, folderId: folderId, url: brand.drive,
+    notionText: brand.shareEmails || '', emails: mine.valid, invalid: mine.invalid, driveOnly: driveOnly,
+    others: others.map(function (b) { return { code: b.code, name: b.name, emails: shareParseEmails_(b.shareEmails).valid }; }),
+    access: access, staff: protectedEmails.filter(function (e) { return !!perms[e]; }),
     missingProperty: !schema.ids.shareEmails
   };
-  plan.hash = sha256_(JSON.stringify({ folderId: folderId, add: add, remove: remove }));
-  return plan;
 }
 
-function apiBrandSharePreview_(payload) {
-  // 반영할 때와 같은 기준이 되도록 Notion에서 새로 읽는다.
-  bumpCache_('brand');
-  return brandSharePlan_(payload && payload.code);
+/** 이 폴더에 직접 준 사용자 권한만(상위 폴더에서 물려받은 권한 제외). Drive가 알려 주지 않으면 전체를 직접 권한으로 본다. */
+function driveDirectUserPermissions_(fileId) {
+  const map = {};
+  let pageToken = '';
+  do {
+    const res = Drive.Permissions.list(fileId, { fields: 'nextPageToken, permissions(id,type,role,emailAddress,permissionDetails(inherited))', supportsAllDrives: true, pageToken: pageToken || undefined });
+    (res.permissions || []).forEach(function (p) {
+      const email = String(p.emailAddress || '').toLowerCase();
+      const inherited = (p.permissionDetails || []).length > 0 && (p.permissionDetails || []).every(function (d) { return d.inherited; });
+      if (p.type === 'user' && email && !inherited) map[email] = { id: p.id, role: p.role };
+    });
+    pageToken = res.nextPageToken || '';
+  } while (pageToken);
+  return map;
 }
 
-/** 미리보기와 같은 계획일 때만 실행한다. 그 사이 Notion·Drive가 바뀌었으면 다시 확인하게 한다. */
-function apiBrandShareApply_(payload) {
-  const notify = !payload || payload.notify !== false;
+function apiBrandShareGet_(payload) {
+  bumpCache_('brand'); // Notion에서 방금 고친 값도 보이도록 새로 읽는다.
+  return brandShareState_(payload && payload.code);
+}
+
+/**
+ * 공유 창 저장: Notion '자료 공유 이메일'을 고치고 Drive 편집자를 그 목록에 맞춘다.
+ * before는 창을 열 때의 Notion 값이다. 그 사이 Notion에서 바뀌었으면 덮어쓰지 않고 다시 열게 한다.
+ */
+function apiBrandShareSave_(payload) {
+  payload = payload || {};
+  const parsed = shareParseEmails_(payload.emails);
+  if (parsed.invalid.length) throw userError_('이메일 형식을 확인해 주세요: ' + parsed.invalid.join(', '), 'BAD_EMAIL');
   return withLock_(function () {
     bumpCache_('brand');
-    const plan = brandSharePlan_(payload && payload.code);
-    if (!payload || payload.hash !== plan.hash) throw userError_('미리보기 이후 공유 대상이 바뀌었습니다. 다시 확인해 주세요.', 'PLAN_CHANGED');
-    const perms = driveUserPermissions_(plan.folderId);
-    const tracked = shareAddedList_(plan.folderId);
+    const schema = notionSchema_('brand');
+    if (!schema.ids.shareEmails) throw userError_('Notion 브랜드 목록에 "자료 공유 이메일"(텍스트) 속성이 없습니다.');
+    const state = brandShareState_(payload.code);
+    if (String(payload.before == null ? '' : payload.before) !== String(state.notionText)) {
+      throw userError_('창을 연 뒤 Notion의 자료 공유 이메일이 바뀌었습니다. 창을 다시 열어 주세요.', 'CHANGED');
+    }
+    const text = parsed.valid.join(', ');
+    const brand = requireBrand_(payload.code);
+    if (text !== String(state.notionText).trim()) notionPatch_(brand.pageId, notionProps_(schema, { shareEmails: text }));
+    bumpCache_('brand');
+
+    const protectedEmails = shareProtectedEmails_();
+    const desired = parsed.valid.slice();
+    state.others.forEach(function (b) { b.emails.forEach(function (e) { if (desired.indexOf(e) < 0) desired.push(e); }); });
+    const perms = driveUserPermissions_(state.folderId), direct = driveDirectUserPermissions_(state.folderId);
     const results = [];
-    plan.add.forEach(function (item) {
+    desired.filter(function (e) { return protectedEmails.indexOf(e) < 0; }).forEach(function (email) {
       try {
-        const result = driveGrantEditor_(plan.folderId, item.email, perms[item.email], notify, BO_SHARE.BRAND_MESSAGE);
-        if (result === 'added' || result === 'upgraded') { if (tracked.indexOf(item.email) < 0) tracked.push(item.email); }
-        results.push({ email: item.email, result: result });
+        const result = driveGrantEditor_(state.folderId, email, direct[email] || (driveCanEdit_(perms[email]) ? perms[email] : null), false);
+        if (result !== 'already') results.push({ email: email, result: result });
       } catch (error) {
-        results.push({ email: item.email, result: 'failed', message: errorMessage_(error) });
+        const noAccount = /no google account|notify people/i.test(errorMessage_(error));
+        results.push({ email: email, result: 'failed', message: noAccount ? 'Google 계정이 아닌 이메일입니다. 이 주소로 Google 계정을 만든 뒤 다시 저장해 주세요.' : errorMessage_(error) });
       }
     });
-    plan.remove.forEach(function (email) {
+    Object.keys(direct).forEach(function (email) {
+      if (desired.indexOf(email) >= 0 || protectedEmails.indexOf(email) >= 0 || direct[email].role === 'owner') return;
       try {
-        Drive.Permissions.remove(plan.folderId, perms[email].id, { supportsAllDrives: true });
-        if (tracked.indexOf(email) >= 0) tracked.splice(tracked.indexOf(email), 1);
+        Drive.Permissions.remove(state.folderId, direct[email].id, { supportsAllDrives: true });
         results.push({ email: email, result: 'removed' });
       } catch (error) {
         results.push({ email: email, result: 'failed', message: errorMessage_(error) });
       }
     });
-    // 이미 Drive에서 직접 지운 기록은 정리한다.
-    const live = driveUserPermissions_(plan.folderId);
-    const kept = tracked.filter(function (e) { return !!live[e]; });
-    if (kept.length) props_().setProperty(BO_SHARE.ADDED_PREFIX + plan.folderId, JSON.stringify(kept));
-    else props_().deleteProperty(BO_SHARE.ADDED_PREFIX + plan.folderId);
-    logInfo_('brands.share', { folder: plan.folderId, added: results.filter(function (r) { return r.result === 'added' || r.result === 'upgraded'; }).length, removed: results.filter(function (r) { return r.result === 'removed'; }).length, failed: results.filter(function (r) { return r.result === 'failed'; }).length });
+    logInfo_('brands.share', { folder: state.folderId, added: results.filter(function (r) { return r.result === 'added' || r.result === 'upgraded'; }).length, removed: results.filter(function (r) { return r.result === 'removed'; }).length, failed: results.filter(function (r) { return r.result === 'failed'; }).length });
     bumpCache_('driveActivity');
-    return { results: results, plan: brandSharePlan_(plan.brands[0].code) };
+    return { results: results, state: brandShareState_(payload.code) };
   }, 20000);
 }

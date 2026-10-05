@@ -251,34 +251,68 @@ async function pageBrands(view) {
   paint();
 }
 
-/** 브랜드 폴더 공유: Notion '자료 공유 이메일'을 그 브랜드 폴더의 편집자로. 미리보기 → 확인 후 실행. */
+/**
+ * 브랜드 폴더 공유: Notion '자료 공유 이메일'을 이 창에서 보고 고친다.
+ * 목록에 있으면 이 폴더 편집자, 없으면 권한 없음. 저장하면 Notion에 쓰고 Drive를 맞춘다. 알림 메일은 보내지 않는다.
+ */
 async function shareDialog(code) {
-  let plan;
-  try { plan = await Api.call('brands.sharePreview', { code }, { noRetry: true }); } catch (e) { Toast.error(e); return; }
-  const role = (r) => (r ? ' <span class="small muted">(지금 ' + esc(ROLE_LABEL[r] || r) + ')</span>' : '');
-  const list = (items, render) => (items.length ? '<ul>' + items.map(render).join('') + '</ul>' : '<p class="small muted">없음</p>');
-  const nothing = !plan.add.length && !plan.remove.length;
+  let st;
+  try { st = await Api.call('brands.share', { code }, { noRetry: true }); } catch (e) { Toast.error(e); return; }
+  const parse = (text) => {
+    const valid = [], invalid = [];
+    String(text || '').split(/[,\s;]+/).map((v) => v.trim().toLowerCase()).filter(Boolean).forEach((e) => {
+      const list = /^[^@\s,;<>"']+@[^@\s,;<>"']+\.[^@\s,;<>"']+$/.test(e) ? valid : invalid;
+      if (!list.includes(e)) list.push(e);
+    });
+    return { valid, invalid };
+  };
+  const otherEmails = st.others.flatMap((b) => b.emails);
+  const hadAccess = st.emails.concat(st.driveOnly).filter((e) => st.access[e] === 'editor' && !otherEmails.includes(e));
   const body =
-    (plan.missingProperty ? '<div class="notice warn">' + icon('alert') + '<div>Notion 브랜드 목록에 <b>자료 공유 이메일</b>(텍스트) 속성이 없습니다. 속성을 만들고 Google 계정 이메일을 쉼표로 넣어 주세요.</div></div>' : '') +
-    '<p class="small muted">폴더: ' + esc(plan.brands.map((b) => b.name + ' (' + b.code + ')').join(' · ')) + (plan.brands.length > 1 ? ' — 같은 폴더를 쓰는 브랜드의 이메일을 합칩니다.' : '') + '</p>' +
-    '<h3 class="section-title">편집자로 추가</h3>' + list(plan.add, (a) => '<li>' + esc(a.email) + role(a.current) + '</li>') +
-    '<h3 class="section-title">권한 빼기 <span class="small muted">(Notion에서 지워진, 운영센터가 추가했던 이메일)</span></h3>' + list(plan.remove, (e) => '<li>' + esc(e) + '</li>') +
-    (plan.keep.length ? '<p class="small muted">이미 편집자: ' + esc(plan.keep.join(', ')) + '</p>' : '') +
-    (plan.staff.length ? '<p class="small muted">운영진은 최상위 폴더로 이미 접근합니다: ' + esc(plan.staff.join(', ')) + '</p>' : '') +
-    (plan.invalid.length ? '<div class="notice warn">' + icon('alert') + '<div>이메일 형식이 아니어서 건너뜀: ' + esc(plan.invalid.join(', ')) + '</div></div>' : '') +
-    '<label class="row small" style="margin-top:12px"><input type="checkbox" id="shareNotify" checked> 추가하는 분께 Google 공유 알림 메일 보내기 (Google 계정이 없는 이메일은 알림 메일로 초대해야 합니다)</label>';
-  const m = Modal.open({ title: '브랜드 폴더 공유', wide: true, body, foot: '<button class="btn" data-close>닫기</button><button class="btn btn-primary" data-apply' + (nothing ? ' disabled' : '') + '>' + (nothing ? '바꿀 것이 없습니다' : '공유 반영') + '</button>' });
-  const apply = m.querySelector('[data-apply]');
-  apply.addEventListener('click', () => busy(apply, async () => {
+    (st.missingProperty ? '<div class="notice bad">' + icon('alert') + '<div>Notion 브랜드 목록에 <b>자료 공유 이메일</b>(텍스트) 속성이 없습니다. 속성을 만든 뒤 다시 열어 주세요.</div></div>' : '') +
+    '<p class="small muted">' + esc(st.brand.name + ' (' + st.brand.code + ')') + (safeUrl(st.url) ? ' · <a href="' + esc(st.url) + '" target="_blank" rel="noopener">Drive 폴더 열기</a>' : '') + '</p>' +
+    '<div class="field"><label for="shareEmails">자료 공유 이메일 <span class="small muted">· Notion</span></label>' +
+      '<textarea class="textarea" id="shareEmails" rows="4" placeholder="name@gmail.com (한 줄에 하나, 또는 쉼표로 구분)">' + esc(st.emails.concat(st.driveOnly).join('\n')) + '</textarea></div>' +
+    '<p class="small muted">여기 있는 Google 계정은 이 폴더를 편집할 수 있고, 지우면 권한이 빠집니다. 저장하면 Notion에도 그대로 기록됩니다. Google 알림 메일은 보내지 않으니 브랜드에는 직접 안내해 주세요.</p>' +
+    (st.driveOnly.length ? '<p class="small muted">Notion에는 없지만 이 폴더에 공유돼 있던 계정도 목록에 넣었습니다: ' + esc(st.driveOnly.join(', ')) + '</p>' : '') +
+    (st.invalid.length ? '<p class="small" style="color:var(--warn)">Notion 값 중 이메일이 아닌 부분은 저장하면 빠집니다: ' + esc(st.invalid.join(', ')) + '</p>' : '') +
+    '<ul class="share-status" id="shareStatus" aria-live="polite"></ul>' +
+    (st.others.length ? '<p class="small muted">같은 폴더를 쓰는 브랜드의 공유 이메일도 이 폴더에 접근합니다: ' + esc(st.others.map((b) => b.name + ' (' + b.code + ')' + (b.emails.length ? ': ' + b.emails.join(', ') : ': 없음')).join(' / ')) + '</p>' : '') +
+    '<p class="small muted">운영진과 직원 계정은 상위 폴더 권한으로 항상 접근합니다.</p>';
+  const m = Modal.open({ title: '브랜드 폴더 공유', wide: true, body, foot: '<button class="btn" data-close>닫기</button><button class="btn btn-primary" data-save' + (st.missingProperty ? ' disabled' : '') + '>저장</button>' });
+  const area = $('#shareEmails', m), status = $('#shareStatus', m), save = m.querySelector('[data-save]');
+  const paintStatus = (failed) => {
+    const p = parse(area.value);
+    const rows = p.valid.map((e) => {
+      const fail = (failed || []).find((f) => f.email === e);
+      if (fail) return '<li>' + esc(e) + ' ' + pill('공유 안 됨', 'bad') + ' <span class="small muted">' + esc(fail.message) + '</span></li>';
+      if (st.staff.includes(e)) return '<li>' + esc(e) + ' ' + pill('운영진·직원', '') + '</li>';
+      return '<li>' + esc(e) + ' ' + (st.access[e] === 'editor' ? pill('공유됨', 'ok') : pill('저장하면 공유', 'info')) + '</li>';
+    }).concat(p.invalid.map((e) => '<li>' + esc(e) + ' ' + pill('이메일 형식 확인', 'bad') + '</li>'))
+      .concat(hadAccess.filter((e) => !p.valid.includes(e)).map((e) => '<li class="muted">' + esc(e) + ' ' + pill('저장하면 권한 빠짐', 'warn') + '</li>'));
+    status.innerHTML = rows.join('') || '<li class="muted">공유할 이메일이 없습니다. 이 폴더는 운영진만 접근합니다.</li>';
+    save.disabled = st.missingProperty || p.invalid.length > 0;
+  };
+  area.addEventListener('input', () => paintStatus());
+  paintStatus();
+  save.addEventListener('click', () => busy(save, async () => {
     try {
-      const r = await Api.call('brands.shareApply', { code, hash: plan.hash, notify: $('#shareNotify').checked }, { noRetry: true });
+      const r = await Api.call('brands.shareSave', { code, emails: area.value, before: st.notionText }, { noRetry: true });
       const failed = r.results.filter((x) => x.result === 'failed');
+      Api.invalidate();
+      if (failed.length) {
+        st = r.state;
+        paintStatus(failed);
+        Toast.error('일부 계정은 공유하지 못했습니다. 아래 내용을 확인해 주세요.');
+        return;
+      }
       Modal.close();
-      if (failed.length) Toast.error('일부 실패: ' + failed.map((x) => x.email + ' — ' + x.message).join(' / '));
-      else Toast.ok('공유를 반영했습니다: 추가 ' + r.results.filter((x) => x.result === 'added' || x.result === 'upgraded').length + '명, 제외 ' + r.results.filter((x) => x.result === 'removed').length + '명');
+      const added = r.results.filter((x) => x.result === 'added' || x.result === 'upgraded').length;
+      const removed = r.results.filter((x) => x.result === 'removed').length;
+      Toast.ok('저장했습니다' + (added || removed ? ' · 공유 ' + added + '명 추가, ' + removed + '명 권한 해제' : ' · 권한 변경 없음'));
     } catch (err) {
       Toast.error(err);
-      if (err.code === 'PLAN_CHANGED') { Modal.close(); shareDialog(code); }
+      if (err.code === 'CHANGED') { Modal.close(); shareDialog(code); }
     }
   }));
 }
