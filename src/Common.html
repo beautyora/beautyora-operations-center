@@ -1,36 +1,52 @@
 <script>
 /* 공용: 서버 호출, 이스케이프, 서식, 알림, 모달, 아이콘. */
 'use strict';
-const App = { version: document.body.dataset.version || '' };
+const App = {
+  version: document.body.dataset.version || '',
+  // ops.beautyora.kr 빌드가 넣는 Apps Script 웹앱 주소(doPost)와 Google 로그인 클라이언트 ID(공개값).
+  apiUrl: document.body.dataset.api || '',
+  clientId: document.body.dataset.clientId || ''
+};
 const $ = (s, root) => (root || document).querySelector(s);
 const $$ = (s, root) => Array.from((root || document).querySelectorAll(s));
 const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const safeUrl = (u) => { const s = String(u || ''); return /^https?:\/\//i.test(s) ? s : ''; };
 
-/* ---------- 서버 호출 (google.script.run → api) ---------- */
+/* ---------- 서버 호출 (ops.beautyora.kr → Apps Script doPost) ----------
+ * 요청마다 Google 로그인(ID 토큰)을 함께 보내고, 서버가 Google에 확인한 뒤 운영진 목록과 비교한다. */
 const Api = {
   cache: new Map(),
   call(action, payload, options) {
     options = options || {};
-    const run = () => new Promise((resolve, reject) => {
-      if (!window.google || !google.script || !google.script.run) { reject(new Error('Google Apps Script 환경에서만 동작합니다.')); return; }
-      google.script.run
-        .withSuccessHandler((res) => {
-          if (res && res.ok) resolve(res.data);
-          else { const e = new Error((res && res.message) || '응답을 받지 못했습니다.'); e.code = res && res.code; reject(e); }
-        })
-        .withFailureHandler((err) => { const e = new Error(Api.friendly(err)); e.network = true; reject(e); })
-        .api({ action, payload: payload || {} });
-    });
+    const run = () => Api.signedPost(action, payload);
     // 네트워크 오류만 한 번 다시 시도한다.
     return run().catch((e) => (e.network && !options.noRetry ? new Promise((r) => setTimeout(r, 800)).then(run) : Promise.reject(e)));
   },
-  friendly(err) {
-    const m = String((err && err.message) || err || '');
-    if (/NetworkError|HTTP 0|Failed to fetch/i.test(m)) return '인터넷 연결이 불안정합니다. 잠시 후 다시 시도해 주세요.';
-    if (/authorization|권한/i.test(m)) return '로그인이 필요하거나 권한이 없습니다. 페이지를 새로 고쳐 주세요.';
-    if (/exceeded maximum execution time|시간/i.test(m)) return '처리 시간이 길어져 중단되었습니다. 잠시 후 결과를 확인해 주세요.';
-    return m || '요청을 처리하지 못했습니다.';
+  /** 로그인을 먼저 확인하고, 서버가 만료되었다고 하면 다시 로그인한 뒤 한 번 더 보낸다. */
+  async signedPost(action, payload) {
+    await Auth.ensure();
+    return Api.post(action, payload).catch(async (e) => {
+      if (e.code !== 'NEED_LOGIN') throw e;
+      Auth.clear();
+      await Auth.ensure();
+      return Api.post(action, payload);
+    });
+  },
+  /** text/plain이라 브라우저의 사전 확인 요청 없이 보낸다. 쿠키는 보내지 않는다. */
+  post(action, payload) {
+    const network = (m) => { const e = new Error(m); e.network = true; return e; };
+    if (!App.apiUrl) return Promise.reject(new Error('운영센터는 ops.beautyora.kr 주소에서 열어 주세요.'));
+    return fetch(App.apiUrl, {
+      method: 'POST', redirect: 'follow', credentials: 'omit',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action, payload: payload || {}, idToken: Auth.token || undefined })
+    }).catch(() => Promise.reject(network('인터넷 연결이 불안정합니다. 잠시 후 다시 시도해 주세요.')))
+      .then((r) => r.json().catch(() => Promise.reject(network('서버 응답을 읽지 못했습니다. 잠시 후 다시 시도해 주세요.'))))
+      .then((res) => {
+        if (res && res.ok) return res.data;
+        const e = new Error((res && res.message) || '응답을 받지 못했습니다.'); e.code = res && res.code;
+        throw e;
+      });
   },
   /** 읽기 요청은 짧게 캐시한다. 새로 고침 뒤에는 Api.invalidate(). */
   get(action, payload, ttl) {
@@ -42,6 +58,87 @@ const Api = {
     return promise;
   },
   invalidate() { Api.cache.clear(); }
+};
+
+/* ---------- Google 로그인 (Google Identity Services) ----------
+ * 로그인하면 Google이 서명한 ID 토큰(약 1시간 유효)을 받아 요청마다 함께 보낸다.
+ * 같은 브라우저 탭에서는 sessionStorage에 두고, 만료되면 자동 로그인(auto_select)으로 다시 받는다. */
+const Auth = {
+  token: '',
+  key: 'bo.idToken',
+  pending: null,
+  expiresAt(token) {
+    try { return JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).exp * 1000; } catch (e) { return 0; }
+  },
+  email() {
+    try { return String(JSON.parse(atob(Auth.token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).email || ''); } catch (e) { return ''; }
+  },
+  valid() { return !!Auth.token && Auth.expiresAt(Auth.token) > Date.now() + 60000; },
+  clear() { Auth.token = ''; try { sessionStorage.removeItem(Auth.key); } catch (e) { /* 무시 */ } },
+  /** 유효한 로그인이 있을 때까지 기다린다. 없으면 로그인 화면을 띄운다. */
+  ensure() {
+    if (!Auth.token) { try { Auth.token = sessionStorage.getItem(Auth.key) || ''; } catch (e) { /* 무시 */ } }
+    if (Auth.valid()) return Promise.resolve(Auth.token);
+    Auth.token = '';
+    if (!Auth.pending) Auth.pending = Auth.signIn().finally(() => { Auth.pending = null; });
+    return Auth.pending;
+  },
+  async clientId() {
+    if (App.clientId) return App.clientId;
+    const config = await Api.post('auth.config');
+    App.clientId = String((config && config.clientId) || '');
+    if (!App.clientId) throw new Error('운영센터 로그인이 아직 설정되지 않았습니다. (BO_GOOGLE_CLIENT_ID)');
+    return App.clientId;
+  },
+  loadScript() {
+    if (window.google && google.accounts && google.accounts.id) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://accounts.google.com/gsi/client'; s.async = true;
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error('Google 로그인을 불러오지 못했습니다. 인터넷 연결이나 광고 차단 설정을 확인해 주세요.'));
+      document.head.appendChild(s);
+    });
+  },
+  screen(inner) {
+    let box = $('#authScreen');
+    if (!box) {
+      box = document.createElement('div');
+      box.id = 'authScreen';
+      box.className = 'auth-screen';
+      document.body.appendChild(box);
+    }
+    box.innerHTML = '<div class="auth-card" role="dialog" aria-modal="true" aria-labelledby="authTitle">' + LOGO_SVG + inner + '</div>';
+    return box;
+  },
+  signIn() {
+    const box = Auth.screen('<strong id="authTitle">운영센터 로그인</strong><p>운영진으로 등록된 Google 계정으로 로그인해 주세요.</p><div id="authButton" class="auth-button"><div class="spinner"></div></div>' +
+      '<p class="small muted">등록되지 않은 계정은 들어올 수 없습니다. 운영진 추가는 설정 → 운영진 계정에서 합니다.</p>');
+    return Promise.all([Auth.loadScript(), Auth.clientId()]).then(([, clientId]) => new Promise((resolve) => {
+      google.accounts.id.initialize({
+        client_id: clientId, auto_select: true, cancel_on_tap_outside: false, use_fedcm_for_prompt: true, itp_support: true,
+        callback: (res) => {
+          Auth.token = String((res && res.credential) || '');
+          try { sessionStorage.setItem(Auth.key, Auth.token); } catch (e) { /* 무시 */ }
+          box.remove();
+          resolve(Auth.token);
+        }
+      });
+      $('#authButton', box).innerHTML = '';
+      google.accounts.id.renderButton($('#authButton', box), { theme: 'outline', size: 'large', text: 'signin_with', shape: 'pill', locale: 'ko' });
+      google.accounts.id.prompt();
+    })).catch((e) => {
+      Auth.screen('<strong id="authTitle">로그인을 준비하지 못했습니다</strong><p>' + esc(e.message) + '</p><button class="btn" onclick="location.reload()">다시 시도</button>');
+      return new Promise(() => {}); // 다시 시도할 때까지 기다린다.
+    });
+  },
+  /** 등록되지 않은 계정으로 로그인했을 때: 자동 로그인을 끄고 다른 계정을 고르게 한다. */
+  switchAccount() {
+    Auth.clear();
+    try { google.accounts.id.disableAutoSelect(); } catch (e) { /* 무시 */ }
+    location.reload();
+  },
+  signOut() { Auth.switchAccount(); }
 };
 
 /* ---------- 서식 ---------- */

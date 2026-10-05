@@ -27,8 +27,12 @@
 - 같은 코드의 [서버·Chromium CI](https://github.com/beautyora/beautyora-operations-center/actions/runs/37286213426)는 성공했습니다. 별도 외부 배포 검사 실패도 존재하므로 모든 검사가 성공했다고 표현하지 않습니다.
 - 배포 대상은 scripts/verify-deploy-target.cjs의 승인된 운영 대상과 대조합니다. 옛 미사용 프로젝트로 바꾸지 않습니다.
 - **미검증:** v110 규칙으로 다음 실제 신규 신청의 폴더가 생성되는 전체 운영 흐름. 모의 테스트나 배포 성공으로 대체하지 않습니다.
-- **미배포(브랜치 `claude/dazzling-gates-pgd8gv`):** 홈의 브랜드 자료 현황(src/17_BrandActivity.gs, 읽기 전용, 홈을 열어 둔 동안 1분 주기 확인). 모의 Drive·Chromium 테스트만 통과했고 실제 브랜드 폴더로 확인하지 않았습니다. v110에는 없습니다.
-- **미해결:** ops.beautyora.kr 첫 진입 화면 깨짐·Google 로그인 없음. 현재 페이지는 USER_ACCESSING 웹앱을 iframe으로 띄우므로 Google에 로그인되지 않았거나 여러 계정이 로그인된 브라우저에서 Google 로그인 화면이 iframe 안에서 막히는 것으로 추정합니다(운영 화면 직접 확인 전). 인증 방식 변경은 별도 승인 후 진행합니다.
+- **미배포(브랜치 `claude/dazzling-gates-pgd8gv`, main 미반영):** 아래는 모의 Notion·Drive 테스트와 Chromium 화면 테스트만 통과했고, 실제 운영 데이터·Google 로그인으로 확인하지 않았습니다. v110에는 없습니다.
+  - 홈의 브랜드 자료 현황(src/17_BrandActivity.gs, 읽기 전용, 홈을 열어 둔 동안 1분 주기 확인).
+  - ops.beautyora.kr Google 로그인 복구: 웹앱을 iframe으로 띄우던 방식을 정적 화면 + `doPost`로 바꾸고, 요청마다 Google ID 토큰을 확인해 `BO_ADMIN_EMAILS`와 비교. 매니페스트 실행 방식이 `USER_DEPLOYING`·`ANYONE_ANONYMOUS`로 바뀌므로 Apps Script 배포와 Cloudflare Pages 재빌드를 잇달아 해야 합니다([배포 가이드](APPS_SCRIPT_DEPLOYMENT_GUIDE.md)).
+  - 첫 화면 깨짐 원인 두 가지를 반영: v3 정리 때 빠진 `.boot` 시작 화면 스타일, iframe 안에서 막히던 Google 로그인.
+  - Drive 공유: 운영진 ↔ 최상위 폴더 편집자(설정 → 운영진 계정), Notion `자료 공유 이메일` ↔ 브랜드 폴더 편집자(미리보기 후 반영). Notion에 `자료 공유 이메일` 속성을 만들어야 합니다.
+- **확인한 Drive 공유 상태(2026-10-05, 읽기만):** 최상위 `뷰티오라` 폴더와 확인한 브랜드 폴더 두 곳은 '링크가 있는 모든 사용자: 뷰어'라 브랜드가 업로드·편집할 수 없고 서류가 링크로 열립니다. 두 폴더의 사용자 권한은 소유 계정과 편집자 한 명뿐입니다(그 밖의 운영진 계정은 링크 뷰어로만 열 수 있음). 권한은 바꾸지 않았습니다.
 
 ### 브랜드 랜딩과 브릿지
 

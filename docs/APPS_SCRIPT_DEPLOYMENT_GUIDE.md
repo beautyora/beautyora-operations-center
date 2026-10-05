@@ -92,6 +92,18 @@ fix/brand-list
 
 워크플로는 새 Apps Script 버전을 만들고 기존 운영 배포를 갱신합니다. 기존 운영 URL은 유지됩니다.
 
+## ops.beautyora.kr 로그인 방식으로 바꿀 때(한 번)
+
+웹앱 실행 방식이 `USER_ACCESSING`(접속한 사용자)에서 `USER_DEPLOYING`(배포 계정)·익명 접근으로 바뀝니다. 화면은 Cloudflare Pages(ops.beautyora.kr)가 정적 페이지로 올리고, 서버 호출은 웹앱 `doPost`로 옵니다. 두 쪽을 **잇달아** 배포해야 합니다(사이에 옛 iframe 페이지는 Apps Script 안내 화면만 보여 줍니다).
+
+1. 확인: 스크립트 속성 `BO_GOOGLE_CLIENT_ID`, 그 OAuth 클라이언트의 승인된 JavaScript 원본에 `https://ops.beautyora.kr`, 배포 계정(`CLASPRC_JSON_BASE64`의 계정)이 브랜드 자료 최상위 폴더의 소유자 또는 편집자인지.
+2. Actions → **Apps Script 배포**(production, existing). 매니페스트의 실행 방식이 함께 반영됩니다. 처음이면 배포 계정으로 Apps Script 편집기에서 권한 승인이 필요할 수 있습니다.
+3. 곧바로 Cloudflare Pages `beautyora-ops`를 다시 빌드(`node scripts/build-web.cjs admin dist/ops`, 출력 폴더 `dist/ops`).
+4. ops.beautyora.kr을 새 창(로그인 안 된 상태 포함)으로 열어 Google 로그인 화면 → 운영진 계정으로 홈 진입, 운영진이 아닌 계정은 거절되는지 확인.
+5. 설정 → 연결 상태에서 `운영센터 로그인`, `운영진 Drive 권한`을 확인하고 필요하면 운영진 계정 → `권한 맞추기`.
+
+되돌리기: `appsscript.json`의 `webapp`을 이전 값으로 되돌린 커밋을 배포하고, Cloudflare Pages를 이전 배포로 롤백합니다.
+
 ## 절대 하지 않을 것
 
 - 테스트 브랜치에서 production 배포

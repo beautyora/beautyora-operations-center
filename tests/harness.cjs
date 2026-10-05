@@ -300,8 +300,9 @@ class FakeNotion {
 }
 
 /* ------------------------------------------------------------------ Drive fake */
+const RANK = { reader: 1, commenter: 2, writer: 3, fileOrganizer: 4, organizer: 5, owner: 6 };
 class FakeDrive {
-  constructor() { this.items = {}; this.seq = 0; this.root = this.folder('뷰티오라_테스트_파일', null); }
+  constructor() { this.items = {}; this.seq = 0; this.root = this.folder('뷰티오라_테스트_파일', null); this.items[this.root].permissions = [{ id: 'perm-owner', type: 'user', role: 'owner', emailAddress: 'owner@beautyora.test' }]; }
   nextId(prefix) { this.seq++; return prefix + String(this.seq).padStart(26, '0'); }
   folder(name, parent) {
     const id = this.nextId('fold');
@@ -357,9 +358,47 @@ class FakeDrive {
     while ((m = re.exec(q))) { if ((file.appProperties || {})[m[1]] !== m[2].replace(/\\'/g, "'")) ok = false; }
     return ok;
   }
+  /** 공유 권한: 상위 폴더 권한을 물려받는다(실제 Drive의 내 드라이브와 같음). 직접 준 권한만 지울 수 있다. */
+  permissionsOf(id) {
+    const out = {};
+    const add = (p, inherited) => { const k = p.emailAddress || p.type; const cur = out[k]; if (!cur || RANK[p.role] > RANK[cur.role] || (!inherited && cur.inherited && RANK[p.role] === RANK[cur.role])) out[k] = Object.assign({}, p, { inherited }); };
+    let cur = this.items[id], first = true;
+    const seen = new Set();
+    while (cur && !seen.has(cur.id)) { seen.add(cur.id); (cur.permissions || []).forEach((p) => add(p, !first)); first = false; cur = this.items[(cur.parents || [])[0]]; }
+    return Object.values(out);
+  }
   api() {
     const self = this;
     return {
+      Permissions: {
+        list: (fileId) => {
+          if (!self.items[fileId]) throw new Error('File not found: ' + fileId);
+          if (self.failPermissions) throw new Error(self.failPermissions);
+          return { permissions: JSON.parse(JSON.stringify(self.permissionsOf(fileId))).map((p) => { delete p.inherited; return p; }) };
+        },
+        create: (resource, fileId, opts) => {
+          const item = self.items[fileId]; if (!item) throw new Error('File not found: ' + fileId);
+          const email = String(resource.emailAddress || '').toLowerCase();
+          if (/@nogoogle\.test$/.test(email) && !(opts && opts.sendNotificationEmail)) throw new Error('Since there is no Google account associated with this email address, you should check the Notify people box to invite this recipient.');
+          item.permissions = item.permissions || [];
+          const p = { id: 'perm-' + (++self.seq), type: resource.type, role: resource.role, emailAddress: email };
+          item.permissions.push(p);
+          (self.notifications = self.notifications || []).push({ fileId, email, notify: !!(opts && opts.sendNotificationEmail), message: (opts && opts.emailMessage) || '' });
+          return JSON.parse(JSON.stringify(p));
+        },
+        update: (resource, fileId, permissionId) => {
+          const p = ((self.items[fileId] || {}).permissions || []).find((x) => x.id === permissionId);
+          if (!p) throw new Error('Permission not found (inherited permissions cannot be changed here): ' + permissionId);
+          p.role = resource.role; return JSON.parse(JSON.stringify(p));
+        },
+        remove: (fileId, permissionId) => {
+          const item = self.items[fileId];
+          const at = ((item || {}).permissions || []).findIndex((x) => x.id === permissionId);
+          if (at < 0) throw new Error('Permission not found (inherited permissions cannot be removed here): ' + permissionId);
+          if (item.permissions[at].role === 'owner') throw new Error('The owner of a file cannot be removed.');
+          item.permissions.splice(at, 1);
+        }
+      },
       Files: {
         create: (resource, blob) => {
           if (resource.mimeType === 'application/vnd.google-apps.spreadsheet') { const f = self.file(resource, blob); f.converted = true; return f; }
@@ -526,6 +565,13 @@ function createEnv(options) {
   let triggerSequence = 0;
   const mail = [];
   const user = { active: options.user || 'admin@beautyora.test', effective: 'owner@beautyora.test' };
+  const tokenChecks = { count: 0 };
+  /** Google 로그인 ID 토큰 흉내. 서명 자리가 'valid-sig'이면 가짜 tokeninfo가 내용을 그대로 돌려준다. */
+  const idToken = (email, claims) => {
+    if (!email) return '';
+    const body = Object.assign({ aud: props.BO_GOOGLE_CLIENT_ID, iss: 'https://accounts.google.com', email, email_verified: 'true', exp: String(Math.floor(Date.now() / 1000) + 3600) }, claims || {});
+    return Buffer.from('{"alg":"RS256"}').toString('base64url') + '.' + Buffer.from(JSON.stringify(body)).toString('base64url') + '.' + ((claims && claims.__sig) || 'valid-sig');
+  };
 
   const context = {
     console: options.quiet === false ? console : { log() {}, error() {}, warn() {} },
@@ -569,6 +615,12 @@ function createEnv(options) {
           throw e;
         }
       }
+      if (url.indexOf('https://oauth2.googleapis.com/tokeninfo?id_token=') === 0) {
+        tokenChecks.count++;
+        const parts = decodeURIComponent(url.split('id_token=')[1]).split('.');
+        if (parts.length !== 3 || parts[2] !== 'valid-sig') return response(400, { error: 'invalid_token' });
+        return response(200, JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')));
+      }
       if (url.indexOf('https://thumb.test/') === 0) return { getResponseCode: () => 200, getBlob: () => blob(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'), 'image/png'), getHeaders: () => ({}) };
       throw new Error('Unexpected fetch ' + url);
     } },
@@ -610,6 +662,7 @@ function createEnv(options) {
     },
     HtmlService: {
       createHtmlOutputFromFile: (name) => ({ getContent: () => fs.readFileSync(path.join(SRC, name + '.html'), 'utf8') }),
+      createHtmlOutput: (html) => { const out = { html: String(html), title: '', setTitle(v) { out.title = v; return out; }, setXFrameOptionsMode(v) { out.xframe = v; return out; }, getContent: () => out.html }; return out; },
       createTemplateFromFile: (name) => template(name, context),
       XFrameOptionsMode: { ALLOWALL: 'ALLOWALL' }
     }
@@ -624,7 +677,10 @@ function createEnv(options) {
   const env = {
     context, notion, drive, sheets, props, cache, triggers, mail, user,
     call: (name, ...args) => context.__run(name, args),
-    api: (action, payload, token) => context.__run('api', [{ action, payload: payload || {}, token }]),
+    // 관리자 화면처럼 지금 사용자(user.active)의 Google 로그인 토큰을 붙여 보낸다.
+    api: (action, payload, token) => context.__run('api', [{ action, payload: payload || {}, idToken: token !== undefined ? token : idToken(user.active) }]),
+    post: (body) => JSON.parse(context.__run('doPost', [{ postData: { contents: typeof body === 'string' ? body : JSON.stringify(body) } }]).getContent()),
+    idToken, tokenChecks,
     setUser: (email) => { user.active = email; },
     clearCache: () => cache.clear()
   };
@@ -674,11 +730,11 @@ function seed(env) {
     '상품 특장점': { type: 'rich_text' }, '대표 상품군': { type: 'rich_text' }, '사업자 번호': { type: 'rich_text' }, '접수일': { type: 'date' },
     '브랜드 런칭일자': { type: 'date' }, '미팅일': { type: 'date' }, '폼 제출': { type: 'checkbox' }, '폼 응답 ID': { type: 'rich_text' }, '이슈 여부': { type: 'select', options: ['이슈'] },
     '소통 담당자': { type: 'people' }, '사업자등록증 Drive URL': { type: 'url' }, '브랜드 소개서 Drive URL': { type: 'url' }, '계약서 Drive URL': { type: 'url' },
-    '기타 브랜드 자료 Drive URL': { type: 'url' }, '최근 수정': { type: 'last_edited_time' }
+    '기타 브랜드 자료 Drive URL': { type: 'url' }, '자료 공유 이메일': { type: 'rich_text' }, '최근 수정': { type: 'last_edited_time' }
   } });
   const activityId = n.addSource('activity', { properties: { '이력명': { type: 'title' }, '브랜드': { type: 'relation', relation: brandId }, '일자': { type: 'date' }, '연락 방식': { type: 'select', options: ['전화', '이메일', '미팅', '메신저', '기타'] }, '결과': { type: 'select', options: ['완료', '부재', '회신 대기'] }, '상대방 담당자': { type: 'rich_text' }, '통화 내용': { type: 'rich_text' }, '다음 행동': { type: 'rich_text' }, '후속 확인일': { type: 'date' }, '후속 완료': { type: 'checkbox' }, '상담 담당자': { type: 'people' } } });
   Object.assign(env.props, {
-    BO_NOTION_TOKEN: 'secret-test-token', BO_ADMIN_EMAILS: 'admin@beautyora.test, second@beautyora.test',
+    BO_NOTION_TOKEN: 'secret-test-token', BO_ADMIN_EMAILS: 'admin@beautyora.test, second@beautyora.test', BO_GOOGLE_CLIENT_ID: '1234-test.apps.googleusercontent.com',
     BO_NOTION_BRAND_DATA_SOURCE_ID: brandId, BO_NOTION_ACTIVITY_DATA_SOURCE_ID: activityId, BO_ROOT_FOLDER_ID: env.drive.root
   });
 

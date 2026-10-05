@@ -55,6 +55,7 @@ function healthCheck_() {
   const results = [];
   const add = function (target, status, message) { results.push({ target: target, status: status, message: message }); };
   add('관리자', adminEmails_().length ? '정상' : '오류', adminEmails_().length ? adminEmails_().length + '명 등록' : 'BO_ADMIN_EMAILS가 비어 있습니다.');
+  add('운영센터 로그인', prop_(BO.PROPS.GOOGLE_CLIENT_ID) ? '정상' : '오류', prop_(BO.PROPS.GOOGLE_CLIENT_ID) ? 'Google 로그인 클라이언트 ID 설정됨' : 'BO_GOOGLE_CLIENT_ID 미설정 (ops.beautyora.kr에서 로그인할 수 없습니다)');
   let notionOk = false;
   try {
     const me = notionRequest_('get', '/users/me');
@@ -77,10 +78,20 @@ function healthCheck_() {
       }
     });
   }
+  let driveOk = false;
   try {
     add('Google Drive', '정상', driveRoot_().getName());
+    driveOk = true;
   } catch (error) {
     add('Google Drive', '오류', errorMessage_(error));
+  }
+  if (driveOk) {
+    try {
+      const missing = adminAccessRows_().filter(function (r) { return !r.canEdit; });
+      add('운영진 Drive 권한', missing.length ? '주의' : '정상', missing.length ? '최상위 폴더 편집 권한이 없는 운영진 ' + missing.length + '명 (설정 → 운영진 계정 → 권한 맞추기)' : '운영진 모두 최상위 폴더 편집자');
+    } catch (error) {
+      add('운영진 Drive 권한', '주의', '최상위 폴더 공유 권한을 읽지 못했습니다: ' + errorMessage_(error));
+    }
   }
   try {
     if (!brandFolderBaseline_()) add('신규 브랜드 폴더', '주의', '초기 설정을 실행하여 자동 처리를 시작해 주세요.');

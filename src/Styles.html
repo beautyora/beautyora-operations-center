@@ -187,6 +187,17 @@ details.more[open] > summary { margin-bottom: 12px; }
 .skeleton { border-radius: 6px; background: linear-gradient(90deg, var(--surface-3) 25%, #ebe8e4 37%, var(--surface-3) 63%); background-size: 400% 100%; animation: shimmer 1.2s ease infinite; }
 @keyframes shimmer { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
 .skeleton-line { height: 14px; margin: 10px 0; }
+/* Google 로그인 화면 */
+.auth-screen { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 16px; background: var(--bg); }
+.auth-card { width: min(400px, 100%); display: grid; justify-items: center; gap: 14px; padding: 36px 28px; border-radius: var(--r-xl); background: var(--surface); color: var(--ink); text-align: center; box-shadow: var(--shadow-2); }
+.auth-card .logo-mark { width: 160px; height: auto; margin-bottom: 4px; }
+.auth-card strong { font-size: 19px; letter-spacing: -0.02em; }
+.auth-card p { margin: 0; color: var(--muted); font-size: 14px; }
+.auth-card p.small { font-size: 12px; }
+.auth-button { min-height: 44px; display: grid; place-items: center; }
+/* 시작·오류 화면(처음 열 때). v3 정리 때 빠져 첫 화면이 깨져 보이던 부분 */
+.boot { min-height: 100vh; display: grid; place-content: center; justify-items: center; gap: 14px; color: var(--muted); text-align: center; padding: 24px; }
+.boot p { max-width: 460px; }
 .spinner { width: 28px; height: 28px; border: 3px solid var(--line); border-top-color: var(--ink); border-radius: 50%; animation: spin .8s linear infinite; }
 /* 앱 틀(관리자) */
 .shell { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-height: 100vh; }

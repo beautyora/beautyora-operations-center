@@ -16,12 +16,11 @@ const BO_ACTIVITY = Object.freeze({
   FOLDER: 'application/vnd.google-apps.folder',
   GSHEET: 'application/vnd.google-apps.spreadsheet',
   XLSX: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  STAFF_PROP: 'BO_STAFF_EMAILS',
   ORDER: ['review', 'writing', 'uploaded', 'waiting', 'no_sheet', 'no_folder']
 });
 
 function activityStaffEmails_() {
-  const extra = prop_(BO_ACTIVITY.STAFF_PROP).split(/[,\s;]+/).map(function (v) { return v.trim().toLowerCase(); }).filter(Boolean);
+  const extra = prop_(BO.PROPS.STAFF_EMAILS).split(/[,\s;]+/).map(function (v) { return v.trim().toLowerCase(); }).filter(Boolean);
   return adminEmails_().concat(extra, [effectiveEmail_(), activeEmail_()].filter(Boolean));
 }
 

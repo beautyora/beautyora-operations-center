@@ -57,7 +57,7 @@ test('non-admin users are rejected for every admin action, unknown actions are r
     assert.equal(res.code, 'NOT_ADMIN', action);
   });
   env.setUser('');
-  assert.equal(env.api('dashboard').code, 'NO_EMAIL');
+  assert.equal(env.api('dashboard').code, 'NEED_LOGIN', 'no Google sign-in, no admin action');
   env.setUser('admin@beautyora.test');
   ['partner.bootstrap', 'products.list', 'links.issue', '__proto__', ''].forEach((action) => {
     const res = env.api(action, {});
@@ -125,14 +125,16 @@ test('health check reports missing configuration clearly', () => {
   assert.ok(h.results.some((r) => r.target === 'Google Drive' && r.status === '오류'));
 });
 
-test('doGet renders the staff shell only; a leftover brand-link token is ignored', () => {
+test('doGet only points to ops.beautyora.kr: no app shell, no server calls, no framing', () => {
   const { env } = setup();
   const page = env.call('doGet', { parameter: { token: 'abc"><script>alert(1)</script>' } });
   const html = page.getContent();
-  assert.match(html, /운영센터를 여는 중입니다/);
-  assert.doesNotMatch(html, /<script>alert/);
-  assert.doesNotMatch(html, /상품등록센터/);
-  assert.equal(page.xframe, undefined, 'no ALLOWALL framing by default');
+  assert.match(html, /https:\/\/ops\.beautyora\.kr/);
+  assert.doesNotMatch(html, /<script/i);
+  assert.doesNotMatch(html, /google\.script/);
+  assert.equal(page.xframe, undefined, 'no ALLOWALL framing');
+  env.props.BO_OPS_URL = 'javascript:alert(1)';
+  assert.match(env.call('doGet', {}).getContent(), /https:\/\/ops\.beautyora\.kr/, 'only https addresses are linked');
 });
 
 test('only the audited entry points are callable from google.script.run', () => {
@@ -143,7 +145,7 @@ test('only the audited entry points are callable from google.script.run', () => 
     for (const m of src.matchAll(/^function ([A-Za-z0-9_$]+)\s*\(/gm)) if (!m[1].endsWith('_')) publicFns.push(m[1]);
   });
   // Each of these checks admin/owner or an installed trigger before doing anything.
-  assert.deepEqual(publicFns.sort(), ['api', 'doGet', 'inspectBrandIntakeRecovery', 'previewBrandIntakeRecovery', 'replayBrandIntakeRecovery', 'runHealthCheck', 'scheduledBrandFolders', 'scheduledBrandIntake', 'scheduledHealthCheck', 'setupBeautyora', 'setupBrandIntake'].sort());
+  assert.deepEqual(publicFns.sort(), ['api', 'doGet', 'doPost', 'inspectBrandIntakeRecovery', 'previewBrandIntakeRecovery', 'replayBrandIntakeRecovery', 'runHealthCheck', 'scheduledBrandFolders', 'scheduledBrandIntake', 'scheduledHealthCheck', 'setupBeautyora', 'setupBrandIntake'].sort());
   const { env } = setup();
   env.setUser('');
   assert.throws(() => env.call('runHealthCheck'), /계정/);
@@ -154,22 +156,34 @@ test('removed features leave no traces in the code', () => {
   const root = path.join(__dirname, '..');
   const files = fs.readdirSync(path.join(root, 'src')).map((f) => path.join(root, 'src', f));
   const text = files.map((f) => fs.readFileSync(f, 'utf8')).join('\n');
-  ['doPost', 'partner', 'idToken', 'google.accounts', 'BO_GOOGLE_CLIENT_ID', 'BO_PARTNER_WEBAPP_URL', 'onBrandFormSubmit(']
+  ['partner', 'BO_PARTNER_WEBAPP_URL', 'BO_ALLOW_EMBED', 'onBrandFormSubmit(']
     .forEach((needle) => assert.ok(!text.includes(needle), 'still mentions ' + needle));
+  // 화면은 ops.beautyora.kr의 정적 페이지라 Apps Script 화면 전용 호출(google.script.*)을 쓰지 않는다.
+  files.filter((f) => f.endsWith('.html')).forEach((f) => assert.ok(!fs.readFileSync(f, 'utf8').includes('google.script'), f));
   ['Partner.html', '13_Partner.gs', '14_Links.gs', '16_Intake.gs', '17_Crm.gs', '18_Inventory.gs', '23_Billing.gs']
     .forEach((name) => assert.ok(!fs.existsSync(path.join(root, 'src', name)), name + ' should be removed'));
 });
 
-test('ops.beautyora.kr page frames the staff web app and nothing else', () => {
+test('ops.beautyora.kr page is the app itself with Google sign-in, not a frame', () => {
   const os = require('os');
   const { execFileSync } = require('child_process');
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'bo-ops-'));
-  execFileSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'build-web.cjs'), 'admin', out], { stdio: 'ignore' });
+  const build = (extra) => execFileSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'build-web.cjs'), 'admin', out], { stdio: 'ignore', env: Object.assign({}, process.env, extra || {}) });
+  build({ BO_GOOGLE_CLIENT_ID: '1234-abc.apps.googleusercontent.com' });
   const html = fs.readFileSync(path.join(out, 'index.html'), 'utf8');
-  assert.match(html, /<iframe src="https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec"/);
-  assert.doesNotMatch(html, /<script/, 'no scripts of its own');
-  assert.match(fs.readFileSync(path.join(out, '_headers'), 'utf8'), /X-Frame-Options: DENY/);
-  assert.throws(() => execFileSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'build-web.cjs'), 'admin', out], { stdio: 'ignore', env: Object.assign({}, process.env, { BO_OPS_APP_URL: 'https://evil.example/x' }) }));
+  assert.doesNotMatch(html, /<iframe/, 'no iframe: Google sign-in cannot run inside one');
+  assert.match(html, /data-api="https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec"/);
+  assert.match(html, /data-client-id="1234-abc\.apps\.googleusercontent\.com"/);
+  assert.match(html, /accounts\.google\.com\/gsi\/client/, 'loads Google Identity Services');
+  assert.match(html, /<title>뷰티오라 운영센터<\/title>/);
+  assert.doesNotMatch(html, /<\?/, 'template fully rendered');
+  const headers = fs.readFileSync(path.join(out, '_headers'), 'utf8');
+  assert.match(headers, /X-Frame-Options: DENY/);
+  assert.match(headers, /Referrer-Policy: strict-origin/);
+  build();
+  assert.match(fs.readFileSync(path.join(out, 'index.html'), 'utf8'), /data-client-id=""/, 'client ID can come from the server instead');
+  assert.throws(() => build({ BO_OPS_APP_URL: 'https://evil.example/x' }));
+  assert.throws(() => build({ BO_GOOGLE_CLIENT_ID: 'not-a-client-id' }));
   fs.rmSync(out, { recursive: true, force: true });
 });
 
