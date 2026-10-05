@@ -47,7 +47,7 @@ function brandFolderBaseline_() {
 
 /** 표시 이름만 정규화한다. 회사의 동일성 판단에는 사용하지 않는다. */
 function brandFolderLabel_(value, fallback) {
-  return String(value || '').replace(/[\\/:*?"<>|\[\]]/g, ' ').replace(/\s+/g, ' ').trim() || fallback;
+  return String(value || '').replace(/[|\[\]\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim() || fallback;
 }
 
 function brandFolderCompany_(brand) {

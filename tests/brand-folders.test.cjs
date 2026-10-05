@@ -32,11 +32,12 @@ function ok(result) {
 }
 function create(env, code) { return ok(env.api('brands.folder', { code })); }
 
-test('folder naming: raw company punctuation and hyphens are preserved, unsafe characters are cleaned, blank company falls back', () => {
+test('folder naming: raw company punctuation and hyphens are preserved, layout delimiters are cleaned, blank company falls back', () => {
   const { env, data } = setup();
   add(env, data, 'BO-0011', '알파/베타', '  주식회사 A-B:코스메틱  ');
+  assert.equal(env.call('brandFolderLabel_', 'A[BO-0099]|B', ''), 'A BO-0099 B');
   const first = create(env, 'BO-0011');
-  assert.equal(env.drive.items[folderId(first.url)].name, '주식회사 A-B 코스메틱 | 알파 베타 [BO-0011]');
+  assert.equal(env.drive.items[folderId(first.url)].name, '주식회사 A-B:코스메틱 | 알파/베타 [BO-0011]');
   add(env, data, 'BO-0012', '회사없는브랜드', ' \t ');
   env.clearCache();
   const second = create(env, 'BO-0012');
