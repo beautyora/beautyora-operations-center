@@ -2,7 +2,7 @@
 
 운영센터와 브랜드 랜딩의 현재 상태를 기록하는 **단일 원본**입니다. 다른 저장소에는 이 문서의 링크만 둡니다. 문서 자체는 자동으로 최신화되지 않으므로 작업 시작과 세션 재개 때 최신 main 및 실제 배포 상태를 다시 확인하세요.
 
-- 마지막 코드·배포 상태 확인: **2026-10-05 12:27 UTC**
+- 마지막 코드·배포 상태 확인: **2026-10-05 12:38 UTC**
 - 이 확인은 저장소와 배포 기록의 읽기 확인입니다. 실제 신규 신청을 제출하거나 Google·Notion·Drive 업무 데이터를 재검증하지 않았습니다.
 - main 반영, 배포 성공, 실제 운영 동작 검증은 별개입니다.
 
@@ -22,14 +22,16 @@
 
 ### 운영센터
 
-- 확인한 main은 [PR41](https://github.com/beautyora/beautyora-operations-center/pull/41)(커밋 `8b4aa7d`)의 브랜드 공유 창 단순화입니다. 앞서 [PR39](https://github.com/beautyora/beautyora-operations-center/pull/39)(v112)에서 홈·브랜드 탭 로딩 개선, [PR37](https://github.com/beautyora/beautyora-operations-center/pull/37)(v111)에서 ops.beautyora.kr Google 로그인 복구·브랜드 자료 현황·운영진·브랜드 Drive 공유가 반영되었습니다.
-- [운영 배포 실행](https://github.com/beautyora/beautyora-operations-center/actions/runs/37308947507)에서 **v113** 기존 운영 웹앱 갱신을 확인했습니다(로그 `Deployed … @113`). 배포 시각은 2026-10-05 12:21 UTC입니다. 웹앱 실행 방식은 v111부터 `USER_DEPLOYING`·`ANYONE_ANONYMOUS`입니다.
-- 같은 커밋의 PR [서버·Chromium CI](https://github.com/beautyora/beautyora-operations-center/actions/runs/37308756784)는 성공했습니다. `Cloudflare Pages: beautyora-partner` 검사는 v3에서 제거된 브랜드용 페이지라 계속 실패하며 운영센터와 무관합니다.
+- 확인한 main은 [PR42](https://github.com/beautyora/beautyora-operations-center/pull/42)(커밋 `67d6c83`)의 브랜드 공유 창 안내 문구 정리·자사 브랜드 폴더 안내입니다. 앞서 [PR41](https://github.com/beautyora/beautyora-operations-center/pull/41)(v113)에서 브랜드 공유 창 단순화, [PR39](https://github.com/beautyora/beautyora-operations-center/pull/39)(v112)에서 홈·브랜드 탭 로딩 개선, [PR37](https://github.com/beautyora/beautyora-operations-center/pull/37)(v111)에서 ops.beautyora.kr Google 로그인 복구·브랜드 자료 현황·운영진·브랜드 Drive 공유가 반영되었습니다.
+- [운영 배포 실행](https://github.com/beautyora/beautyora-operations-center/actions/runs/37310511374)에서 **v114** 기존 운영 웹앱 갱신을 확인했습니다(로그 `Deployed … @114`, 커밋 `67d6c83`). 배포 시각은 2026-10-05 12:35 UTC입니다. 직전 v113은 같은 날 12:21 UTC([실행](https://github.com/beautyora/beautyora-operations-center/actions/runs/37308947507)). 웹앱 실행 방식은 v111부터 `USER_DEPLOYING`·`ANYONE_ANONYMOUS`입니다.
+- 같은 변경의 PR [서버·Chromium CI](https://github.com/beautyora/beautyora-operations-center/actions/runs/37310324229)는 성공했고, 배포 실행 안의 서버 테스트도 통과했습니다. `Cloudflare Pages: beautyora-partner` 검사는 v3에서 제거된 브랜드용 페이지라 계속 실패하며 운영센터와 무관합니다.
 - Cloudflare Pages `beautyora-ops`는 main 반영 시 자동 빌드되는 것으로 보이며(PR 미리보기 빌드 성공), main 커밋의 운영 빌드 결과는 이 문서 작업에서 확인하지 못했습니다.
 - 배포 대상은 scripts/verify-deploy-target.cjs의 승인된 운영 대상과 대조합니다. 옛 미사용 프로젝트로 바꾸지 않습니다.
 - **미검증:** v110 규칙으로 다음 실제 신규 신청의 폴더가 생성되는 전체 운영 흐름. 모의 테스트나 배포 성공으로 대체하지 않습니다.
 - **미검증(v111):** 실제 ops.beautyora.kr Google 로그인(운영진 통과·미등록 계정 거절), 홈의 브랜드 자료 현황 실제 폴더 집계, 운영진 `권한 맞추기`와 브랜드 `공유` 실제 반영. 모의 Notion·Drive 테스트와 Chromium 화면 테스트만 통과했습니다.
 - v112 변경 요약: 브랜드 목록은 Notion에 필요한 속성만 요청(`filter_properties`, 거절 시 자동 대체)하고 전체 다시 읽기를 10분 → 30분으로, 브랜드 자료 현황은 지난 결과 먼저 표시·동시 재계산 방지·Drive 질의 거절 시 분할·한 번에 읽는 기준 시트 3개, 화면 요청 90초 제한, 느린 요청 실행 기록(`api.slow`, `activity.slow`). 테스트용 가짜 Notion 속성 ID 충돌로 드물게 실패하던 테스트 수정(운영 코드 무관).
+- v114 변경 요약: 브랜드 공유 창 안내를 한 줄로 줄이고 부가 설명 문구 정리(`같은 폴더 사용` 한 줄, `저장하면 해제`). 자사 브랜드(BO-0032·BO-0033)에서 `폴더 만들기`가 건너뛰면 성공 대신 이유를 표시.
+- **데이터 반영(2026-10-05, 사용자 요청):** 자사 통합 브랜드 마이베스룸(BO-0032)·마이랩스(BO-0033)의 Notion `구글 드라이브`를 기존 통합 폴더 `[BO-0032] 뷰티오라 · 픽오라_마이베스룸`으로 연결했습니다(두 브랜드가 같은 폴더를 공유). 이전에 만들어진 빈 폴더 `마이베스룸 (BO-0032)`는 이동·삭제하지 않았습니다.
 - v113 변경 요약: 브랜드 공유 창에서 Notion `자료 공유 이메일`을 보고 직접 고쳐 저장하면 Notion에 기록하고 Drive 편집자를 그 목록에 맞춤(있으면 편집자, 없으면 권한 없음). Google 알림 메일 제거. 소유자·운영진·`BO_STAFF_EMAILS`·배포 계정·최상위 폴더 공유 계정·링크 공유는 건드리지 않음. 이전 방식의 스크립트 속성 `BO_SHARE_ADDED_<폴더 ID>`는 더 이상 읽지 않습니다(남아 있어도 무해).
 - **미검증(v113):** 실제 브랜드 폴더에서의 공유 저장(Notion 기록·Drive 편집자 추가/해제).
 - **미검증(v112):** 운영 데이터에서의 실제 로딩 시간. 배포 후 `api.slow`·`activity.slow` 실행 기록과 홈 확인 시각의 단계별 시간으로 확인합니다.
