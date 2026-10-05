@@ -17,7 +17,23 @@ Notion `상품 · SKU` DB는 그대로 두며 운영센터에서 쓰지 않습�
 
 주소: **https://ops.beautyora.kr** — Cloudflare Pages `beautyora-ops`가 운영센터 웹앱을 화면 전체에 띄웁니다(`scripts/build-web.cjs admin`). 속도는 Apps Script 주소와 같고, Google 안내 문구가 보이지 않습니다. 웹앱 스크립트 속성 `BO_ALLOW_EMBED=true`가 필요합니다.
 
-화면: **홈**(진행 단계별 브랜드 수, 최근 수정) · **브랜드**(검색·필터, 이름을 누르면 Notion 페이지) · **설정**(연결 상태, 초기 설정)
+화면: **홈**(진행 단계별 브랜드 수, 브랜드 자료 현황, 최근 수정) · **브랜드**(검색·필터, 이름을 누르면 Notion 페이지) · **설정**(연결 상태, 초기 설정)
+
+## 브랜드 자료 현황(홈)
+
+Notion `구글 드라이브` 주소가 있는 브랜드 폴더(하위 폴더 한 단계까지)를 읽어 브랜드별 상태를 보여 줍니다. **Drive·Notion에는 아무것도 쓰지 않습니다.** 같은 폴더를 쓰는 공동 브랜드는 한 줄입니다.
+
+| 상태 | 뜻 |
+|---|---|
+| 확인 필요 | 브랜드가 기준 시트(`…상품정보목록`)의 상품 행을 필수 칸까지 모두 채움 |
+| 작성 중 | 브랜드가 기준 시트를 고침. 작성된 상품 행 수와 필수 칸(상품명·바코드·거래 유형·온라인 최저가·거래 유형별 공급가) 누락 행 수 표시 |
+| 파일 올림 | 브랜드가 폴더에 파일을 올림(기준 시트는 아직 안 고침) |
+| 활동 없음 / 기준 시트 없음 / 폴더 없음 | 기준 시트만 있음 / 폴더에 기준 시트가 없음 / Notion에 폴더 주소가 없음 |
+
+- 직원 판단: 운영진(`BO_ADMIN_EMAILS`), `BO_STAFF_EMAILS`(선택), 지금 보고 있는 계정. 그 밖의 계정과 익명 편집은 브랜드 활동으로 셉니다.
+- 폴더를 **열어 보기만 한 것**은 Google이 알려 주지 않아 표시할 수 없습니다. 첫 활동 시각으로 대신합니다.
+- 실시간: 홈을 열어 둔 동안 1분마다 다시 확인합니다(서버는 45초 동안 결과를 나눠 씀, `지금 확인`은 바로 다시 읽음). 시간 트리거를 쓰지 않아 하루 트리거 실행 한도를 쓰지 않습니다.
+- 기준 시트가 엑셀이면 내 드라이브에 임시 Google 시트로 바꿔 읽고 바로 휴지통으로 보냅니다(브랜드 폴더에는 아무것도 생기지 않음). 같은 수정본은 6시간 동안 다시 읽지 않고, 한 번에 4개까지만 읽고 나머지는 다음 확인 때 이어서 읽습니다.
 
 ## 디렉터리
 
@@ -30,6 +46,7 @@ src/
   10_Brands.gs      브랜드 목록(읽기)
   15_Files.gs       Drive 루트 폴더
   16_BrandFolders.gs 신규 브랜드 폴더 자동 준비·개별 복구
+  17_BrandActivity.gs 홈의 브랜드 자료 현황(Drive 폴더·기준 시트 읽기 전용)
   30_MainProducts.gs 메인 상품목록 만들기(통합리스트 → 새 시트, 제품 링크 찾기)
   18_BrandIntake.gs 신규 Form 응답 폴링·중복 방지·등록 복구
   19_Dashboard.gs   홈 화면
@@ -42,6 +59,7 @@ tests/
   harness.cjs       가짜 Notion·Drive·Apps Script 환경
   server.test.cjs   서버 흐름·보안 테스트
   intake.test.cjs   bridge→응답→Notion→Drive 모의 회귀 테스트
+  brand-activity.test.cjs 브랜드 자료 현황(업로드·시트 진행·공동 폴더·읽기 전용)
   ui.e2e.cjs        Chromium 화면 테스트 + 스크린샷
 ```
 
@@ -80,6 +98,7 @@ tests/
 | `BO_TEMPLATE_FILE_ID` | | 브랜드 폴더에 복사할 취합 엑셀 양식 파일 ID (없으면 양식 없이 폴더만) |
 | `BO_ALLOW_EMBED` | ops 주소 | `true`면 ops.beautyora.kr 안에 표시 허용 |
 | `BO_NOTION_ACTIVITY_DATA_SOURCE_ID` | 권장 | 연락 · 진행 이력 (변경 이력에 사용 예정) |
+| `BO_STAFF_EMAILS` | | 운영진이 아니지만 브랜드 폴더에 파일을 넣는 직원 Google 계정(쉼표 구분). 브랜드 자료 현황에서 직원 활동으로 셉니다 |
 
 v2에서 쓰던 속성(`BO_NOTION_LINK_…`, `BO_NOTION_BILLING_…`, `BO_NOTION_INVENTORY_/MOVEMENT_/STORE_/TERMS_…`, `BO_PARTNER_WEBAPP_URL`, `BO_GOOGLE_CLIENT_ID`, `BO_SPREADSHEET_ID`, `BO_MIGRATION_STATE`)은 더 이상 읽지 않습니다. 남아 있어도 문제는 없습니다. `BO_NOTION_PRODUCT_DATA_SOURCE_ID`는 메인 상품목록을 만들 때 제품 링크를 찾는 데만 읽습니다.
 

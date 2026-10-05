@@ -25,13 +25,14 @@ function adminActions_() {
     'brands.list': apiBrandsList_,
     'brands.folder': apiBrandFolder_,
     'brands.foldersSync': apiBrandFoldersSync_,
+    'brands.activity': apiBrandActivity_,
     'intake.sync': syncBrandIntake_,
     'products.main': apiMainProductsStatus_,
     'products.mainBuild': apiMainProductsBuild_,
     'products.mainImages': apiMainProductsImages_,
     'system.health': function () { return healthCheck_(); },
     'system.setup': function () { return setupSystem_(); },
-    'system.refresh': function () { bumpCache_('brand', 'activity', 'source'); return { refreshed: true }; }
+    'system.refresh': function () { bumpCache_('brand', 'activity', 'source', 'driveActivity'); return { refreshed: true }; }
   };
 }
 

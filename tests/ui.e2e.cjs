@@ -21,6 +21,18 @@ assert.equal(setup.ok, true, setup.message);
 
 // Hostile text coming from Notion must render as text, never as markup.
 env.notion.createPage(data.ids.brandId, { '브랜드명': { title: [{ text: { content: '<img src=x onerror="window.__xss=1">' } }] }, '브랜드 ID': { rich_text: [{ text: { content: 'BO-0099' } }] }, '진행 단계': { select: { name: '접수·검토' } }, '구글 드라이브': { url: 'javascript:alert(1)' } });
+// 브랜드 자료 현황: 루엠 폴더에 브랜드가 올린 섬네일과 작성 중인 기준 시트.
+{
+  const props = env.notion.sources[data.ids.brandId].properties;
+  const folder = env.drive.folder('루엠 주식회사 | 루엠 [BO-0001]', env.drive.root);
+  const brandUser = { emailAddress: 'ceo@brand.example', displayName: '루엠 대표' };
+  const sheet = env.drive.file({ name: '루엠_뷰티오라_브랜드사_상품정보목록.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', parents: [folder] });
+  Object.assign(sheet, { createdTime: new Date(Date.now() - 3600000).toISOString(), modifiedTime: new Date(Date.now() - 120000).toISOString(), lastModifyingUser: brandUser, owners: [{ emailAddress: 'admin@beautyora.test' }] });
+  sheet.sheetTabs = { '상품리스트': [['번호', '브랜드 · 상품 정보', '', '', '', '온라인 최저가', '거래 유형', '공급가 (VAT 포함)', ''], ['', '브랜드명', '제품이미지', '상품명 (옵션명)', '바코드번호', '', '', '매입 시', '위탁 시'], ['1', '루엠', '', '시카 앰플', '', '19,000', '매입', '7,000', '']] };
+  const photo = env.drive.file({ name: '앰플.jpg', mimeType: 'image/jpeg', parents: [folder] });
+  Object.assign(photo, { createdTime: new Date(Date.now() - 600000).toISOString(), modifiedTime: new Date(Date.now() - 600000).toISOString(), owners: [brandUser], lastModifyingUser: brandUser });
+  env.notion.handle('patch', 'https://api.notion.com/v1/pages/' + data.b1.id, { properties: { [props['구글 드라이브'].id]: { url: 'https://drive.google.com/drive/folders/' + folder } } });
+}
 env.api('system.refresh');
 
 const pages = { '/admin': () => env.call('doGet', { parameter: {} }).getContent() };
@@ -62,6 +74,16 @@ const shot = async (page, name) => { await page.waitForTimeout(600); return page
     await a.waitForSelector('.stats .stat');
     assert.deepEqual(await a.$$eval('.nav-item span', (els) => els.map((e) => e.textContent)), ['홈', '브랜드', '설정']);
     assert.match(await a.textContent('.stats'), /접수·검토/);
+    // 브랜드 자료 현황: 작성 중 상태, 누락 표시, 실시간 갱신 표시와 상태 거르기.
+    await a.waitForSelector('#actBody tr[data-status="writing"]');
+    assert.match(await a.textContent('#actBody tr[data-status="writing"]'), /루엠[\s\S]*작성 중[\s\S]*상품 1행[\s\S]*필수 누락 1행/);
+    assert.match(await a.textContent('#actStamp'), /실시간 · 1분마다 확인/);
+    assert.equal(await a.getAttribute('#actBody tr[data-status="writing"] .cell-title a', 'target'), '_blank', 'brand name opens the Drive folder');
+    await a.click('#actBody [data-filter="no_folder"]');
+    assert.equal(await a.locator('#actBody tbody tr[data-status="no_folder"]').count(), 3);
+    assert.equal(await a.locator('#actBody tbody tr[data-status="writing"]').count(), 0);
+    await a.click('#actBody [data-filter="active"]');
+    assert.ok(await a.evaluate(() => !!Live.timer), 'home keeps polling while open');
     await shot(a, '01-home');
 
     // A stage tile opens the brand list filtered to that stage.
@@ -85,6 +107,7 @@ const shot = async (page, name) => { await page.waitForTimeout(600); return page
     assert.equal(await a.evaluate(() => window.__xss), undefined, 'no script injection from Notion text');
 
     await a.click('a[data-path="settings"]');
+    assert.equal(await a.evaluate(() => Live.timer), null, 'polling stops when leaving home');
     await a.waitForSelector('#sHealthBox table');
     await a.waitForSelector('#mBuild');
     assert.match(await a.textContent('#mBox'), /아직 만들지 않았습니다/);

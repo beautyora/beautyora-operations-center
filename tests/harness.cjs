@@ -342,11 +342,14 @@ class FakeDrive {
     if (file.trashed) return false;
     const byName = /name = '((?:[^'\\]|\\.)*)'/.exec(q);
     if (byName && file.name !== byName[1].replace(/\\'/g, "'")) return false;
-    const parent = /'([^']+)' in parents/.exec(q);
-    if (parent) {
-      if ((file.parents || []).indexOf(parent[1]) < 0) return false;
-      const mime = /mimeType = '([^']+)'/.exec(q);
-      return !mime || (mime[1] === 'application/vnd.google-apps.folder' ? !!file.folder : file.mimeType === mime[1]);
+    // '<id>' in parents 조건이 여러 개면 OR로 묶인 것으로 본다(운영센터는 그렇게만 보낸다).
+    const parentIds = Array.from(q.matchAll(/'([^']+)' in parents/g)).map((m) => m[1]);
+    if (parentIds.length) {
+      if (!(file.parents || []).some((p) => parentIds.indexOf(p) >= 0)) return false;
+      const mime = /mimeType (!?=) '([^']+)'/.exec(q);
+      if (!mime) return true;
+      const same = mime[2] === 'application/vnd.google-apps.folder' ? !!file.folder : file.mimeType === mime[2];
+      return mime[1] === '=' ? same : !same;
     }
     if (file.folder) return false;
     const re = /appProperties has \{ key='([^']+)' and value='((?:[^'\\]|\\.)*)' \}/g;
@@ -376,7 +379,7 @@ class FakeDrive {
         copy: (resource, id) => {
           const src = self.items[id]; if (!src || src.folder) throw new Error('File not found: ' + id);
           const made = self.file(Object.assign({ name: src.name, mimeType: src.mimeType, md5Checksum: src.md5Checksum }, resource), null);
-          if (resource.mimeType === 'application/vnd.google-apps.spreadsheet' && self.sheets) self.sheets.addBook(made.id, made.name, { Sheet1: src.sheetValues || [] });
+          if (resource.mimeType === 'application/vnd.google-apps.spreadsheet' && self.sheets) self.sheets.addBook(made.id, made.name, src.sheetTabs || { Sheet1: src.sheetValues || [] });
           return JSON.parse(JSON.stringify(made));
         }
       }

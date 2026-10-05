@@ -27,6 +27,8 @@
 - 같은 코드의 [서버·Chromium CI](https://github.com/beautyora/beautyora-operations-center/actions/runs/37286213426)는 성공했습니다. 별도 외부 배포 검사 실패도 존재하므로 모든 검사가 성공했다고 표현하지 않습니다.
 - 배포 대상은 scripts/verify-deploy-target.cjs의 승인된 운영 대상과 대조합니다. 옛 미사용 프로젝트로 바꾸지 않습니다.
 - **미검증:** v110 규칙으로 다음 실제 신규 신청의 폴더가 생성되는 전체 운영 흐름. 모의 테스트나 배포 성공으로 대체하지 않습니다.
+- **미배포(브랜치 `claude/dazzling-gates-pgd8gv`):** 홈의 브랜드 자료 현황(src/17_BrandActivity.gs, 읽기 전용, 홈을 열어 둔 동안 1분 주기 확인). 모의 Drive·Chromium 테스트만 통과했고 실제 브랜드 폴더로 확인하지 않았습니다. v110에는 없습니다.
+- **미해결:** ops.beautyora.kr 첫 진입 화면 깨짐·Google 로그인 없음. 현재 페이지는 USER_ACCESSING 웹앱을 iframe으로 띄우므로 Google에 로그인되지 않았거나 여러 계정이 로그인된 브라우저에서 Google 로그인 화면이 iframe 안에서 막히는 것으로 추정합니다(운영 화면 직접 확인 전). 인증 방식 변경은 별도 승인 후 진행합니다.
 
 ### 브랜드 랜딩과 브릿지
 
