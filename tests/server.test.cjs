@@ -539,3 +539,22 @@ test('deployment: production target guard fails closed without exposing configur
   assert.ok(guard < workflow.indexOf('- name: Google 인증 준비'));
   assert.ok(guard < workflow.indexOf('clasp@3 push'));
 });
+
+test('brand list asks Notion only for the properties it shows, and falls back if Notion refuses that', () => {
+  const { env } = setup();
+  const brands = ok(env.api('brands.list')).brands;
+  assert.equal(brands.length, 3);
+  assert.equal(brands.find((b) => b.code === 'BO-0001').company, '루엠 주식회사');
+  assert.ok(env.notion.filteredQueries >= 1, 'filter_properties used');
+
+  const fresh = createEnv();
+  seed(fresh);
+  fresh.notion.rejectFilterProperties = true;
+  const list = ok(fresh.api('brands.list')).brands;
+  assert.equal(list.length, 3, 'still works without filter_properties');
+  assert.equal(fresh.notion.filteredQueries || 0, 0);
+  assert.equal(fresh.notion.rejectedFilters, 1);
+  ok(fresh.api('system.refresh'));
+  ok(fresh.api('brands.list'));
+  assert.equal(fresh.notion.rejectedFilters, 1, 'remembers not to ask again');
+});

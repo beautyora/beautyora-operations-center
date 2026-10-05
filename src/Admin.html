@@ -165,20 +165,28 @@ async function brandActivityCard(view) {
       (list.length ? '<div class="table-wrap"><table class="table"><thead><tr><th>브랜드(폴더)</th><th>상태</th><th>기준 시트</th><th class="hide-sm">올린 파일</th><th class="hide-sm">마지막 활동</th></tr></thead><tbody>' + list.slice(0, 300).map(activityRow).join('') + '</tbody></table></div>' : UI.empty('해당하는 브랜드가 없습니다')) +
       '<p class="small muted act-note">폴더를 열어 보기만 한 것은 Google이 알려 주지 않아 표시되지 않습니다. 직원 계정(운영진·BO_STAFF_EMAILS)의 변경은 브랜드 활동으로 세지 않습니다.</p>';
   };
-  const tick = () => { if (state.at) stamp.textContent = '실시간 · 1분마다 확인 · ' + Fmt.ago(new Date(state.at).toISOString()) + ' 갱신'; };
+  // 표시 시각은 서버가 Drive를 읽은 시각(generatedAt) 기준이다. 지난 결과를 먼저 보여 주고 뒤에서 새로 확인한다.
+  const tick = () => {
+    if (!state.data) return;
+    const when = Fmt.ago(state.data.generatedAt);
+    stamp.textContent = state.loading ? '지난 결과(' + when + ') · Drive에서 새로 확인하는 중'
+      : state.error ? '갱신 실패 · ' + state.error + ' (' + when + ' 결과 표시 중, 다음 확인 때 다시 시도)'
+      : '실시간 · 1분마다 확인 · ' + when + ' 기준';
+    const st = state.data.stats;
+    if (st) stamp.title = 'Notion ' + Math.round(st.notionMs / 100) / 10 + '초 · Drive ' + Math.round(st.driveMs / 100) / 10 + '초 · 기준 시트 ' + Math.round(st.sheetMs / 100) / 10 + '초 (폴더 ' + st.folders + '개)';
+  };
+  const show = (data) => { state.data = data; state.error = ''; state.at = Date.now(); if (body.isConnected) { paint(); tick(); } };
   const load = async (fresh) => {
     if (state.loading) return;
     state.loading = true;
+    tick();
     try {
-      state.data = await Api.call('brands.activity', fresh ? { fresh: true } : {}, { noRetry: true });
-      state.at = Date.now();
-      if (!body.isConnected) return;
-      paint(); tick();
+      show(await Api.call('brands.activity', fresh ? { fresh: true } : {}, { noRetry: true }));
     } catch (e) {
       if (!body.isConnected) return;
-      if (state.data) { stamp.textContent = '갱신 실패 · ' + (e.message || '') + ' (다음 확인 때 다시 시도)'; }
+      if (state.data) state.error = e.message || '알 수 없는 오류';
       else body.innerHTML = UI.error(e, true);
-    } finally { state.loading = false; }
+    } finally { state.loading = false; tick(); }
   };
   body.addEventListener('click', (e) => {
     const chip = e.target.closest('[data-filter]');
@@ -186,12 +194,19 @@ async function brandActivityCard(view) {
     if (e.target.closest('[data-retry]')) load(true);
   });
   $('#actRefresh', view).addEventListener('click', (e) => busy(e.currentTarget, () => load(true)));
-  await load(false);
+  // 지난 결과가 있으면 바로 그린다(대개 1초 안). 그다음 필요하면 새로 확인한다.
+  try {
+    const cached = await Api.call('brands.activity', { cachedOnly: true }, { noRetry: true });
+    if (cached) show(cached);
+  } catch (e) { /* 새로 확인에서 다시 알린다 */ }
+  if (!state.data || state.data.stale) await load(false);
+  // 기다리는 동안 다른 화면으로 갔으면 다시 확인을 시작하지 않는다.
+  if (!body.isConnected) return;
   Live.stop();
   Live.timer = setInterval(() => {
     if (!body.isConnected) { Live.stop(); return; }
     if (document.visibilityState !== 'visible') return;
-    if (Date.now() - state.at >= ACT_INTERVAL - 1000) load(false); else tick();
+    if (Date.now() - state.at >= ACT_INTERVAL - 1000 || (state.data && state.data.pending)) load(false); else tick();
   }, 15000);
 }
 

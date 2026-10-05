@@ -30,10 +30,13 @@ class FakeNotion {
   addSource(key, spec) {
     const id = spec.id || this.id();
     const properties = {};
+    // 속성 ID는 데이터 소스 안에서 겹치지 않아야 한다(실제 Notion과 같음). 겹치면 한 속성의 값이 다른 속성에 덮인다.
+    const used = new Set(Object.values(spec.properties).map((d) => d.id).filter(Boolean));
+    const uniqueId = (name) => { let id; do { id = name.slice(0, 2) + crypto.randomBytes(2).toString('hex'); } while (used.has(id)); used.add(id); return id; };
     Object.keys(spec.properties).forEach((name) => {
       const def = spec.properties[name];
       const type = def.type;
-      const prop = { id: def.id || name.slice(0, 2) + crypto.randomBytes(2).toString('hex'), name, type };
+      const prop = { id: def.id || uniqueId(name), name, type };
       prop[type] = {};
       if (def.options) prop[type].options = def.options.map((o) => ({ id: crypto.randomBytes(3).toString('hex'), name: o, color: 'default' }));
       if (def.relation) prop.relation = { data_source_id: def.relation, type: 'dual_property' };
@@ -223,7 +226,9 @@ class FakeNotion {
           const type = Object.keys(spec)[0];
           if (existing) { if (spec[type] && spec[type].options) existing[type].options = spec[type].options.map((o) => ({ id: o.id || crypto.randomBytes(3).toString('hex'), name: o.name, color: o.color || 'default' })); }
           else {
-            const prop = { id: crypto.randomBytes(2).toString('hex'), name: key, type };
+            const taken = new Set(Object.values(source.properties).map((x) => x.id));
+            let pid; do { pid = crypto.randomBytes(2).toString('hex'); } while (taken.has(pid));
+            const prop = { id: pid, name: key, type };
             prop[type] = spec[type] || {};
             if (prop[type].options) prop[type].options = prop[type].options.map((o) => ({ id: crypto.randomBytes(3).toString('hex'), name: o.name, color: o.color || 'default' }));
             source.properties[key] = prop;
@@ -232,7 +237,17 @@ class FakeNotion {
         return JSON.parse(JSON.stringify(source));
       }
     }
-    if ((m = p.match(/^\/data_sources\/([^/]+)\/query$/)) && method === 'post') return this.query(decodeURIComponent(m[1]), body || {});
+    if ((m = p.match(/^\/data_sources\/([^/]+)\/query$/)) && method === 'post') {
+      const only = u.searchParams.getAll('filter_properties');
+      if (only.length && this.rejectFilterProperties) { this.rejectedFilters = (this.rejectedFilters || 0) + 1; throw this.error(400, 'validation_error', 'filter_properties is not supported'); }
+      const res = this.query(decodeURIComponent(m[1]), body || {});
+      // filter_properties: 고른 속성만 돌려준다(실제 Notion과 같음). 기록해 두어 테스트가 확인할 수 있게 한다.
+      if (only.length) {
+        this.filteredQueries = (this.filteredQueries || 0) + 1;
+        res.results.forEach((page) => Object.keys(page.properties).forEach((name) => { if (only.indexOf(page.properties[name].id) < 0) delete page.properties[name]; }));
+      }
+      return res;
+    }
     if (p === '/pages' && method === 'post') return this.materialize(this.createPage(body.parent.data_source_id, body.properties, body));
     if ((m = p.match(/^\/pages\/([^/]+)$/))) {
       const page = this.pages[decodeURIComponent(m[1])];

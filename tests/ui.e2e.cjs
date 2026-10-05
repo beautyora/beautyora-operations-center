@@ -56,6 +56,7 @@ google.accounts = { id: {
   prompt() {}, disableAutoSelect() { window.__autoSelectOff = true; }
 } };`;
 let signInAs = 'admin@beautyora.test';
+let slowAction = '';
 const errors = [];
 async function open(browser, url, viewport, options) {
   options = options || {};
@@ -65,8 +66,9 @@ async function open(browser, url, viewport, options) {
   await page.exposeFunction('__mintToken', () => env.idToken(signInAs));
   await page.route('https://cdn.jsdelivr.net/**', (route) => route.abort());
   await page.route('https://accounts.google.com/gsi/client', (route) => route.fulfill({ status: 200, contentType: 'text/javascript', body: GIS }));
-  await page.route(APP_URL, (route) => {
+  await page.route(APP_URL, async (route) => {
     const req = route.request();
+    if (slowAction && JSON.parse(req.postData()).action === slowAction) await new Promise((r) => setTimeout(r, 1500));
     assert.equal(req.method(), 'POST');
     assert.equal(req.headers().cookie, undefined, 'no cookies are sent to Apps Script');
     const body = env.call('doPost', { postData: { contents: req.postData() } }).getContent();
@@ -144,8 +146,24 @@ const shot = async (page, name) => { await page.waitForTimeout(600); return page
     assert.equal(await a.locator('tr[data-code="BO-0099"] a[href^="javascript:"]').count(), 0);
     assert.equal(await a.evaluate(() => window.__xss), undefined, 'no script injection from Notion text');
 
+    // 서버가 늦으면 끝없이 기다리지 않고 알린다.
+    await a.evaluate(() => { Api.TIMEOUT_MS = 400; Api.invalidate(); });
+    slowAction = 'brands.list';
+    await a.click('a[data-path="brands"]');
+    await a.waitForSelector('#view:has-text("넘게 없어 멈췄습니다")');
+    assert.equal(await a.locator('#view [data-retry]').count(), 1, 'retry button offered');
+    slowAction = '';
+    await a.evaluate(() => { Api.TIMEOUT_MS = 90000; });
+    await a.click('#view [data-retry]');
+    await a.waitForSelector('tr[data-code="BO-0001"]');
+
+    // 홈을 다시 열면 지난 결과를 먼저 그린다.
+    await a.click('a[data-path="home"]');
+    await a.waitForSelector('#actBody tr[data-status="writing"]');
+    assert.match(await a.textContent('#actStamp'), /기준|확인하는 중/);
+
     await a.click('a[data-path="settings"]');
-    assert.equal(await a.evaluate(() => Live.timer), null, 'polling stops when leaving home');
+    await a.waitForFunction(() => location.hash === '#/settings' && Live.timer === null, null, { timeout: 5000 }); // polling stops when leaving home
     await a.waitForSelector('#sHealthBox table');
     // 운영진 계정: 로그인 허용 목록과 최상위 폴더 편집 권한.
     await a.waitForSelector('#aBox tr[data-admin="admin@beautyora.test"]');

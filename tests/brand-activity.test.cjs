@@ -120,7 +120,7 @@ test('brand activity: finished sheet asks for review, anonymous edits count as t
 
 test('brand activity: shared company folder is one row, brands without a folder are listed apart, sheets are read a few at a time', () => {
   const { env, data, d, setDrive, addFile } = setup();
-  // 같은 회사 폴더를 쓰는 브랜드 두 곳 + 폴더 없는 브랜드 + 작성 중 시트 5개(한 번에 4개까지 읽음).
+  // 같은 회사 폴더를 쓰는 브랜드 두 곳 + 폴더 없는 브랜드 + 작성 중 시트 5개(한 번에 3개까지 읽음).
   const props = env.notion.sources[data.ids.brandId].properties;
   const page = (name, code) => env.notion.handle('post', 'https://api.notion.com/v1/pages', { parent: { data_source_id: data.ids.brandId }, properties: { [props['브랜드명'].id]: { title: [{ text: { content: name } }] }, [props['브랜드 ID'].id]: { rich_text: [{ text: { content: code } }] }, [props['진행 단계'].id]: { select: { name: '확정' } } } });
   const shared = d.folder('보아스테크 | 원씨드 · 닥터라이트 [BO-0019 · BO-0044]', d.root);
@@ -141,8 +141,8 @@ test('brand activity: shared company folder is one row, brands without a folder 
   assert.deepEqual(sharedRow[0].brands.map((b) => b.code), ['BO-0019', 'BO-0044']);
   assert.equal(first.rows.find((row) => row.brands[0].code === 'BO-0050').status, 'no_folder');
   assert.equal(first.counts.no_folder, 1);
-  assert.equal(first.pending, 1, 'five edited sheets, four read now');
-  assert.equal(first.rows.filter((row) => row.sheet && row.sheet.pending).length, 1);
+  assert.equal(first.pending, 2, 'five edited sheets, three read per request so one request stays short');
+  assert.equal(first.rows.filter((row) => row.sheet && row.sheet.pending).length, 2);
 
   const next = ok(env.api('brands.activity', { fresh: true }));
   assert.equal(next.pending, 0, 'the rest is read on the next poll; earlier results come from cache');
@@ -158,4 +158,37 @@ test('sheet progress parser follows the template headers and skips example rows'
   ]));
   assert.deepEqual(JSON.parse(JSON.stringify(p)), { rows: 1, incomplete: 1, missing: { '위탁 공급가': 1 } });
   assert.equal(env.call('productSheetProgress_', [['아무 표']]).unreadable, true);
+});
+
+test('brand activity: last result comes first, a second viewer does not start another heavy read', () => {
+  const { env } = setup();
+  assert.equal(ok(env.api('brands.activity', { cachedOnly: true })), null, 'nothing cached yet');
+  const first = ok(env.api('brands.activity'));
+  assert.ok(first.stats && first.stats.folders === 3, 'timings for diagnosis');
+  const cached = ok(env.api('brands.activity', { cachedOnly: true }));
+  assert.equal(cached.generatedAt, first.generatedAt);
+  assert.equal(cached.stale, false);
+  // 55초가 지나면 다시 읽지만, 다른 요청이 읽는 중이면 기다리지 않고 지난 결과를 준다.
+  env.call('(function () { BO_MEMO_["driveActivity:last"].generatedAt = new Date(Date.now() - 120000).toISOString(); })');
+  env.call('(function () { cache_().put(cacheKey_("driveActivity:busy"), "1", 120); })');
+  const busy = ok(env.api('brands.activity'));
+  assert.equal(busy.stale, true);
+  assert.equal(busy.generatedAt, env.call('(function () { return BO_MEMO_["driveActivity:last"].generatedAt; })'));
+  env.call('(function () { cache_().remove(cacheKey_("driveActivity:busy")); })');
+  const again = ok(env.api('brands.activity'));
+  assert.notEqual(again.generatedAt, busy.generatedAt, 're-read once nobody else is reading');
+});
+
+test('brand activity: a Drive query Google refuses is split and retried, one bad folder does not hide the rest', () => {
+  const { env, f1 } = setup();
+  const list = env.drive.api().Files.list;
+  env.context.Drive.Files.list = (opts) => {
+    if ((opts.q.match(/in parents/g) || []).length > 1) throw new Error('The query is too complex.');
+    if (opts.q.indexOf(f1) >= 0 && opts.q.indexOf("mimeType = 'application/vnd.google-apps.folder'") >= 0) throw new Error('File not found');
+    return list(opts);
+  };
+  const r = ok(env.api('brands.activity', { fresh: true }));
+  const by = (code) => r.rows.find((row) => row.brands.some((b) => b.code === code));
+  assert.equal(by('BO-0002').status, 'waiting', 'other folders still read one by one');
+  assert.equal(by('BO-0001').sheet.rows, 2, 'files in the folder itself are still read');
 });

@@ -7,12 +7,14 @@
  * - 화면을 열어 둔 동안 1분마다 다시 묻는다(시간 트리거를 쓰지 않아 하루 실행 한도를 쓰지 않는다).
  */
 const BO_ACTIVITY = Object.freeze({
-  TTL: 45,
   SHEET_HINT: '상품정보목록',
   SHEET_TAB: '상품리스트',
   BATCH: 40,
-  PARSE_LIMIT: 4,
-  PARSE_BUDGET_MS: 20000,
+  PARSE_LIMIT: 3,
+  PARSE_BUDGET_MS: 12000,
+  FRESH_MS: 55000,
+  KEEP_TTL: 21600,
+  BUSY_TTL: 120,
   FOLDER: 'application/vnd.google-apps.folder',
   GSHEET: 'application/vnd.google-apps.spreadsheet',
   XLSX: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -55,13 +57,22 @@ function activityParentsClause_(ids) {
   return '(' + ids.map(function (id) { return "'" + id + "' in parents"; }).join(' or ') + ')';
 }
 
+/** 폴더 묶음 질의. Drive가 질의를 거절하면(조건이 너무 많음 등) 반으로 나눠 다시 묻고, 한 폴더만 남아도 안 되면 그 폴더만 건너뛴다. */
+function activityListBatch_(ids, makeQuery) {
+  try { return activityListAll_(makeQuery(ids)); } catch (error) {
+    if (ids.length <= 1) { logError_('activity:list ' + ids[0], error); return []; }
+    const half = Math.ceil(ids.length / 2);
+    return activityListBatch_(ids.slice(0, half), makeQuery).concat(activityListBatch_(ids.slice(half), makeQuery));
+  }
+}
+
 /** 브랜드 폴더 ID 목록 → { 폴더 ID: 파일[] } (하위 폴더 한 단계 포함). Drive 요청은 묶어서 보낸다. */
 function activityFolderFiles_(folderIds) {
   const owner = {};
   folderIds.forEach(function (id) { owner[id] = id; });
   for (let i = 0; i < folderIds.length; i += BO_ACTIVITY.BATCH) {
     const batch = folderIds.slice(i, i + BO_ACTIVITY.BATCH);
-    activityListAll_("mimeType = '" + BO_ACTIVITY.FOLDER + "' and trashed = false and " + activityParentsClause_(batch)).forEach(function (sub) {
+    activityListBatch_(batch, function (ids) { return "mimeType = '" + BO_ACTIVITY.FOLDER + "' and trashed = false and " + activityParentsClause_(ids); }).forEach(function (sub) {
       const parent = (sub.parents || []).find(function (p) { return folderIds.indexOf(p) >= 0; });
       if (parent && !owner[sub.id]) owner[sub.id] = parent;
     });
@@ -70,7 +81,7 @@ function activityFolderFiles_(folderIds) {
   const files = {};
   folderIds.forEach(function (id) { files[id] = []; });
   for (let i = 0; i < all.length; i += BO_ACTIVITY.BATCH) {
-    activityListAll_("mimeType != '" + BO_ACTIVITY.FOLDER + "' and trashed = false and " + activityParentsClause_(all.slice(i, i + BO_ACTIVITY.BATCH))).forEach(function (file) {
+    activityListBatch_(all.slice(i, i + BO_ACTIVITY.BATCH), function (ids) { return "mimeType != '" + BO_ACTIVITY.FOLDER + "' and trashed = false and " + activityParentsClause_(ids); }).forEach(function (file) {
       const parent = (file.parents || []).find(function (p) { return owner[p]; });
       if (!parent) return;
       const list = files[owner[parent]];
@@ -180,7 +191,9 @@ function activityFolderState_(files, staff, parse) {
 }
 
 function brandActivitySnapshot_() {
+  const t0 = Date.now();
   const brands = listBrands_();
+  const tBrands = Date.now();
   const staff = activityStaffEmails_();
   const groups = {}, order = [], noFolder = [];
   brands.forEach(function (b) {
@@ -191,6 +204,7 @@ function brandActivitySnapshot_() {
   });
   const files = order.length ? activityFolderFiles_(order) : {};
   const started = Date.now();
+  const tDrive = started;
   let parsed = 0, pending = 0;
   const parse = function (file) {
     const key = file.id + ':' + (file.modifiedTime || '');
@@ -222,14 +236,31 @@ function brandActivitySnapshot_() {
   const counts = {};
   BO_ACTIVITY.ORDER.forEach(function (s) { counts[s] = 0; });
   rows.forEach(function (r) { counts[r.status]++; });
-  return { rows: rows, counts: counts, pending: pending, generatedAt: new Date().toISOString() };
+  // 진단용 소요 시간(개인 정보 없음). 느릴 때 어느 단계인지 화면·로그에서 볼 수 있다.
+  const stats = { notionMs: tBrands - t0, driveMs: tDrive - tBrands, sheetMs: Date.now() - tDrive, folders: order.length, parsed: parsed };
+  if (Date.now() - t0 > 8000) logInfo_('activity.slow', stats);
+  return { rows: rows, counts: counts, pending: pending, stats: stats, generatedAt: new Date().toISOString() };
 }
 
-/** 관리자 API. 같은 내용을 45초 동안 나눠 쓰고, 아직 읽지 못한 시트가 있으면 짧게만 저장해 다음 요청에서 이어서 읽는다. */
+/**
+ * 관리자 API. 지난 결과를 먼저 돌려주고 새로 읽는 일은 짧게 끝나도록 나눈다.
+ * - cachedOnly: 지난 결과만(없으면 null). 화면이 바로 그릴 수 있게 한다.
+ * - 기본: 지난 결과가 55초 안이면 그대로. 아니면 새로 읽는다. 다른 요청이 이미 읽는 중이면 기다리지 않고 지난 결과를 준다.
+ * - fresh: 바로 새로 읽는다(지금 확인 버튼).
+ * 아직 읽지 못한 기준 시트가 남아 있으면(pending) 다음 확인 때 이어서 읽는다.
+ */
 function apiBrandActivity_(payload) {
-  if (payload && payload.fresh) bumpCache_('driveActivity');
-  const hit = cacheGetJson_('driveActivity', 'snapshot');
-  if (hit) return hit;
-  const snapshot = brandActivitySnapshot_();
-  return cachePutJson_('driveActivity', 'snapshot', snapshot, snapshot.pending ? 10 : BO_ACTIVITY.TTL);
+  payload = payload || {};
+  const last = cacheGetJson_('driveActivity', 'last');
+  const age = last ? Date.now() - Date.parse(last.generatedAt) : Infinity;
+  if (payload.cachedOnly) return last ? Object.assign({}, last, { stale: age >= BO_ACTIVITY.FRESH_MS || !!last.pending }) : null;
+  if (!payload.fresh && last && age < BO_ACTIVITY.FRESH_MS && !last.pending) return last;
+  const busyKey = cacheKey_('driveActivity:busy');
+  if (!payload.fresh && last && cache_().get(busyKey)) return Object.assign({}, last, { stale: true });
+  cache_().put(busyKey, '1', BO_ACTIVITY.BUSY_TTL);
+  try {
+    return cachePutJson_('driveActivity', 'last', brandActivitySnapshot_(), BO_ACTIVITY.KEEP_TTL);
+  } finally {
+    try { cache_().remove(busyKey); } catch (ignored) {}
+  }
 }
