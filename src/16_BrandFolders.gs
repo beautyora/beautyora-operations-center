@@ -189,7 +189,7 @@ function createBrandFolder_(brand, schema) {
   const pages = notionQueryAll_(schema.sourceId, { filter: { property: schema.ids.code, rich_text: { equals: brand.code } } }, 2);
   if (pages.length !== 1 || pages[0].id !== brand.pageId) throw userError_('브랜드 ID가 중복되었거나 변경되었습니다: ' + brand.code);
   brand = brandSummary_(notionRow_(pages[0], schema)); // 캐시된 URL로 덮어쓰지 않는다.
-  if (!brand.drive && ['BO-0032', 'BO-0033'].indexOf(brand.code) !== -1) return { code: brand.code, name: brand.name, url: '', created: false, skipped: '자사 브랜드: 자료 폴더 제외' };
+  if (!brand.drive && ['BO-0032', 'BO-0033'].indexOf(brand.code) !== -1) return { code: brand.code, name: brand.name, url: '', created: false, skipped: '자사 브랜드는 새 폴더를 만들지 않습니다. 통합 폴더 주소를 Notion "구글 드라이브"에 넣어 주세요.' };
   // 캐시/현재 처리 대상만으로 이름을 만들면 공동 폴더의 기존 브랜드가 빠진다.
   const brands = notionQueryAll_(schema.sourceId, {}).map(function (page) { return brandSummary_(notionRow_(page, schema)); });
   const url = ensureBrandFolder_(brand, brands);

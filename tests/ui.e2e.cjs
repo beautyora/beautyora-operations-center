@@ -136,7 +136,7 @@ const shot = async (page, name) => { await page.waitForTimeout(600); return page
     await a.click('[data-share="BO-0001"]');
     await a.waitForSelector('#modal:has-text("브랜드 폴더 공유")');
     assert.equal(await a.inputValue('#shareEmails'), 'ceo@brand.example');
-    assert.match(await a.textContent('#modal'), /이메일이 아닌 부분은 저장하면 빠집니다: 오타/);
+    assert.match(await a.textContent('#modal'), /이메일이 아닌 값은 저장하면 빠집니다: 오타/);
     assert.match(await a.textContent('#shareStatus'), /ceo@brand\.example\s*저장하면 공유/);
     assert.equal(await a.locator('#modal :text("알림 메일 보내기")').count(), 0, 'no notification option');
     await a.fill('#shareEmails', 'ceo@brand.example\nwrong@');
