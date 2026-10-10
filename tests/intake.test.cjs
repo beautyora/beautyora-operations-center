@@ -37,7 +37,7 @@ function setup() {
   env.props.BO_INTAKE_RESPONSE_SHEET_ID = 'response-sheet';
   env.call('setupBeautyora');
   function submit(name, extra = {}) {
-    const answer = { company: '테스트회사', brand: name, biz: '000-00-00000', contact: '자동검증', phone: '000-0000-0000', email: 'test@example.com', ...extra };
+    const answer = { company: '테스트회사', brand: name, biz: String(1000000000 + sequence), contact: '자동검증', phone: '000-0000-0000', email: 'test' + sequence + '@example.com', ...extra };
     const response = form.createResponse();
     items.forEach(item => { if (answer[item.getId()] !== undefined) response.withItemResponse(item.createResponse(answer[item.getId()])); });
     return response.submit();
@@ -64,7 +64,7 @@ test('intake: real bridge source programmatic submit reaches mock response sheet
   const bridge = bridgeFor(env);
   assert.equal(bridge({ brand: 'missing fields' }).ok, false);
   assert.equal(sheetRows.length, 2);
-  assert.equal(bridge({ company: '테스트', brand: 'TEST_뷰티오라_연동확인', biz: '000-00-00000', contact: '자동검증', phone: '000-0000-0000', email: 'beautyora-e2e-test@example.com' }).ok, true);
+  assert.equal(bridge({ company: '테스트', brand: 'TEST_뷰티오라_연동확인', biz: '100-00-00099', contact: '자동검증', phone: '000-0000-0000', email: 'beautyora-e2e-test@example.com' }).ok, true);
   assert.equal(sheetRows.length, 3);
   assert.equal(rows().length, before, 'programmatic submit did not fire a form trigger');
   assert.equal(sync().processed, 1);
@@ -85,7 +85,7 @@ test('intake: direct form responses work and existing sales fields/legacy respon
   env.notion.pages[data.b1.id].properties['폼 응답 ID'] = { rich_text: [{ text: { content: 'legacy-id,0' }, plain_text: 'legacy-id,0' }], type: 'rich_text' };
   const original = JSON.stringify(env.notion.pages[data.b1.id]);
   env.call('setupBrandIntake');
-  submit(' 루 엠 ', { company: '변경 요청', contact: '새 담당자' });
+  submit(' 루 엠 ', { biz: '1234567890', company: '변경 요청', contact: '새 담당자' });
   assert.equal(sync().processed, 1);
   assert.equal(JSON.stringify(env.notion.pages[data.b1.id]), original);
   assert.equal(rows().length, 3);
@@ -96,7 +96,9 @@ test('intake: direct form responses work and existing sales fields/legacy respon
 test('intake: multi-brand response recovers only its incomplete brand and allocates unique BO IDs', () => {
   const { env, submit, rows, sync } = setup();
   env.call('setupBrandIntake');
-  submit('Alpha, Beta(서브, 라인), alpha\nGamma');
+  const response = submit('Alpha, Beta(서브, 라인), alpha\nGamma');
+  approveNew({ env }, response, 'Beta(서브, 라인)');
+  approveNew({ env }, response, 'Gamma');
   const create = env.context.intakeCreateOnce_;
   let calls = 0;
   env.context.intakeCreateOnce_ = (...args) => {
@@ -330,7 +332,7 @@ function recoverySetup() {
   s.env.call('setupBrandIntake');
   const config = { targets: [r1, r2].map(r => ({ brand: s.env.call('formAnswers_', r).brand, company: '테스트회사', timestamp: r.getTimestamp().toISOString() })) };
   const preview = s.env.call('previewBrandIntakeRecovery', config);
-  config.targets.forEach((t, i) => Object.assign(t, { responseId: preview.responses[i].source.responseId, sourceHash: preview.responses[i].sourceHash, fields: { brand: 'brand', company: 'company', contactName: 'contact' } }));
+  config.targets.forEach((t, i) => Object.assign(t, { responseId: preview.responses[i].source.responseId, sourceHash: preview.responses[i].sourceHash, fields: { brand: 'brand', company: 'company', contactName: 'contact', bizNo: 'biz' } }));
   s.env.props.BO_INTAKE_RECOVERY_TWO_V1 = JSON.stringify(config);
   return { ...s, config, r1, r2 };
 }
@@ -449,4 +451,324 @@ test('recovery: preview tolerates only one second and unique identity; replay re
   const duplicate = s.submit(s.config.targets[0].brand);
   duplicate.timestamp = new Date(Date.parse(original) + 500);
   assert.throws(() => s.env.call('previewBrandIntakeRecovery', s.config), /하나로/);
+});
+
+function aliasSetup() {
+  const s = setup(), { env, data } = s;
+  const schema = env.call('notionSchema_', 'brand');
+  env.call('notionPatch_', data.b1.id, env.call('notionProps_', schema, {
+    name: 'DI/RE', code: 'BO-0108', bizNo: '123-45-67890'
+  }));
+  env.notion.pages[data.b1.id].properties['재영업 단계'] = { type: 'select', select: { name: '1차 메일링' } };
+  env.call('setupBrandIntake');
+  return s;
+}
+
+function approveNew(s, response, name) {
+  const rules = JSON.parse(s.env.props.BO_INTAKE_MATCH_RULES_V1 || '{"newBrands":[]}');
+  rules.newBrands.push({
+    responseHash: s.env.call('sha256_', response.getId()),
+    fingerprint: s.env.call('sha256_', JSON.stringify(s.env.call('formAnswers_', response))),
+    nameHash: s.env.call('sha256_', s.env.call('normalizeName_', name))
+  });
+  s.env.props.BO_INTAKE_MATCH_RULES_V1 = JSON.stringify(rules);
+}
+
+test('identity: DI/RE, 디르 and explicit bilingual alias link to BO ID preserving sales, raw source, folder and retries', () => {
+  for (const name of ['DI/RE', '디르', '디르(DI/RE)']) {
+    const s = aliasSetup(), { env, data } = s;
+    const pages = JSON.stringify(env.notion.pages), drive = JSON.stringify(env.drive.items);
+    const response = s.submit(name, { biz: '1234567890' });
+    const source = JSON.stringify(env.call('formAnswers_', response));
+    assert.equal(s.sync().failed.length, 0);
+    assert.equal(s.sync().processed, 0);
+    assert.equal(JSON.stringify(env.notion.pages), pages);
+    assert.equal(JSON.stringify(env.drive.items), drive);
+    assert.equal(JSON.stringify(env.call('formAnswers_', response)), source);
+    assert.equal(s.sheetRows.length, 1);
+    const job = JSON.parse(env.props['BO_INTAKE_JOB_V1_' + env.call('sha256_', response.getId())]);
+    assert.equal(job.done, true);
+    assert.deepEqual(job.matches['0'], { pageId: data.b1.id, code: 'BO-0108' });
+  }
+});
+
+test('identity: same business different brand requires response-specific review, then creates separately and reuses company folder', () => {
+  const s = setup(), { env } = s;
+  env.call('setupBrandIntake');
+  s.submit('First', { biz: '9876543210', email: 'shared@example.com' });
+  assert.equal(s.sync().failed.length, 0);
+  const first = s.rows().find(b => b.name === 'First');
+  const second = s.submit('Second', { biz: '9876543210', email: 'shared@example.com' });
+  assert.match(s.sync().failed[0].message, /shared-business-or-email/);
+  assert.equal(s.rows().length, 4);
+  approveNew(s, second, 'Second');
+  assert.equal(s.sync().failed.length, 0);
+  const added = s.rows().find(b => b.name === 'Second');
+  assert.notEqual(added.code, first.code);
+  assert.equal(added.drive, first.drive);
+  assert.equal(s.sync().processed, 0);
+  s.submit('Third', { biz: '9876543210' });
+  assert.match(s.sync().failed[0].message, /shared-business-or-email/);
+});
+
+test('identity: missing or conflicting business, alias targets and multiple mappings fail closed', () => {
+  for (const mode of ['missing', 'conflict', 'target-missing', 'target-renamed', 'ambiguous', 'duplicate-name']) {
+    const s = aliasSetup(), { env, data } = s;
+    if (mode === 'target-missing') env.notion.pages[data.b1.id].archived = true;
+    if (mode === 'target-renamed') env.call('notionPatch_', data.b1.id, env.call('notionProps_', env.call('notionSchema_', 'brand'), { name: 'Unrelated' }));
+    if (mode === 'ambiguous') env.props.BO_INTAKE_MATCH_RULES_V1 = JSON.stringify({ aliases: [{ code: 'BO-0002', names: ['디르'] }] });
+    if (mode === 'duplicate-name') env.call('notionPatch_', data.b2.id, env.call('notionProps_', env.call('notionSchema_', 'brand'), { name: '디르' }));
+    const pages = JSON.stringify(env.notion.pages), drive = JSON.stringify(env.drive.items);
+    s.submit('디르', { biz: mode === 'missing' ? '' : mode === 'conflict' ? '9876543210' : '1234567890' });
+    assert.equal(s.sync().failed.length, 1, mode);
+    assert.equal(s.sync().failed.length, 1, mode);
+    assert.equal(JSON.stringify(env.notion.pages), pages, mode);
+    assert.equal(JSON.stringify(env.drive.items), drive, mode);
+  }
+});
+
+test('identity: unconfirmed parenthetical alias, same email and missing new-brand business require review', () => {
+  for (const [name, extra, pattern] of [
+    ['Unknown(DI/RE)', { biz: '9876543210' }, /unconfirmed-alias/],
+    ['Another', { biz: '' }, /missing-business/],
+    ['Another', { biz: '000-00-00000' }, /missing-business/],
+    ['Another', { biz: 'bad1234567890' }, /missing-business/],
+    ['Another', { biz: '9876543210', email: 'shared@example.com' }, /shared-business-or-email/]
+  ]) {
+    const s = aliasSetup();
+    s.env.call('notionPatch_', s.data.b1.id, s.env.call('notionProps_', s.env.call('notionSchema_', 'brand'), { email: 'SHARED@example.com' }));
+    s.submit(name, extra);
+    assert.match(s.sync().failed[0].message, pattern);
+    assert.equal(s.rows().length, 3);
+  }
+});
+
+test('identity: matched entry survives later failure without ever invoking folder recovery on existing brand', () => {
+  const s = aliasSetup();
+  s.submit('디르, New', { biz: '1234567890' });
+  const before = JSON.stringify(s.env.notion.pages[s.data.b1.id]);
+  assert.equal(s.sync().failed.length, 1);
+  s.env.context.createBrandFolder_ = () => { throw new Error('must not touch matched folder'); };
+  assert.match(s.sync().failed[0].message, /shared-business-or-email/);
+  assert.equal(JSON.stringify(s.env.notion.pages[s.data.b1.id]), before);
+});
+
+test('identity: archived completed response is skipped; incomplete archived page blocks regeneration', () => {
+  for (const complete of [true, false]) {
+    const s = setup(); s.env.call('setupBrandIntake'); s.submit('Archived');
+    if (!complete) s.env.props.BO_TEMPLATE_FILE_ID = 'unavailable';
+    s.sync();
+    const page = s.rows().find(b => b.name === 'Archived');
+    s.env.notion.pages[page.pageId].archived = true;
+    let posts = 0;
+    s.env.context.intakeCreateOnce_ = () => { posts++; throw new Error('must not recreate'); };
+    const result = s.sync();
+    assert.equal(posts, 0);
+    assert.equal(result.processed, 0);
+    if (complete) assert.equal(result.failed.length, 0);
+    else assert.match(result.failed[0].message, /삭제\/이동/);
+  }
+});
+
+test('identity: malformed rules and stale approval do not permit generation', () => {
+  for (const config of ['broken', 'null', '{"aliases":{}}', '{"aliases":[{"code":"BO-0001","names":[""]}]}', '{"newBrands":[{}]}']) {
+    const s = setup(); s.env.call('setupBrandIntake'); s.submit('Unknown');
+    s.env.props.BO_INTAKE_MATCH_RULES_V1 = config;
+    assert.equal(s.sync().failed.length, 1);
+    assert.equal(s.rows().length, 3);
+  }
+  const s = setup(); s.env.call('setupBrandIntake');
+  const r = s.submit('New', { biz: '1234567890' });
+  approveNew(s, r, 'New');
+  const rules = JSON.parse(s.env.props.BO_INTAKE_MATCH_RULES_V1);
+  rules.newBrands[0].fingerprint = 'a'.repeat(64);
+  s.env.props.BO_INTAKE_MATCH_RULES_V1 = JSON.stringify(rules);
+  assert.equal(s.sync().failed.length, 1);
+});
+
+test('identity: uncertain pending create blocks another spelling with the same business even before Notion is visible', () => {
+  const s = setup(); s.env.call('setupBrandIntake');
+  const create = s.env.context.intakeCreateOnce_;
+  s.env.context.intakeCreateOnce_ = () => { throw new Error('ambiguous timeout'); };
+  s.submit('First', { biz: '9876543210' }); s.sync();
+  s.env.context.intakeCreateOnce_ = create;
+  s.submit('다른 표기', { biz: '9876543210' });
+  assert.equal(s.sync().failed.length, 2);
+  assert.equal(s.rows().length, 3);
+});
+
+test('identity: historical baseline and completed journals stay unchanged, including archived alias response', () => {
+  const s = aliasSetup();
+  const baseline = s.env.props.BO_INTAKE_BASELINE_V1;
+  const r = s.submit('디르', { biz: '1234567890' });
+  s.sync();
+  s.env.notion.pages[s.data.b1.id].archived = true;
+  const props = JSON.stringify(s.env.props);
+  assert.equal(s.sync().processed, 0);
+  assert.equal(JSON.stringify(s.env.props), props);
+  assert.equal(s.env.props.BO_INTAKE_BASELINE_V1, baseline);
+  assert.equal(s.responses[0].getId(), r.getId());
+});
+
+test('identity: exact name without corroborating business stays reviewable, not silently completed', () => {
+  for (const biz of ['', '9876543210']) {
+    const s = setup(); s.env.call('setupBrandIntake');
+    s.submit('루엠', { biz });
+    assert.equal(s.sync().failed.length, 1);
+    assert.equal(s.rows().length, 3);
+  }
+});
+
+test('identity: new-brand approval cannot override a conflicting confirmed alias', () => {
+  const s = aliasSetup();
+  const r = s.submit('디르', { biz: '9876543210' });
+  approveNew(s, r, '디르');
+  assert.match(s.sync().failed[0].message, /alias-business-unverified/);
+  assert.equal(s.rows().length, 3);
+});
+
+
+test('identity: any active page occupying a confirmed alias blocks all spellings until reviewed', () => {
+  for (const name of ['DI/RE', '디르(DI/RE)']) {
+    const s = aliasSetup();
+    s.env.call('notionPatch_', s.data.b2.id, s.env.call('notionProps_', s.env.call('notionSchema_', 'brand'), { name: '디르' }));
+    s.submit(name, { biz: '1234567890' });
+    assert.match(s.sync().failed[0].message, /alias-conflict/);
+    assert.equal(s.rows().length, 3);
+  }
+});
+
+test('identity: persisted review sends no repeated trigger alerts, retains application and resolves without journal reset', () => {
+  const s = setup(); s.env.call('setupBrandIntake');
+  const response = s.submit('Different', { biz: '1234567890' });
+  const raw = JSON.stringify(s.env.call('formAnswers_', response));
+  const event = { triggerUid: s.env.triggers.find(t => t.getHandlerFunction() === 'scheduledBrandIntake').getUniqueId() };
+  const first = s.env.call('scheduledBrandIntake', event);
+  assert.equal(first.failed[0].notification, 'sent');
+  const mails = s.env.mail.length;
+  assert.ok(mails > 0);
+  const props = JSON.stringify(s.env.props);
+  for (let i = 0; i < 3; i++) {
+    const result = s.env.call('scheduledBrandIntake', event);
+    assert.equal(result.failed.length, 1, 'review remains visible, not marked done');
+    assert.equal(result.failed[0].notify, false);
+  }
+  assert.equal(s.env.mail.length, mails);
+  assert.equal(JSON.stringify(s.env.props), props);
+  assert.equal(JSON.stringify(s.env.call('formAnswers_', response)), raw);
+  assert.equal(s.sheetRows.length, 1);
+  approveNew(s, response, 'Different');
+  assert.equal(s.env.call('scheduledBrandIntake', event).failed.length, 0);
+  assert.equal(s.rows().filter(b => b.name === 'Different').length, 1);
+  assert.equal(s.env.call('scheduledBrandIntake', event).processed, 0);
+  assert.equal(s.env.mail.length, mails);
+});
+
+test('identity: reviewed alias can be resolved by confirmed mapping without changing original application', () => {
+  const s = setup(); s.env.call('setupBrandIntake');
+  s.submit('새 별칭', { biz: '1234567890' });
+  assert.equal(s.sync().failed.length, 1);
+  const pages = JSON.stringify(s.env.notion.pages);
+  s.env.props.BO_INTAKE_MATCH_RULES_V1 = JSON.stringify({ aliases: [{ code: 'BO-0001', names: ['루엠', '새 별칭'] }] });
+  assert.equal(s.sync().failed.length, 0);
+  assert.equal(JSON.stringify(s.env.notion.pages), pages);
+  assert.equal(s.sync().processed, 0);
+});
+
+function noticeSetup() {
+  const s = setup(); s.env.call('setupBrandIntake');
+  const event = { triggerUid: s.env.triggers.find(t => t.getHandlerFunction() === 'scheduledBrandIntake').getUniqueId() };
+  let clock = Date.now();
+  s.env.context.Date = class extends Date { static now() { return clock; } };
+  return { ...s, tick: () => s.env.call('scheduledBrandIntake', event), advance: ms => { clock += ms; } };
+}
+
+test('review notice: separate responses each deliver despite the shared subject cooldown', () => {
+  const s = noticeSetup();
+  s.env.call('notifyAdmins_', '입점 신규 응답 등록 오류', 'unrelated prior error');
+  s.submit('Review A', { biz: '1234567890' });
+  assert.equal(s.tick().failed[0].notification, 'sent');
+  s.submit('Review B', { biz: '1234567890' });
+  assert.equal(s.tick().failed[1].notification, 'sent');
+  assert.equal(s.env.mail.length, 3);
+  s.env.cache.clear(); s.advance(86400000);
+  s.tick();
+  assert.equal(s.env.mail.length, 3, 'durable sent state outlives the cache');
+});
+
+test('review notice: quota shortage and temporary send failure stay pending and retry at most hourly', () => {
+  for (const mode of ['quota', 'failure', 'recipients']) {
+    const s = noticeSetup();
+    s.submit('Review', { biz: '1234567890' });
+    const mail = s.env.context.MailApp, admins = s.env.props.BO_ADMIN_EMAILS;
+    let attempts = 0;
+    s.env.context.MailApp = {
+      getRemainingDailyQuota: () => mode === 'quota' ? 1 : 100,
+      sendEmail: () => { attempts++; throw new Error('temporary mail failure'); }
+    };
+    if (mode === 'recipients') s.env.props.BO_ADMIN_EMAILS = '';
+    assert.equal(s.tick().failed[0].notification, 'waiting');
+    const props = JSON.stringify(s.env.props);
+    for (let i = 0; i < 4; i++) s.tick();
+    assert.equal(attempts, mode === 'failure' ? 1 : 0);
+    assert.equal(JSON.stringify(s.env.props), props);
+    s.env.context.MailApp = mail; s.env.props.BO_ADMIN_EMAILS = admins;
+    s.advance(3599999); s.tick();
+    assert.equal(s.env.mail.length, 0);
+    s.advance(1);
+    assert.equal(s.tick().failed[0].notification, 'sent');
+    assert.equal(s.env.mail.length, 1);
+    s.advance(86400000); s.env.cache.clear(); s.tick();
+    assert.equal(s.env.mail.length, 1);
+    assert.equal(s.sheetRows.length, 1);
+  }
+});
+
+test('review notice: manual sync does not consume delivery; resolution before retry cancels stale notice', () => {
+  const s = noticeSetup();
+  const response = s.submit('Review', { biz: '1234567890' });
+  assert.equal(s.sync().failed[0].notification, 'pending');
+  assert.equal(s.env.mail.length, 0);
+  assert.equal(s.tick().failed[0].notification, 'sent');
+  assert.equal(s.env.mail.length, 1);
+  const next = s.submit('Another review', { biz: '1234567890' });
+  const mail = s.env.context.MailApp;
+  s.env.context.MailApp = { ...mail, getRemainingDailyQuota: () => 0 };
+  assert.equal(s.tick().failed[1].notification, 'waiting');
+  approveNew(s, response, 'Review'); approveNew(s, next, 'Another review');
+  s.env.context.MailApp = mail; s.advance(3600000);
+  assert.equal(s.tick().failed.length, 0);
+  assert.equal(s.env.mail.length, 1);
+});
+
+test('review notice: sent receipt prevents duplicate when durable confirmation fails after delivery', () => {
+  const s = noticeSetup(); s.submit('Review', { biz: '1234567890' });
+  const save = s.env.context.intakeSave_;
+  s.env.context.intakeSave_ = (key, value) => {
+    if (Object.values(value.entries || {}).some(e => e.notice && e.notice.sentAt)) throw new Error('storage temporarily unavailable');
+    return save(key, value);
+  };
+  assert.throws(s.tick, /storage temporarily/);
+  assert.equal(s.env.mail.length, 1);
+  s.env.context.intakeSave_ = save;
+  s.advance(3600000);
+  assert.equal(s.tick().failed[0].notification, 'sent');
+  assert.equal(s.env.mail.length, 1);
+});
+
+test('review notice: actual intake.sync API payload never enables notification or consumes pending delivery', () => {
+  const s = noticeSetup();
+  const response = s.submit('API review', { biz: '1234567890' });
+  const key = 'BO_INTAKE_JOB_V1_' + s.env.call('sha256_', response.getId());
+  for (const payload of [undefined, {}, { notifyReviews: true }, true, 'true', []]) {
+    const result = s.env.call('api', { action: 'intake.sync', payload, idToken: s.env.idToken(s.env.user.active) });
+    assert.equal(result.ok, true);
+    assert.equal(result.data.failed[0].notification, 'pending');
+    assert.equal(s.env.mail.length, 0);
+    assert.equal(JSON.parse(s.env.props[key]).entries['0'].notice, undefined);
+  }
+  assert.equal(s.tick().failed[0].notification, 'sent');
+  assert.equal(s.env.mail.length, 1);
+  s.tick();
+  assert.equal(s.env.mail.length, 1);
 });

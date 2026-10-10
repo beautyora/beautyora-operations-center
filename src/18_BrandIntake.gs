@@ -194,6 +194,80 @@ function intakeCreateOnce_(schema, properties, answers) {
   throw error;
 }
 
+/** 확인된 별칭은 BO ID에만 연결한다. 사업자번호/이메일은 동일 브랜드의 증거가 아니다. */
+const BO_INTAKE_MATCH_RULES = 'BO_INTAKE_MATCH_RULES_V1';
+const BO_INTAKE_CONFIRMED_ALIASES = Object.freeze([
+  { code: 'BO-0108', names: ['DI/RE', '디르', '디르(DI/RE)'] }
+]);
+
+function intakeBiz_(value) {
+  const digits = String(value || '').replace(/[\s-]/g, '');
+  return /^\d{10}$/.test(digits) && !/^(\d)\1{9}$/.test(digits) ? digits : '';
+}
+
+function intakeMatchRules_() {
+  let rules;
+  try { rules = JSON.parse(prop_(BO_INTAKE_MATCH_RULES) || '{}'); }
+  catch (ignored) { throw userError_('입점 별칭 검토 설정이 올바르지 않습니다.'); }
+  if (!rules || typeof rules !== 'object' || Array.isArray(rules) ||
+      Object.keys(rules).some(function (k) { return ['aliases', 'newBrands'].indexOf(k) < 0; }) ||
+      (rules.aliases !== undefined && !Array.isArray(rules.aliases)) ||
+      (rules.newBrands !== undefined && !Array.isArray(rules.newBrands))) throw userError_('입점 별칭 검토 설정이 올바르지 않습니다.');
+  const aliases = BO_INTAKE_CONFIRMED_ALIASES.concat(rules.aliases || []), newBrands = rules.newBrands || [];
+  aliases.forEach(function (a) {
+    if (!a || !/^BO-\d{4,}$/.test(a.code) || !Array.isArray(a.names) || !a.names.length ||
+        a.names.some(function (n) { return typeof n !== 'string' || !normalizeName_(n); })) throw userError_('입점 별칭 검토 설정이 올바르지 않습니다.');
+  });
+  newBrands.forEach(function (a) {
+    if (!a || ['responseHash', 'fingerprint', 'nameHash'].some(function (k) { return !/^[a-f0-9]{64}$/.test(a[k]); })) throw userError_('입점 신규 브랜드 검토 설정이 올바르지 않습니다.');
+  });
+  return { aliases: aliases, newBrands: newBrands };
+}
+
+/** 순수 판정. 원문/연락처를 오류에 넣지 않고 모호하면 반드시 검토한다. */
+function intakeMatch_(rows, name, answers, responseId, fingerprint) {
+  const rules = intakeMatchRules_(), normalized = normalizeName_(name), biz = intakeBiz_(answers.bizNo);
+  const exact = rows.filter(function (b) { return normalizeName_(b.name) === normalized; });
+  const aliases = rules.aliases.filter(function (a) { return a.names.some(function (n) { return normalizeName_(n) === normalized; }); });
+  const codes = Array.from(new Set(aliases.map(function (a) { return a.code; })));
+  if (codes.length > 1 || exact.length > 1) return { review: 'ambiguous-name' };
+  if (codes.length) {
+    const targets = rows.filter(function (b) { return b.code === codes[0]; });
+    if (targets.length !== 1) return { review: 'alias-target-missing' };
+    const target = targets[0];
+    const targetAliases = rules.aliases.filter(function (a) { return a.code === codes[0]; });
+    if (rows.some(function (b) {
+      return b.pageId !== target.pageId && targetAliases.some(function (a) {
+        return a.names.some(function (n) { return normalizeName_(n) === normalizeName_(b.name); });
+      });
+    })) return { review: 'alias-conflict' };
+    if (!aliases.some(function (a) { return a.names.some(function (n) { return normalizeName_(n) === normalizeName_(target.name); }); }) ||
+        exact.some(function (b) { return b.pageId !== target.pageId; })) return { review: 'alias-conflict' };
+    if (!biz || !intakeBiz_(target.bizNo) || biz !== intakeBiz_(target.bizNo)) return { review: 'alias-business-unverified' };
+    return { existing: target };
+  }
+  if (exact.length) {
+    if (!/^BO-\d{4,}$/.test(exact[0].code) || rows.filter(function (b) { return b.code === exact[0].code; }).length !== 1) return { review: 'ambiguous-code' };
+    if (!biz || !intakeBiz_(exact[0].bizNo)) return { review: 'name-business-unverified' };
+    if (biz !== intakeBiz_(exact[0].bizNo)) return { review: 'name-business-conflict' };
+    return { existing: exact[0] };
+  }
+  const approved = rules.newBrands.some(function (a) {
+    return a.responseHash === sha256_(responseId) && a.fingerprint === fingerprint && a.nameHash === sha256_(normalized);
+  });
+  if (approved) return {};
+  // 괄호 속 이름은 자동 별칭 등록하지 않는다. 알려진 이름이면 검토 신호로만 사용한다.
+  const parts = String(name).split(/[()（）]/).map(normalizeName_).filter(Boolean);
+  if (parts.length > 1 && (rows.some(function (b) { return parts.indexOf(normalizeName_(b.name)) >= 0; }) ||
+      rules.aliases.some(function (a) { return a.names.some(function (n) { return parts.indexOf(normalizeName_(n)) >= 0; }); }))) return { review: 'unconfirmed-alias' };
+  if (!biz) return { review: 'missing-business' };
+  const email = clean_(answers.email).toLowerCase();
+  const related = rows.some(function (b) {
+    return intakeBiz_(b.bizNo) === biz || (email && clean_(b.email).toLowerCase() === email);
+  });
+  return related ? { review: 'shared-business-or-email' } : {};
+}
+
 /** 호출자는 프로젝트 잠금을 보유한다. 기존 브랜드에는 PATCH/댓글도 쓰지 않는다. */
 function intakeProcessResponse_(response, schema, reviewedAnswers) {
   const responseId = String(response.getId() || '');
@@ -210,6 +284,8 @@ function intakeProcessResponse_(response, schema, reviewedAnswers) {
   for (let index = 0; index < names.length; index++) {
     const name = names[index], token = responseId + (names.length > 1 ? ',' + index : '');
     let entry = job.entries[index];
+    // 중간 실패 뒤에도 기존 브랜드 연결을 생성 복구로 오인하지 않는다.
+    if (entry && entry.phase === 'matched') { results.push({ code: entry.code, action: 'duplicate' }); continue; }
     const rows = notionQueryAll_(schema.sourceId, {}).map(function (p) { return notionRow_(p, schema); });
     const linked = rows.filter(function (b) { return b.formResponseId === token; });
     if (linked.length > 1) throw userError_('같은 응답 식별자의 브랜드가 여러 개입니다.');
@@ -226,37 +302,52 @@ function intakeProcessResponse_(response, schema, reviewedAnswers) {
     if (entry && entry.pageId) throw userError_('이전에 생성한 브랜드를 찾을 수 없습니다. 삭제/이동 여부 확인 전 재생성하지 않습니다.');
     if (entry && entry.phase === 'creating') throw userError_('이전 생성 결과가 불명확합니다. Notion 응답 ID 대조 전 재생성하지 않습니다.');
     if (entry && entry.phase === 'done') continue;
-    const existing = rows.filter(function (b) { return normalizeName_(b.name) === normalizeName_(name); });
-    if (existing.length > 1) throw userError_('같은 이름의 기존 브랜드가 여러 개입니다.');
-    if (existing.length) {
-      job.entries[index] = { phase: 'done' };
+    const match = intakeMatch_(rows, name, answers, responseId, fingerprint);
+    if (match.review) {
+      const repeated = entry && entry.phase === 'review' && entry.reason === match.review;
+      if (!repeated) {
+        job.entries[index] = { phase: 'review', reason: match.review, nameHash: sha256_(normalizeName_(name)) };
+        intakeSave_(key, job);
+      }
+      const error = userError_('입점 브랜드 식별 검토 필요 (' + match.review + '). 원본 응답과 기존 BO ID를 확인해 주세요.');
+      // 같은 검토 상태는 매분 알림/로그를 반복하지 않지만 결과에는 계속 표시한다.
+      error.intakeReviewRepeated = !!repeated;
+      error.intakeReviewIndex = index;
+      throw error;
+    }
+    if (match.existing) {
+      // 원본 Form/Sheet를 보존하고 응답 journal에 연결만 기록한다. 기존 페이지/폴더는 쓰지 않는다.
+      job.entries[index] = { phase: 'matched', pageId: match.existing.pageId, code: match.existing.code };
       intakeSave_(key, job);
-      results.push({ code: existing[0].code, action: 'duplicate' });
+      results.push({ code: match.existing.code, action: 'duplicate' });
       continue;
     }
     let max = 0;
     rows.forEach(function (b) { const match = String(b.code || '').match(/^BO-(\d+)$/); if (match) max = Math.max(max, Number(match[1])); });
     const journals = props_().getProperties(), nameHash = sha256_(normalizeName_(name));
+    const bizHash = intakeBiz_(answers.bizNo) ? sha256_(intakeBiz_(answers.bizNo)) : '';
+    const emailHash = clean_(answers.email) ? sha256_(clean_(answers.email).toLowerCase()) : '';
     Object.keys(journals).filter(function (k) { return k.indexOf(BO_INTAKE_JOB) === 0; }).forEach(function (k) {
       const other = JSON.parse(journals[k]);
       Object.keys(other.entries || {}).forEach(function (i) {
         const pending = other.entries[i];
         if (pending.phase !== 'creating' && pending.phase !== 'created') return;
         if (k !== key && pending.nameHash === nameHash) throw userError_('같은 이름의 다른 응답이 처리 중입니다. 먼저 생성 결과를 확인합니다.');
+        if (k !== key && ((bizHash && pending.bizHash === bizHash) || (emailHash && pending.emailHash === emailHash))) throw userError_('같은 사업자/연락처의 다른 응답이 처리 중입니다. 생성 결과 확인 전 신규 생성하지 않습니다.');
         const match = String(pending.code || '').match(/^BO-(\d+)$/);
         if (match) max = Math.max(max, Number(match[1]));
       });
     });
     const code = 'BO-' + String(max + 1).padStart(4, '0');
     const properties = intakeProperties_(schema, answers, name, code, token, Utilities.formatDate(response.getTimestamp(), BO.TIMEZONE, 'yyyy-MM-dd'));
-    job.entries[index] = { phase: 'creating', code: code, nameHash: nameHash };
+    job.entries[index] = { phase: 'creating', code: code, nameHash: nameHash, bizHash: bizHash, emailHash: emailHash };
     intakeSave_(key, job); // POST 전에 기록. 저장 실패 시 생성하지 않는다.
     let page;
     try { page = intakeCreateOnce_(schema, properties, answers); } catch (error) {
       if (error.definitelyRejected) { job.entries[index] = { phase: 'rejected' }; intakeSave_(key, job); }
       throw error;
     }
-    job.entries[index] = { phase: 'created', code: code, pageId: page.id, nameHash: nameHash };
+    job.entries[index] = { phase: 'created', code: code, pageId: page.id, nameHash: nameHash, bizHash: bizHash, emailHash: emailHash };
     intakeSave_(key, job);
     bumpCache_('brand');
     createBrandFolder_({ pageId: page.id, code: code, name: name, drive: '' }, schema);
@@ -265,11 +356,35 @@ function intakeProcessResponse_(response, schema, reviewedAnswers) {
     results.push({ code: code, action: 'created' });
     logInfo_('intake.created', { code: code });
   }
-  intakeSave_(key, { done: true });
+  const matches = {};
+  Object.keys(job.entries).forEach(function (i) {
+    const e = job.entries[i];
+    if (e.phase === 'matched') matches[i] = { pageId: e.pageId, code: e.code };
+  });
+  intakeSave_(key, Object.keys(matches).length ? { done: true, matches: matches } : { done: true });
   return { items: results };
 }
 
-function syncBrandIntake_() {
+/** 프로젝트 잠금 안에서만 호출. 검토 저장과 전달 완료는 별개이며 실패는 시간당 최대 한 번 재시도한다. */
+function intakeReviewNotice_(key, index, message, send) {
+  const job = JSON.parse(prop_(key)), entry = job.entries[index];
+  if (!entry || entry.phase !== 'review') return 'resolved';
+  const notice = entry.notice || {};
+  if (notice.sentAt) return 'sent';
+  if (!send) return 'pending';
+  const now = Date.now();
+  if (notice.nextAttemptAt && now < notice.nextAttemptAt) return 'waiting';
+  // 발송/쿼터 오류 또는 실행 중단도 매분 발송으로 이어지지 않도록 시도 전에 예약한다.
+  entry.notice = { nextAttemptAt: now + 3600000 };
+  intakeSave_(key, job);
+  const id = key + ':' + index + ':' + entry.reason;
+  if (!notifyAdmins_('입점 신규 응답 등록 오류', key.slice(BO_INTAKE_JOB.length, BO_INTAKE_JOB.length + 12) + ': ' + message, id)) return 'waiting';
+  entry.notice = { sentAt: now || 1 };
+  intakeSave_(key, job); // MailApp 성공(또는 동일 알림 성공 캐시) 뒤에만 전달 완료 확정.
+  return 'sent';
+}
+
+function syncBrandIntake_(notifyReviews) {
   return withLock_(function () {
     const baseline = intakeBaseline_();
     if (!baseline) return { skipped: 'setupBrandIntake로 신규 응답 처리를 먼저 활성화해 주세요.', processed: 0, failed: [] };
@@ -283,8 +398,13 @@ function syncBrandIntake_() {
       try { if (!intakeProcessResponse_(response, schema).skipped) result.processed++; }
       catch (error) {
         // Form 응답 원문/연락처는 로그나 알림에 남기지 않는다.
-        logError_('intake:' + hash.slice(0, 12), error);
-        result.failed.push({ reference: hash.slice(0, 12), message: errorMessage_(error) });
+        if (!error.intakeReviewRepeated) logError_('intake:' + hash.slice(0, 12), error);
+        const failure = { reference: hash.slice(0, 12), message: errorMessage_(error), notify: true };
+        if (Number.isInteger(error.intakeReviewIndex)) {
+          failure.notify = false; // 검토 알림은 응답별 전달 상태를 사용하며 제목별 묶음 알림에서 제외한다.
+          failure.notification = intakeReviewNotice_(BO_INTAKE_JOB + hash, error.intakeReviewIndex, failure.message, notifyReviews === true);
+        }
+        result.failed.push(failure);
       }
     }
     return result;
@@ -293,8 +413,9 @@ function syncBrandIntake_() {
 
 function scheduledBrandIntake(e) {
   if (!isProjectTrigger_(e)) throw new Error('트리거에서만 실행할 수 있습니다.');
-  const result = syncBrandIntake_();
-  if (result.failed.length) notifyAdmins_('입점 신규 응답 등록 오류', result.failed.map(function (f) { return f.reference + ': ' + f.message; }).join('\n'));
+  const result = syncBrandIntake_(true);
+  const alerts = result.failed.filter(function (f) { return f.notify !== false; });
+  if (alerts.length) notifyAdmins_('입점 신규 응답 등록 오류', alerts.map(function (f) { return f.reference + ': ' + f.message; }).join('\n'));
   return result;
 }
 

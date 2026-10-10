@@ -109,17 +109,21 @@ function healthCheck_() {
   return { checkedAt: now_(), results: results, ok: !results.some(function (r) { return r.status === '오류'; }) };
 }
 
-function notifyAdmins_(subject, body) {
+/** notificationId는 같은 알림의 발송 성공 영수증이다. 일반 제목 cooldown과 구분한다. */
+function notifyAdmins_(subject, body, notificationId) {
+  let sent = false;
   try {
-    const key = cacheKey_('notify:' + sha256_(subject));
-    if (cache_().get(key)) return;
+    const key = cacheKey_('notify:' + sha256_(notificationId ? 'id:' + notificationId : subject));
+    if (cache_().get(key)) return !!notificationId;
     const recipients = adminEmails_();
-    if (!recipients.length || MailApp.getRemainingDailyQuota() < 1) return;
+    if (!recipients.length || MailApp.getRemainingDailyQuota() < recipients.length) return false;
     MailApp.sendEmail(recipients.join(','), '[뷰티오라 운영센터] ' + subject, body);
+    sent = true;
     cache_().put(key, '1', 43200);
   } catch (error) {
     logError_('notifyAdmins_', error);
   }
+  return sent;
 }
 
 /* ---------- 편집기·트리거에서 실행하는 공개 함수 ---------- */
