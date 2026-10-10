@@ -755,3 +755,20 @@ test('review notice: sent receipt prevents duplicate when durable confirmation f
   assert.equal(s.tick().failed[0].notification, 'sent');
   assert.equal(s.env.mail.length, 1);
 });
+
+test('review notice: actual intake.sync API payload never enables notification or consumes pending delivery', () => {
+  const s = noticeSetup();
+  const response = s.submit('API review', { biz: '1234567890' });
+  const key = 'BO_INTAKE_JOB_V1_' + s.env.call('sha256_', response.getId());
+  for (const payload of [undefined, {}, { notifyReviews: true }, true, 'true', []]) {
+    const result = s.env.call('api', { action: 'intake.sync', payload, idToken: s.env.idToken(s.env.user.active) });
+    assert.equal(result.ok, true);
+    assert.equal(result.data.failed[0].notification, 'pending');
+    assert.equal(s.env.mail.length, 0);
+    assert.equal(JSON.parse(s.env.props[key]).entries['0'].notice, undefined);
+  }
+  assert.equal(s.tick().failed[0].notification, 'sent');
+  assert.equal(s.env.mail.length, 1);
+  s.tick();
+  assert.equal(s.env.mail.length, 1);
+});

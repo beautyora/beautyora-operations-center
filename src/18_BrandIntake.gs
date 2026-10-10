@@ -402,7 +402,7 @@ function syncBrandIntake_(notifyReviews) {
         const failure = { reference: hash.slice(0, 12), message: errorMessage_(error), notify: true };
         if (Number.isInteger(error.intakeReviewIndex)) {
           failure.notify = false; // 검토 알림은 응답별 전달 상태를 사용하며 제목별 묶음 알림에서 제외한다.
-          failure.notification = intakeReviewNotice_(BO_INTAKE_JOB + hash, error.intakeReviewIndex, failure.message, !!notifyReviews);
+          failure.notification = intakeReviewNotice_(BO_INTAKE_JOB + hash, error.intakeReviewIndex, failure.message, notifyReviews === true);
         }
         result.failed.push(failure);
       }
