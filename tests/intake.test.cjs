@@ -644,7 +644,7 @@ test('identity: persisted review sends no repeated trigger alerts, retains appli
   const raw = JSON.stringify(s.env.call('formAnswers_', response));
   const event = { triggerUid: s.env.triggers.find(t => t.getHandlerFunction() === 'scheduledBrandIntake').getUniqueId() };
   const first = s.env.call('scheduledBrandIntake', event);
-  assert.equal(first.failed[0].notify, true);
+  assert.equal(first.failed[0].notification, 'sent');
   const mails = s.env.mail.length;
   assert.ok(mails > 0);
   const props = JSON.stringify(s.env.props);
@@ -673,4 +673,85 @@ test('identity: reviewed alias can be resolved by confirmed mapping without chan
   assert.equal(s.sync().failed.length, 0);
   assert.equal(JSON.stringify(s.env.notion.pages), pages);
   assert.equal(s.sync().processed, 0);
+});
+
+function noticeSetup() {
+  const s = setup(); s.env.call('setupBrandIntake');
+  const event = { triggerUid: s.env.triggers.find(t => t.getHandlerFunction() === 'scheduledBrandIntake').getUniqueId() };
+  let clock = Date.now();
+  s.env.context.Date = class extends Date { static now() { return clock; } };
+  return { ...s, tick: () => s.env.call('scheduledBrandIntake', event), advance: ms => { clock += ms; } };
+}
+
+test('review notice: separate responses each deliver despite the shared subject cooldown', () => {
+  const s = noticeSetup();
+  s.env.call('notifyAdmins_', '입점 신규 응답 등록 오류', 'unrelated prior error');
+  s.submit('Review A', { biz: '1234567890' });
+  assert.equal(s.tick().failed[0].notification, 'sent');
+  s.submit('Review B', { biz: '1234567890' });
+  assert.equal(s.tick().failed[1].notification, 'sent');
+  assert.equal(s.env.mail.length, 3);
+  s.env.cache.clear(); s.advance(86400000);
+  s.tick();
+  assert.equal(s.env.mail.length, 3, 'durable sent state outlives the cache');
+});
+
+test('review notice: quota shortage and temporary send failure stay pending and retry at most hourly', () => {
+  for (const mode of ['quota', 'failure', 'recipients']) {
+    const s = noticeSetup();
+    s.submit('Review', { biz: '1234567890' });
+    const mail = s.env.context.MailApp, admins = s.env.props.BO_ADMIN_EMAILS;
+    let attempts = 0;
+    s.env.context.MailApp = {
+      getRemainingDailyQuota: () => mode === 'quota' ? 1 : 100,
+      sendEmail: () => { attempts++; throw new Error('temporary mail failure'); }
+    };
+    if (mode === 'recipients') s.env.props.BO_ADMIN_EMAILS = '';
+    assert.equal(s.tick().failed[0].notification, 'waiting');
+    const props = JSON.stringify(s.env.props);
+    for (let i = 0; i < 4; i++) s.tick();
+    assert.equal(attempts, mode === 'failure' ? 1 : 0);
+    assert.equal(JSON.stringify(s.env.props), props);
+    s.env.context.MailApp = mail; s.env.props.BO_ADMIN_EMAILS = admins;
+    s.advance(3599999); s.tick();
+    assert.equal(s.env.mail.length, 0);
+    s.advance(1);
+    assert.equal(s.tick().failed[0].notification, 'sent');
+    assert.equal(s.env.mail.length, 1);
+    s.advance(86400000); s.env.cache.clear(); s.tick();
+    assert.equal(s.env.mail.length, 1);
+    assert.equal(s.sheetRows.length, 1);
+  }
+});
+
+test('review notice: manual sync does not consume delivery; resolution before retry cancels stale notice', () => {
+  const s = noticeSetup();
+  const response = s.submit('Review', { biz: '1234567890' });
+  assert.equal(s.sync().failed[0].notification, 'pending');
+  assert.equal(s.env.mail.length, 0);
+  assert.equal(s.tick().failed[0].notification, 'sent');
+  assert.equal(s.env.mail.length, 1);
+  const next = s.submit('Another review', { biz: '1234567890' });
+  const mail = s.env.context.MailApp;
+  s.env.context.MailApp = { ...mail, getRemainingDailyQuota: () => 0 };
+  assert.equal(s.tick().failed[1].notification, 'waiting');
+  approveNew(s, response, 'Review'); approveNew(s, next, 'Another review');
+  s.env.context.MailApp = mail; s.advance(3600000);
+  assert.equal(s.tick().failed.length, 0);
+  assert.equal(s.env.mail.length, 1);
+});
+
+test('review notice: sent receipt prevents duplicate when durable confirmation fails after delivery', () => {
+  const s = noticeSetup(); s.submit('Review', { biz: '1234567890' });
+  const save = s.env.context.intakeSave_;
+  s.env.context.intakeSave_ = (key, value) => {
+    if (Object.values(value.entries || {}).some(e => e.notice && e.notice.sentAt)) throw new Error('storage temporarily unavailable');
+    return save(key, value);
+  };
+  assert.throws(s.tick, /storage temporarily/);
+  assert.equal(s.env.mail.length, 1);
+  s.env.context.intakeSave_ = save;
+  s.advance(3600000);
+  assert.equal(s.tick().failed[0].notification, 'sent');
+  assert.equal(s.env.mail.length, 1);
 });

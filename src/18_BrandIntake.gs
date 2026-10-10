@@ -312,6 +312,7 @@ function intakeProcessResponse_(response, schema, reviewedAnswers) {
       const error = userError_('입점 브랜드 식별 검토 필요 (' + match.review + '). 원본 응답과 기존 BO ID를 확인해 주세요.');
       // 같은 검토 상태는 매분 알림/로그를 반복하지 않지만 결과에는 계속 표시한다.
       error.intakeReviewRepeated = !!repeated;
+      error.intakeReviewIndex = index;
       throw error;
     }
     if (match.existing) {
@@ -364,7 +365,26 @@ function intakeProcessResponse_(response, schema, reviewedAnswers) {
   return { items: results };
 }
 
-function syncBrandIntake_() {
+/** 프로젝트 잠금 안에서만 호출. 검토 저장과 전달 완료는 별개이며 실패는 시간당 최대 한 번 재시도한다. */
+function intakeReviewNotice_(key, index, message, send) {
+  const job = JSON.parse(prop_(key)), entry = job.entries[index];
+  if (!entry || entry.phase !== 'review') return 'resolved';
+  const notice = entry.notice || {};
+  if (notice.sentAt) return 'sent';
+  if (!send) return 'pending';
+  const now = Date.now();
+  if (notice.nextAttemptAt && now < notice.nextAttemptAt) return 'waiting';
+  // 발송/쿼터 오류 또는 실행 중단도 매분 발송으로 이어지지 않도록 시도 전에 예약한다.
+  entry.notice = { nextAttemptAt: now + 3600000 };
+  intakeSave_(key, job);
+  const id = key + ':' + index + ':' + entry.reason;
+  if (!notifyAdmins_('입점 신규 응답 등록 오류', key.slice(BO_INTAKE_JOB.length, BO_INTAKE_JOB.length + 12) + ': ' + message, id)) return 'waiting';
+  entry.notice = { sentAt: now || 1 };
+  intakeSave_(key, job); // MailApp 성공(또는 동일 알림 성공 캐시) 뒤에만 전달 완료 확정.
+  return 'sent';
+}
+
+function syncBrandIntake_(notifyReviews) {
   return withLock_(function () {
     const baseline = intakeBaseline_();
     if (!baseline) return { skipped: 'setupBrandIntake로 신규 응답 처리를 먼저 활성화해 주세요.', processed: 0, failed: [] };
@@ -379,7 +399,12 @@ function syncBrandIntake_() {
       catch (error) {
         // Form 응답 원문/연락처는 로그나 알림에 남기지 않는다.
         if (!error.intakeReviewRepeated) logError_('intake:' + hash.slice(0, 12), error);
-        result.failed.push({ reference: hash.slice(0, 12), message: errorMessage_(error), notify: !error.intakeReviewRepeated });
+        const failure = { reference: hash.slice(0, 12), message: errorMessage_(error), notify: true };
+        if (Number.isInteger(error.intakeReviewIndex)) {
+          failure.notify = false; // 검토 알림은 응답별 전달 상태를 사용하며 제목별 묶음 알림에서 제외한다.
+          failure.notification = intakeReviewNotice_(BO_INTAKE_JOB + hash, error.intakeReviewIndex, failure.message, !!notifyReviews);
+        }
+        result.failed.push(failure);
       }
     }
     return result;
@@ -388,7 +413,7 @@ function syncBrandIntake_() {
 
 function scheduledBrandIntake(e) {
   if (!isProjectTrigger_(e)) throw new Error('트리거에서만 실행할 수 있습니다.');
-  const result = syncBrandIntake_();
+  const result = syncBrandIntake_(true);
   const alerts = result.failed.filter(function (f) { return f.notify !== false; });
   if (alerts.length) notifyAdmins_('입점 신규 응답 등록 오류', alerts.map(function (f) { return f.reference + ': ' + f.message; }).join('\n'));
   return result;
