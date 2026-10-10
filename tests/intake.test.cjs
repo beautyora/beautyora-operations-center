@@ -637,3 +637,40 @@ test('identity: any active page occupying a confirmed alias blocks all spellings
     assert.equal(s.rows().length, 3);
   }
 });
+
+test('identity: persisted review sends no repeated trigger alerts, retains application and resolves without journal reset', () => {
+  const s = setup(); s.env.call('setupBrandIntake');
+  const response = s.submit('Different', { biz: '1234567890' });
+  const raw = JSON.stringify(s.env.call('formAnswers_', response));
+  const event = { triggerUid: s.env.triggers.find(t => t.getHandlerFunction() === 'scheduledBrandIntake').getUniqueId() };
+  const first = s.env.call('scheduledBrandIntake', event);
+  assert.equal(first.failed[0].notify, true);
+  const mails = s.env.mail.length;
+  assert.ok(mails > 0);
+  const props = JSON.stringify(s.env.props);
+  for (let i = 0; i < 3; i++) {
+    const result = s.env.call('scheduledBrandIntake', event);
+    assert.equal(result.failed.length, 1, 'review remains visible, not marked done');
+    assert.equal(result.failed[0].notify, false);
+  }
+  assert.equal(s.env.mail.length, mails);
+  assert.equal(JSON.stringify(s.env.props), props);
+  assert.equal(JSON.stringify(s.env.call('formAnswers_', response)), raw);
+  assert.equal(s.sheetRows.length, 1);
+  approveNew(s, response, 'Different');
+  assert.equal(s.env.call('scheduledBrandIntake', event).failed.length, 0);
+  assert.equal(s.rows().filter(b => b.name === 'Different').length, 1);
+  assert.equal(s.env.call('scheduledBrandIntake', event).processed, 0);
+  assert.equal(s.env.mail.length, mails);
+});
+
+test('identity: reviewed alias can be resolved by confirmed mapping without changing original application', () => {
+  const s = setup(); s.env.call('setupBrandIntake');
+  s.submit('새 별칭', { biz: '1234567890' });
+  assert.equal(s.sync().failed.length, 1);
+  const pages = JSON.stringify(s.env.notion.pages);
+  s.env.props.BO_INTAKE_MATCH_RULES_V1 = JSON.stringify({ aliases: [{ code: 'BO-0001', names: ['루엠', '새 별칭'] }] });
+  assert.equal(s.sync().failed.length, 0);
+  assert.equal(JSON.stringify(s.env.notion.pages), pages);
+  assert.equal(s.sync().processed, 0);
+});

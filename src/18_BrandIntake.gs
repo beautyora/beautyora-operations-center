@@ -252,14 +252,14 @@ function intakeMatch_(rows, name, answers, responseId, fingerprint) {
     if (biz !== intakeBiz_(exact[0].bizNo)) return { review: 'name-business-conflict' };
     return { existing: exact[0] };
   }
-  // 괄호 속 이름은 자동 별칭 등록하지 않는다. 알려진 이름이면 검토 신호로만 사용한다.
-  const parts = String(name).split(/[()（）]/).map(normalizeName_).filter(Boolean);
-  if (parts.length > 1 && (rows.some(function (b) { return parts.indexOf(normalizeName_(b.name)) >= 0; }) ||
-      rules.aliases.some(function (a) { return a.names.some(function (n) { return parts.indexOf(normalizeName_(n)) >= 0; }); }))) return { review: 'unconfirmed-alias' };
   const approved = rules.newBrands.some(function (a) {
     return a.responseHash === sha256_(responseId) && a.fingerprint === fingerprint && a.nameHash === sha256_(normalized);
   });
   if (approved) return {};
+  // 괄호 속 이름은 자동 별칭 등록하지 않는다. 알려진 이름이면 검토 신호로만 사용한다.
+  const parts = String(name).split(/[()（）]/).map(normalizeName_).filter(Boolean);
+  if (parts.length > 1 && (rows.some(function (b) { return parts.indexOf(normalizeName_(b.name)) >= 0; }) ||
+      rules.aliases.some(function (a) { return a.names.some(function (n) { return parts.indexOf(normalizeName_(n)) >= 0; }); }))) return { review: 'unconfirmed-alias' };
   if (!biz) return { review: 'missing-business' };
   const email = clean_(answers.email).toLowerCase();
   const related = rows.some(function (b) {
@@ -304,9 +304,15 @@ function intakeProcessResponse_(response, schema, reviewedAnswers) {
     if (entry && entry.phase === 'done') continue;
     const match = intakeMatch_(rows, name, answers, responseId, fingerprint);
     if (match.review) {
-      job.entries[index] = { phase: 'review', reason: match.review, nameHash: sha256_(normalizeName_(name)) };
-      intakeSave_(key, job);
-      throw userError_('입점 브랜드 식별 검토 필요 (' + match.review + '). 원본 응답과 기존 BO ID를 확인해 주세요.');
+      const repeated = entry && entry.phase === 'review' && entry.reason === match.review;
+      if (!repeated) {
+        job.entries[index] = { phase: 'review', reason: match.review, nameHash: sha256_(normalizeName_(name)) };
+        intakeSave_(key, job);
+      }
+      const error = userError_('입점 브랜드 식별 검토 필요 (' + match.review + '). 원본 응답과 기존 BO ID를 확인해 주세요.');
+      // 같은 검토 상태는 매분 알림/로그를 반복하지 않지만 결과에는 계속 표시한다.
+      error.intakeReviewRepeated = !!repeated;
+      throw error;
     }
     if (match.existing) {
       // 원본 Form/Sheet를 보존하고 응답 journal에 연결만 기록한다. 기존 페이지/폴더는 쓰지 않는다.
@@ -372,8 +378,8 @@ function syncBrandIntake_() {
       try { if (!intakeProcessResponse_(response, schema).skipped) result.processed++; }
       catch (error) {
         // Form 응답 원문/연락처는 로그나 알림에 남기지 않는다.
-        logError_('intake:' + hash.slice(0, 12), error);
-        result.failed.push({ reference: hash.slice(0, 12), message: errorMessage_(error) });
+        if (!error.intakeReviewRepeated) logError_('intake:' + hash.slice(0, 12), error);
+        result.failed.push({ reference: hash.slice(0, 12), message: errorMessage_(error), notify: !error.intakeReviewRepeated });
       }
     }
     return result;
@@ -383,7 +389,8 @@ function syncBrandIntake_() {
 function scheduledBrandIntake(e) {
   if (!isProjectTrigger_(e)) throw new Error('트리거에서만 실행할 수 있습니다.');
   const result = syncBrandIntake_();
-  if (result.failed.length) notifyAdmins_('입점 신규 응답 등록 오류', result.failed.map(function (f) { return f.reference + ': ' + f.message; }).join('\n'));
+  const alerts = result.failed.filter(function (f) { return f.notify !== false; });
+  if (alerts.length) notifyAdmins_('입점 신규 응답 등록 오류', alerts.map(function (f) { return f.reference + ': ' + f.message; }).join('\n'));
   return result;
 }
 
