@@ -2,9 +2,9 @@
 
 운영센터와 브랜드 랜딩의 현재 상태를 기록하는 **단일 원본**입니다. 다른 저장소에는 이 문서의 링크만 둡니다. 문서 자체는 자동으로 최신화되지 않으므로 작업 시작과 세션 재개 때 최신 main 및 실제 배포 상태를 다시 확인하세요.
 
-- 마지막 운영센터 코드·배포 상태 확인: **2026-10-10 03:51 UTC**
+- 마지막 운영센터 코드·배포 상태 확인: **2026-10-10 03:54 UTC**
 - 다른 서비스와 과거 운영 점검은 각 항목의 확인 날짜를 따릅니다.
-- 이 확인은 저장소와 배포 기록의 읽기 확인입니다. 실제 신규 신청을 제출하거나 Google·Notion·Drive 업무 데이터를 재검증하지 않았습니다.
+- 이번 확인은 저장소·배포 로그 및 담당자의 읽기 전용 트리거·라이브 소스 확인입니다. 신규 테스트 신청은 제출하지 않았으며 실제 신규 접수 E2E 완료를 뜻하지 않습니다.
 - main 반영, 배포 성공, 실제 운영 동작 검증은 별개입니다.
 
 ## 서비스 역할
@@ -27,7 +27,8 @@
 - [v116 운영 배포](https://github.com/beautyora/beautyora-operations-center/actions/runs/38022008374)는 2026-10-10 03:51:30 UTC에 성공했습니다. 로그에서 `production`, `existing`, 운영 대상 guard 일치, 위 커밋, `Deployed … @116`을 확인했습니다. 03:51:27 UTC에 `18_BrandIntake.gs`, `20_Setup.gs`, 매니페스트를 포함한 19개 파일 push가 완료됐습니다. 기존 배포를 갱신했고 추가/새 웹앱 생성 단계는 실행하지 않았습니다. 매니페스트의 `USER_DEPLOYING`·`ANYONE_ANONYMOUS`는 유지했습니다.
 - [PR46 최종 head CI](https://github.com/beautyora/beautyora-operations-center/actions/runs/38021515861)의 서버·Chromium 검사가 성공했고, v116 배포 실행에서도 서버 테스트 **106개**가 통과했습니다. setup/replay/수동 접수 sync, 신규 테스트 제출, journal/baseline/영업값 수정은 실행하지 않았습니다. 시간 트리거는 최신 프로젝트 소스를 사용하므로 소스 push와 웹앱 버전 갱신 시각을 구분합니다.
 - **배포 후 담당자 실측(v116):** 실제 운영 프로젝트의 시간 기반 `scheduledBrandIntake` Head 트리거가 유지되고, 2026-10-10 03:51:35 UTC(4.17초)와 03:52:35 UTC(3.666초) 자동 실행이 모두 완료됐습니다. `scheduledBrandFolders`도 03:52:24 UTC에 완료됐습니다. 수동 실행은 하지 않았습니다. 기존 다른 사용자 소유의 `scheduledBeautyoraSync` 오류 트리거와 비활성 옛 `handleBrandFormSubmit`은 범위 밖으로 변경하지 않았습니다.
-- **미검증(v116):** 편집기의 현재 소스 재조회·로그인된 운영 화면 상태와 다음 정상 신규 접수 전체 흐름. 배포 성공이나 모의 테스트를 운영 E2E로 대신하지 않습니다.
+- **라이브 소스 담당자 확인(v116):** 실제 편집기의 `18_BrandIntake.gs`에서 405행 `notifyReviews === true`, 200행 BO-0108의 `DI/RE`·`디르`·`디르(DI/RE)` 별칭, 369행 `intakeReviewNotice_`와 시간당 재시도/실패 `waiting` 처리를 확인했습니다. 저장 버튼은 비활성이었고 소스는 변경하지 않았습니다.
+- **미검증(v116):** 로그인된 운영 화면 상태와 다음 정상 신규 접수 전체 흐름. 배포 성공이나 모의 테스트를 운영 E2E로 대신하지 않습니다.
 - 직전 main은 [PR44](https://github.com/beautyora/beautyora-operations-center/pull/44)(커밋 `e93e3a9`)의 공유 창 캐시 수정(홈·브랜드 탭 느려짐)입니다. 앞서 [PR42](https://github.com/beautyora/beautyora-operations-center/pull/42)(v114)에서 공유 창 문구 정리·자사 브랜드 폴더 안내, [PR41](https://github.com/beautyora/beautyora-operations-center/pull/41)(v113)에서 브랜드 공유 창 단순화, [PR39](https://github.com/beautyora/beautyora-operations-center/pull/39)(v112)에서 홈·브랜드 탭 로딩 개선, [PR37](https://github.com/beautyora/beautyora-operations-center/pull/37)(v111)에서 ops.beautyora.kr Google 로그인 복구·브랜드 자료 현황·운영진·브랜드 Drive 공유가 반영되었습니다.
 - [운영 배포 실행](https://github.com/beautyora/beautyora-operations-center/actions/runs/37312387026)에서 **v115** 기존 운영 웹앱 갱신을 확인했습니다(로그 `Deployed … @115`, 커밋 `e93e3a9`). 배포 시각은 2026-10-05 12:51 UTC입니다. 직전 v114는 같은 날 12:35 UTC([실행](https://github.com/beautyora/beautyora-operations-center/actions/runs/37310511374)). 웹앱 실행 방식은 v111부터 `USER_DEPLOYING`·`ANYONE_ANONYMOUS`입니다.
 - 같은 변경의 PR [서버·Chromium CI](https://github.com/beautyora/beautyora-operations-center/actions/runs/37311769494)는 성공했고, 배포 실행 안의 서버 테스트도 통과했습니다. `Cloudflare Pages: beautyora-partner` 검사는 v3에서 제거된 브랜드용 페이지라 계속 실패하며 운영센터와 무관합니다.
