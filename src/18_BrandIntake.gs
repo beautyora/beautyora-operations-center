@@ -235,6 +235,12 @@ function intakeMatch_(rows, name, answers, responseId, fingerprint) {
     const targets = rows.filter(function (b) { return b.code === codes[0]; });
     if (targets.length !== 1) return { review: 'alias-target-missing' };
     const target = targets[0];
+    const targetAliases = rules.aliases.filter(function (a) { return a.code === codes[0]; });
+    if (rows.some(function (b) {
+      return b.pageId !== target.pageId && targetAliases.some(function (a) {
+        return a.names.some(function (n) { return normalizeName_(n) === normalizeName_(b.name); });
+      });
+    })) return { review: 'alias-conflict' };
     if (!aliases.some(function (a) { return a.names.some(function (n) { return normalizeName_(n) === normalizeName_(target.name); }); }) ||
         exact.some(function (b) { return b.pageId !== target.pageId; })) return { review: 'alias-conflict' };
     if (!biz || !intakeBiz_(target.bizNo) || biz !== intakeBiz_(target.bizNo)) return { review: 'alias-business-unverified' };

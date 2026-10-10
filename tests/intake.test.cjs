@@ -626,3 +626,14 @@ test('identity: new-brand approval cannot override a conflicting confirmed alias
   assert.match(s.sync().failed[0].message, /alias-business-unverified/);
   assert.equal(s.rows().length, 3);
 });
+
+
+test('identity: any active page occupying a confirmed alias blocks all spellings until reviewed', () => {
+  for (const name of ['DI/RE', '디르(DI/RE)']) {
+    const s = aliasSetup();
+    s.env.call('notionPatch_', s.data.b2.id, s.env.call('notionProps_', s.env.call('notionSchema_', 'brand'), { name: '디르' }));
+    s.submit(name, { biz: '1234567890' });
+    assert.match(s.sync().failed[0].message, /alias-conflict/);
+    assert.equal(s.rows().length, 3);
+  }
+});

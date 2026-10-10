@@ -50,7 +50,7 @@ journal이 유실되고 baseline 제외에도 없는 응답은 재처리될 수 
 
 ## 검증 및 적용 계획
 
-Node.js 22 전체 서버 테스트 98개 통과, 설치된 시스템 Chromium으로 UI E2E 통과, 정적 운영센터 빌드와 `git diff --check` 통과. 로컬 Playwright 지정 Chromium 다운로드는 환경의 도메인 제한(HTTP 403)으로 차단되어 시스템 Chromium을 사용했다. PR CI에서는 지정 버전을 확인한다.
+Node.js 22 전체 서버 테스트 99개 통과, 설치된 시스템 Chromium으로 UI E2E 통과, 정적 운영센터 빌드와 `git diff --check` 통과. 로컬 Playwright 지정 Chromium 다운로드는 환경의 도메인 제한(HTTP 403)으로 차단되어 시스템 Chromium을 사용했다. PR CI에서는 지정 버전을 확인한다.
 
 가짜 Form/Notion/Drive로 확인된 별칭, 같은 회사 별개 브랜드 검토/승인/공유 폴더, 충돌·누락·괄호 별칭, 부분 실패 재시도, 보관된 완료/미완료 응답, 기존 단계·원문·baseline 보존을 검증한다. 모의 검증은 실제 운영 E2E가 아니다.
 
